@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import URL
 
 class Settings(BaseSettings):
     app_env: str = "development"
@@ -20,15 +21,15 @@ class Settings(BaseSettings):
     )
     
     @property
-    def database_url(self) -> str:
-        return (
-            f"postgresql+psycopg://"
-            f"{self.database_user}:"
-            f"{self.database_password}@"
-            f"{self.database_host}:"
-            f"{self.database_port}/"
-            f"{self.database_name}"
-        )
+    def database_url(self) -> URL:
+        return URL.create(
+        drivername="postgresql+psycopg",
+        username=self.database_user,
+        password=self.database_password,
+        host=self.database_host,
+        port=self.database_port,
+        database=self.database_name,
+    )
         
 @lru_cache
 def get_settings() -> Settings:
