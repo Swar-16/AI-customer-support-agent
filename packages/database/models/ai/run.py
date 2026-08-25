@@ -36,14 +36,19 @@ class AIRunModel(Base):
             "started_at",
         ),
         Index(
-            "idx_ai_runs_status_started",
-            "status",
-            "started_at",
+            "idx_ai_runs_trace",
+            "trace_id",
         ),
         Index(
             "idx_ai_runs_parent",
             "parent_run_id",
         ),
+        Index(
+            "idx_ai_runs_status_started",
+            "status",
+            "started_at",
+        ),
+        
         {"schema": "ai"},
     )
 
