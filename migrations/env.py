@@ -68,6 +68,9 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             compare_type=True,
+            include_schemas=True,
+            version_table="alembic_version",
+            version_table_schema="config",
         )
 
         with context.begin_transaction():
