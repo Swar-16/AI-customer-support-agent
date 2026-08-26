@@ -277,6 +277,11 @@ def get_retrieval_intents() -> frozenset[IntentType]:
     """
     return frozenset(intent for intent, definition in INTENT_DEFINITIONS.items() if definition.requires_policy_retrieval)
 
+def _intent_key_name(value: object) -> str:
+    if isinstance(value, IntentType):
+        return value.value
+    return str(value)
+
 def validate_taxonomy() -> None:
     """
     Fail fast if taxonomy definitions drift away from IntentType.
@@ -291,23 +296,61 @@ def validate_taxonomy() -> None:
     if missing or unexpected:
         raise RuntimeError(
             "Intent taxonomy is inconsistent. "
-            f"Missing definitions: {sorted(item.value for item in missing)}; "
+            f"Missing definitions: "
+            f"{sorted(_intent_key_name(item) for item in missing)}; "
             f"Unexpected definitions: "
-            f"{sorted(item.value for item in unexpected)}"
+            f"{sorted(_intent_key_name(item) for item in unexpected)}"
         )
 
+    display_names_seen: set[str] = set()
+
     for intent, definition in INTENT_DEFINITIONS.items():
+        if not isinstance(intent, IntentType):
+            raise RuntimeError(f"Invalid taxonomy key type: {type(intent).__name__}")
+
         if definition.intent is not intent:
             raise RuntimeError(f"Intent definition mismatch for {intent.value}")
 
         if not definition.display_name.strip():
             raise RuntimeError(f"Missing display name for {intent.value}")
 
+        normalized_display_name = definition.display_name.strip().casefold()
+
+        if normalized_display_name in display_names_seen:
+            raise RuntimeError(f"Duplicate display name detected: {definition.display_name!r}")
+
+        display_names_seen.add(normalized_display_name)
+
         if not definition.description.strip():
             raise RuntimeError(f"Missing description for {intent.value}")
 
         if not definition.positive_examples:
             raise RuntimeError(f"No positive examples configured for {intent.value}")
+
+        if any(
+            not example.strip()
+            for example in definition.positive_examples
+        ):
+            raise RuntimeError(f"Blank positive example configured for {intent.value}")
+
+        if any(
+            not example.strip()
+            for example in definition.negative_examples
+        ):
+            raise RuntimeError(f"Blank negative example configured for {intent.value}")
+
+        overlap = (set(definition.positive_examples) & set(definition.negative_examples))
+
+        if overlap:
+            raise RuntimeError(f"Positive/negative example overlap for {intent.value}: {sorted(overlap)}")
+
+        if definition.default_priority not in {
+            "low",
+            "normal",
+            "high",
+            "urgent",
+        }:
+            raise RuntimeError(f"Invalid default priority {definition.default_priority!r} for {intent.value}")
 
 
 validate_taxonomy()

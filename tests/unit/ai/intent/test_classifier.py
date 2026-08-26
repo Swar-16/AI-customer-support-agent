@@ -41,12 +41,7 @@ from packages.ai.intent.classifier import (
 from packages.ai.intent.schemas import IntentResult
 from packages.ai.intent.taxonomy import IntentType
 from packages.ai.providers.base import LLMProvider
-from packages.ai.providers.errors import (
-    LLMProviderError,
-    LLMProviderResponseError,
-    LLMProviderTimeoutError,
-)
-
+from packages.ai.providers.errors import LLMProviderError, LLMProviderResponseError, LLMProviderTimeoutError
 
 # ---------------------------------------------------------------------------
 # Fixtures & helpers
@@ -64,16 +59,17 @@ def classifier(mock_provider):
     return IntentClassifier(provider=mock_provider)
 
 
-def make_intent_result(**overrides) -> Mock:
-    """Build a fake IntentResult that passes isinstance() checks."""
-    defaults = dict(
-        intent=IntentType.UNKNOWN,
-        confidence=0.5,
-        reason_summary="stub reason",
-        needs_clarification=False,
-    )
-    defaults.update(overrides)
-    return Mock(spec=IntentResult, **defaults)
+def make_intent_result(**overrides) -> IntentResult:
+    values = {
+        "intent": IntentType.GENERAL_QUESTION,
+        "confidence": 0.80,
+        "reason_summary": "General supported customer question.",
+        "needs_clarification": False,
+    }
+
+    values.update(overrides)
+
+    return IntentResult(**values)
 
 
 def get_call_kwargs(mock_provider) -> dict:
@@ -186,6 +182,14 @@ def test_message_at_default_limit_boundary_is_accepted(classifier, mock_provider
     classifier.classify(customer_message=boundary_message)
 
     mock_provider.generate_structured.assert_called_once()
+    
+def test_message_over_default_limit_is_rejected(classifier, mock_provider):
+    message = "a" * (DEFAULT_MAX_MESSAGE_LENGTH + 1)
+
+    with pytest.raises(InvalidIntentInputError):
+        classifier.classify(customer_message=message)
+
+    mock_provider.generate_structured.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -244,14 +248,24 @@ def test_non_string_context_rejected(classifier, mock_provider):
 
 
 def test_provider_timeout_translated_correctly(classifier, mock_provider):
-    mock_provider.generate_structured.side_effect = LLMProviderTimeoutError("timed out")
+    mock_provider.generate_structured.side_effect = (
+        LLMProviderTimeoutError(
+            provider="mock",
+            message="timed out"
+        )
+    )
 
     with pytest.raises(IntentClassificationTimeoutError):
         classifier.classify(customer_message="Hello, are you there?")
 
 
 def test_provider_generic_failure_translated_correctly(classifier, mock_provider):
-    mock_provider.generate_structured.side_effect = LLMProviderError("upstream 500")
+    mock_provider.generate_structured.side_effect = (
+        LLMProviderError(
+            provider="mock",
+            message="upstream 500"
+        )
+    )
 
     with pytest.raises(IntentClassificationProviderError):
         classifier.classify(customer_message="Hello, are you there?")
@@ -259,8 +273,11 @@ def test_provider_generic_failure_translated_correctly(classifier, mock_provider
 
 def test_malformed_structured_output_via_provider_error(classifier, mock_provider):
     """Provider signals it could not produce a schema-conformant response."""
-    mock_provider.generate_structured.side_effect = LLMProviderResponseError(
-        "response failed schema validation"
+    mock_provider.generate_structured.side_effect = (
+        LLMProviderResponseError(
+            provider="mock",
+            messsage="response failed schema validation"
+        )
     )
 
     with pytest.raises(InvalidIntentResponseError):

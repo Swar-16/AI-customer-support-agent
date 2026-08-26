@@ -1,13 +1,14 @@
 ## Creating this file because
 ## Need to test AI run, classification, decision, persistence without API Keys
 
+from __future__ import annotations
 import copy
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from threading import Lock
-from __future__ import annotations
 from typing import Any, TypeVar
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, ValidationError
 
@@ -34,6 +35,10 @@ class MockCall:
     system_prompt: str
     user_prompt: str
     response_model: type[BaseModel] | None = None
+    simulated_latency_seconds: float = 0.0
+    timestamp: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
     
 @dataclass(slots=True)
 class MockProviderConfig:
@@ -312,6 +317,7 @@ class MockLLMProvider(LLMProvider):
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             response_model=response_model,
+            simulated_latency_seconds=self._config.latency_seconds,
         )
 
         with self._lock:

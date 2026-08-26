@@ -267,6 +267,9 @@ class AIState(BaseModel):
         """
         Return a copy representing successful intent classification.
         """
+        if not isinstance(result, IntentResult):
+            raise TypeError(f"with_intent() expects an IntentResult, got {type(result).__name__}")
+        
         return self.model_copy(
             update={
                 "intent_result": result,
@@ -278,6 +281,8 @@ class AIState(BaseModel):
         """
         Return a copy representing successful routing decision.
         """
+        if not isinstance(result, DecisionResult):
+            raise TypeError(f"with_decision() expects a DecisionResult, got {type(result).__name__}")
         if self.intent_result is None:
             raise ValueError("Cannot add decision before intent classification")
 
@@ -306,6 +311,9 @@ class AIState(BaseModel):
         """
         Return a copy containing generated assistant response.
         """
+        if self.decision_result is None:
+            raise ValueError("Cannot generate response before decision")
+        
         normalized = response.strip()
         if not normalized:
             raise ValueError("Generated response cannot be empty")
