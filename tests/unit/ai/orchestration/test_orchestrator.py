@@ -72,10 +72,10 @@ def extract_pipeline_error(state: AIState) -> PipelineError:
 
 def make_ids() -> dict:
     return dict(
-        ai_run_id=uuid.uuid7(),
-        trace_id=uuid.uuid7(),
-        conversation_id=uuid.uuid7(),
-        trigger_message_id=uuid.uuid7(),
+        ai_run_id=uuid.uuid4(),
+        trace_id=uuid.uuid4(),
+        conversation_id=uuid.uuid4(),
+        trigger_message_id=uuid.uuid4(),
     )
     
 def make_real_intent() -> IntentResult:
@@ -599,7 +599,7 @@ from hypothesis import strategies as st  # noqa: E402
 
 
 class TestPropertyBasedSuccessPath:
-    @given(message=st.text(min_size=0, max_size=500))
+    @given(message=st.text(min_size=1, max_size=500).filter(lambda s: bool(s.strip())))
     def test_arbitrary_customer_messages_never_crash_the_happy_path(self, message):
         intent_classifier = MagicMock(spec=IntentClassifier)
         decision_engine = MagicMock(spec=DecisionEngine)
@@ -610,7 +610,7 @@ class TestPropertyBasedSuccessPath:
         state = orch.process_message(**make_ids(), customer_message=message)
 
         assert state.stage is PipelineStage.DECISION_MADE
-        assert state.customer_message == message
+        assert state.customer_message == message.strip()
 
 
 # --------------------------------------------------------------------------

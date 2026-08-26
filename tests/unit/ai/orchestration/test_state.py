@@ -56,10 +56,10 @@ from packages.ai.decision.schemas import DecisionReasonCode, DecisionResult, Dec
 def ids() -> dict[str, uuid.UUID]:
     """Fresh, independent UUIDs for each identity field."""
     return {
-        "ai_run_id": uuid.uuid7(),
-        "trace_id": uuid.uuid7(),
-        "conversation_id": uuid.uuid7(),
-        "trigger_message_id": uuid.uuid7(),
+        "ai_run_id": uuid.uuid4(),
+        "trace_id": uuid.uuid4(),
+        "conversation_id": uuid.uuid4(),
+        "trigger_message_id": uuid.uuid4(),
     }
 
 
