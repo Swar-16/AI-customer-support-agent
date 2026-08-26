@@ -29,7 +29,7 @@ class LLMCallModel(Base):
         ),
 
         CheckConstraint(
-            "status IN ('success', 'failed', 'timeout')",
+            "status IN ('started','success', 'failed', 'timeout')",
             name="valid_status",
         ),
         CheckConstraint(
