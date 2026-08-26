@@ -194,25 +194,17 @@ def test_validate_taxonomy_raises_when_definition_missing(
 def test_validate_taxonomy_detects_unexpected_key_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """
-    KNOWN BUG in validate_taxonomy(): the error-message branch does
-    ``item.value for item in unexpected``, assuming every key in
-    ``unexpected`` is an IntentType member. A key that is a plain string
-    (not an IntentType) has no ``.value`` attribute, so instead of the
-    intended RuntimeError this currently raises AttributeError, and the
-    "Missing definitions" list is never reported for that case either.
-
-    This test pins down the *current* behavior so a future fix is a
-    visible, intentional test change rather than a silent regression.
-    Recommended fix in taxonomy.py: use ``getattr(item, "value", item)``
-    (or ``str(item)``) instead of ``item.value`` when formatting
-    ``unexpected``.
-    """
     bogus_key = "not_a_real_intent"
+
     bloated = dict(INTENT_DEFINITIONS)
     bloated[bogus_key] = INTENT_DEFINITIONS[IntentType.UNKNOWN]  # type: ignore[index]
+
     monkeypatch.setattr(taxonomy, "INTENT_DEFINITIONS", bloated)
-    with pytest.raises(AttributeError):
+
+    with pytest.raises(
+        RuntimeError,
+        match="Unexpected definitions.*not_a_real_intent",
+    ):
         validate_taxonomy()
 
 

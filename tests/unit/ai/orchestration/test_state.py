@@ -43,12 +43,9 @@ from pydantic import ValidationError
 
 from packages.ai.decision.schemas import DecisionResult
 from packages.ai.intent.schemas import IntentResult
-from packages.ai.orchestration.state import (
-    AIState,
-    PipelineError,
-    PipelineStage,
-    RetrievalContext,
-)
+from packages.ai.intent.taxonomy import IntentType
+from packages.ai.orchestration.state import AIState, PipelineError, PipelineStage, RetrievalContext
+from packages.ai.decision.schemas import DecisionReasonCode, DecisionResult, DecisionType
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -59,10 +56,10 @@ from packages.ai.orchestration.state import (
 def ids() -> dict[str, uuid.UUID]:
     """Fresh, independent UUIDs for each identity field."""
     return {
-        "ai_run_id": uuid.uuid4(),
-        "trace_id": uuid.uuid4(),
-        "conversation_id": uuid.uuid4(),
-        "trigger_message_id": uuid.uuid4(),
+        "ai_run_id": uuid.uuid7(),
+        "trace_id": uuid.uuid7(),
+        "conversation_id": uuid.uuid7(),
+        "trigger_message_id": uuid.uuid7(),
     }
 
 
@@ -81,13 +78,23 @@ def received_state(base_kwargs: dict) -> AIState:
 @pytest.fixture
 def intent_result() -> IntentResult:
     """A structurally valid, schema-agnostic IntentResult stand-in."""
-    return IntentResult.model_construct()
+    return IntentResult(
+        intent=IntentType.GENERAL_QUESTION,
+        confidence=0.95,
+        needs_clarification=False,
+        reason_summary="General supported customer question.",
+    )
 
 
 @pytest.fixture
 def decision_result() -> DecisionResult:
     """A structurally valid, schema-agnostic DecisionResult stand-in."""
-    return DecisionResult.model_construct()
+    return DecisionResult(
+        decision=DecisionType.ANSWER,
+        reason_code=DecisionReasonCode.DIRECT_INFORMATIONAL_RESPONSE,
+        reason_summary="Direct response is appropriate.",
+        confidence=0.95,
+    )
 
 
 @pytest.fixture

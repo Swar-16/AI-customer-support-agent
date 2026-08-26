@@ -72,10 +72,10 @@ def extract_pipeline_error(state: AIState) -> PipelineError:
 
 def make_ids() -> dict:
     return dict(
-        ai_run_id=uuid.uuid4(),
-        trace_id=uuid.uuid4(),
-        conversation_id=uuid.uuid4(),
-        trigger_message_id=uuid.uuid4(),
+        ai_run_id=uuid.uuid7(),
+        trace_id=uuid.uuid7(),
+        conversation_id=uuid.uuid7(),
+        trigger_message_id=uuid.uuid7(),
     )
     
 def make_real_intent() -> IntentResult:
@@ -142,7 +142,7 @@ class TestConstructorValidation:
     #     )
     #     assert isinstance(orch._observer, NullOrchestrationObserver)
     
-    def test_default_observer_allows_successful_execution(mock_intent_classifier, mock_decision_engine):
+    def test_default_observer_allows_successful_execution(self, mock_intent_classifier, mock_decision_engine):
         mock_intent_classifier.classify.return_value = make_real_intent()
         mock_decision_engine.decide.return_value = make_real_decision()
 
@@ -165,7 +165,7 @@ class TestConstructorValidation:
     #     )
     #     assert orch._config.pipeline_version == "v1"
     
-    def test_default_pipeline_version_is_written_to_state(mock_intent_classifier, mock_decision_engine):
+    def test_default_pipeline_version_is_written_to_state(self, mock_intent_classifier, mock_decision_engine):
         mock_intent_classifier.classify.return_value = make_real_intent()
         mock_decision_engine.decide.return_value = make_real_decision()
 
@@ -318,14 +318,20 @@ class TestObserverLifecycle:
         self, orchestrator, mock_intent_classifier, mock_decision_engine, mock_observer
     ):
         mock_intent_classifier.classify.side_effect = InvalidIntentInputError("bad input")
+        
+        state = orchestrator.process_message(
+            **make_ids(),
+            customer_message="valid message",
+        )
 
-        orchestrator.process_message(**make_ids(), customer_message="")
+        assert state.stage is PipelineStage.FAILED
+        error = extract_pipeline_error(state)
 
-        mock_observer.stage_failed.assert_called_once()
-        _, kwargs = mock_observer.stage_failed.call_args
-        assert kwargs["stage"] is PipelineStage.INTENT_CLASSIFIED
-        assert isinstance(kwargs["error"], PipelineError)
-        assert kwargs["error"].code == "INTENT_INVALID_INPUT"
+        mock_observer.stage_failed.assert_called_once_with(
+            state=state,
+            stage=PipelineStage.INTENT_CLASSIFIED,
+            error=error,
+        )
 
     def test_decision_stage_never_started_after_intent_failure(
         self, orchestrator, mock_intent_classifier, mock_decision_engine, mock_observer
@@ -597,8 +603,8 @@ class TestPropertyBasedSuccessPath:
     def test_arbitrary_customer_messages_never_crash_the_happy_path(self, message):
         intent_classifier = MagicMock(spec=IntentClassifier)
         decision_engine = MagicMock(spec=DecisionEngine)
-        intent_classifier.classify.return_value = MagicMock()
-        decision_engine.decide.return_value = MagicMock()
+        intent_classifier.classify.return_value = make_real_intent()
+        decision_engine.decide.return_value = make_real_decision()
 
         orch = AIOrchestrator(intent_classifier=intent_classifier, decision_engine=decision_engine)
         state = orch.process_message(**make_ids(), customer_message=message)

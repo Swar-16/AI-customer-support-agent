@@ -276,7 +276,7 @@ def test_malformed_structured_output_via_provider_error(classifier, mock_provide
     mock_provider.generate_structured.side_effect = (
         LLMProviderResponseError(
             provider="mock",
-            messsage="response failed schema validation"
+            message="response failed schema validation"
         )
     )
 

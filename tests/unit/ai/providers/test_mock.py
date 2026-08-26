@@ -693,7 +693,7 @@ class TestCallRecording:
 
         assert provider.call_count == 1
         
-    def test_configured_latency_is_recorded() -> None:
+    def test_configured_latency_is_recorded(self) -> None:
         provider = MockLLMProvider(
             config=MockProviderConfig(
                 latency_seconds=0.01
