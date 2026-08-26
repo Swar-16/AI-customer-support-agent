@@ -6,6 +6,7 @@ from packages.ai.intent.schemas import IntentResult
 from packages.ai.intent.taxonomy import INTENT_DEFINITIONS, IntentType
 from packages.ai.providers.base import LLMProvider
 from packages.ai.providers.errors import LLMProviderError, LLMProviderResponseError, LLMProviderTimeoutError
+from packages.ai.providers.types import StructuredLLMResponse
 
 
 DEFAULT_MAX_MESSAGE_LENGTH: Final[int] = 20_000
@@ -100,21 +101,19 @@ class IntentClassifier:
         self._provider = provider
         self._config = config or IntentClassifierConfig()
 
-    def classify(self, *, customer_message: str, conversation_context: str | None = None) -> IntentResult:
+    def classify_with_response(self, *, customer_message: str, conversation_context: str | None = None,) -> StructuredLLMResponse[IntentResult]:
         """
-        Classify one customer message.
+        Classify one customer message and return the complete normalized
+        provider response.
 
-        Args:
-            customer_message:
-                The newest customer message whose intent is being classified.
+        This method is intended for application/orchestration infrastructure
+        that needs both:   IntentResult + provider telemetry
 
-            conversation_context:
-                Optional bounded conversation context. The caller is responsible
-                for deciding how much history is appropriate. The classifier
-                never loads conversation history itself.
-
-        Returns:
-            Validated IntentResult.
+        including:
+            - provider/model identity
+            - token usage
+            - provider request ID
+            - estimated cost
 
         Raises:
             InvalidIntentInputError:
@@ -130,23 +129,13 @@ class IntentClassifier:
                 Other provider failure occurred.
         """
 
-        normalized_message = self._validate_and_normalize_message(
-            customer_message
-        )
-
-        normalized_context = self._normalize_context(
-            conversation_context
-        )
-
+        normalized_message = self._validate_and_normalize_message(customer_message)
+        normalized_context = self._normalize_context(conversation_context)
         system_prompt = self._build_system_prompt()
-
-        user_prompt = self._build_user_prompt(
-            customer_message=normalized_message,
-            conversation_context=normalized_context,
-        )
+        user_prompt = self._build_user_prompt(customer_message=normalized_message, conversation_context=normalized_context)
 
         try:
-            result = self._provider.generate_structured(
+            response = self._provider.generate_structured(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 response_model=IntentResult,
@@ -162,26 +151,45 @@ class IntentClassifier:
             raise IntentClassificationProviderError("Intent classification provider failed.") from exc
 
         except Exception as exc:
-            # Unexpected implementation defects should remain visible as
-            # classifier failures rather than silently becoming UNKNOWN.
             raise IntentClassificationError("Unexpected intent classification failure.") from exc
 
-        if not isinstance(result, IntentResult):
-            # Defensive programming. The provider interface promises this,
-            # but the classifier should not blindly trust implementations.
-            raise InvalidIntentResponseError(f"Provider returned an unexpected response type: {type(result).__name__}")
+        self._validate_provider_response(response)
 
-        return result
+        return response
+    
+    @staticmethod
+    def _validate_provider_response(response: StructuredLLMResponse[IntentResult]) -> None:
+        """
+        Defensively verify the provider contract.
 
-    def _validate_and_normalize_message(
-        self,
-        customer_message: str,
-    ) -> str:
+        Concrete providers are expected to obey LLMProvider, but this boundary
+        protects the classifier from malformed third-party/custom adapters.
+        """
+        if not isinstance(response, StructuredLLMResponse):
+            raise InvalidIntentResponseError(f"Provider returned an unexpected response wrapper: {type(response).__name__}")
+
+        if not isinstance(response.output, IntentResult):
+            raise InvalidIntentResponseError(f"Provider returned an unexpected structured output: {type(response.output).__name__}")
+
+    def classify(self, *, customer_message: str, conversation_context: str | None = None) -> IntentResult:
+        """
+        Classify one customer message and return only the semantic result.
+
+        Use `classify_with_response()` when provider metadata such as token
+        usage, model identity, request ID, or estimated cost is also required.
+        """
+        response = self.classify_with_response(
+            customer_message=customer_message,
+            conversation_context=conversation_context,
+        )
+
+        return response.output
+
+    def _validate_and_normalize_message(self, customer_message: str) -> str:
         if not isinstance(customer_message, str):
             raise InvalidIntentInputError("customer_message must be a string")
 
         normalized = customer_message.strip()
-
         if not normalized:
             raise InvalidIntentInputError("customer_message cannot be empty")
 

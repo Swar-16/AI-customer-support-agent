@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from decimal import Decimal
 
 import pytest
 from pydantic import BaseModel, Field
@@ -13,6 +14,12 @@ from packages.ai.providers.errors import (
 from packages.ai.providers.mock import (
     MockLLMProvider,
     MockProviderConfig,
+)
+
+from packages.ai.providers.types import (
+    LLMResponse,
+    StructuredLLMResponse,
+    TokenUsage,
 )
 
 
@@ -59,6 +66,30 @@ class TestMockProviderConfiguration:
 
         assert provider.call_count == 0
         assert provider.calls == ()
+    
+    def test_negative_input_tokens_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            MockProviderConfig(input_tokens=-1)
+
+
+    def test_negative_output_tokens_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            MockProviderConfig(output_tokens=-1)
+
+
+    def test_cached_tokens_cannot_exceed_input_tokens(self) -> None:
+        with pytest.raises(ValueError):
+            MockProviderConfig(
+                input_tokens=10,
+                cached_input_tokens=11,
+            )
+
+
+    def test_negative_cost_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            MockProviderConfig(
+                estimated_cost_usd=Decimal("-0.01")
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +106,7 @@ class TestTextGeneration:
             user_prompt="hello",
         )
 
-        assert result == "Mock response"
+        assert result.content == "Mock response"
 
 
     def test_returns_configured_text_response(self) -> None:
@@ -90,7 +121,8 @@ class TestTextGeneration:
             user_prompt="hello",
         )
 
-        assert result == "configured response"
+        assert isinstance(result, LLMResponse)
+        assert result.content == "configured response"
 
 
     def test_custom_default_response(self) -> None:
@@ -105,7 +137,7 @@ class TestTextGeneration:
             user_prompt="unknown prompt",
         )
 
-        assert result == "fallback"
+        assert result.content == "fallback"
 
 
     def test_text_resolver_has_priority_over_fixture(self) -> None:
@@ -127,7 +159,7 @@ class TestTextGeneration:
             user_prompt="hello",
         )
 
-        assert result == "resolved:hello"
+        assert result.content == "resolved:hello"
 
 
     def test_empty_text_response_rejected(self) -> None:
@@ -196,6 +228,76 @@ class TestTextGeneration:
 # ---------------------------------------------------------------------------
 
 
+class TestProviderResponseMetadata:
+    def test_text_response_contains_provider_identity(self) -> None:
+        provider = MockLLMProvider()
+
+        result = provider.generate(
+            system_prompt="system",
+            user_prompt="hello",
+        )
+
+        assert result.provider == "mock"
+        assert result.model == "mock-llm-v1"
+
+    def test_structured_response_contains_provider_identity(self) -> None:
+        provider = MockLLMProvider(
+            structured_responses={
+                "classify": {
+                    "label": "payment_issue",
+                    "confidence": 0.9,
+                }
+            }
+        )
+
+        result = provider.generate_structured(
+            system_prompt="system",
+            user_prompt="classify",
+            response_model=ExampleStructuredResponse,
+        )
+
+        assert result.provider == "mock"
+        assert result.model == "mock-llm-v1"
+        
+    def test_configured_usage_is_returned(self) -> None:
+        provider = MockLLMProvider(
+            config=MockProviderConfig(
+                input_tokens=120,
+                output_tokens=30,
+                cached_input_tokens=20,
+            )
+        )
+
+        result = provider.generate(
+            system_prompt="system",
+            user_prompt="hello",
+        )
+
+        assert result.usage.input_tokens == 120
+        assert result.usage.output_tokens == 30
+        assert result.usage.cached_input_tokens == 20
+        assert result.usage.total_tokens == 150
+        
+    def test_provider_metadata_and_cost_are_preserved(self) -> None:
+        provider = MockLLMProvider(
+            config=MockProviderConfig(
+                estimated_cost_usd=Decimal("0.0000045"),
+                provider_request_id="mock-request-123",
+            )
+        )
+
+        result = provider.generate(
+            system_prompt="system",
+            user_prompt="hello",
+        )
+
+        assert result.estimated_cost_usd == Decimal("0.0000045")
+        assert (
+            result.metadata.provider_request_id
+            == "mock-request-123"
+        )
+
+
 class TestStructuredGeneration:
     def test_returns_valid_structured_fixture(self) -> None:
         provider = MockLLMProvider(
@@ -213,13 +315,11 @@ class TestStructuredGeneration:
             response_model=ExampleStructuredResponse,
         )
 
-        assert isinstance(
-            result,
-            ExampleStructuredResponse,
-        )
+        assert isinstance(result, StructuredLLMResponse)
+        assert isinstance(result.output, ExampleStructuredResponse)
 
-        assert result.label == "payment_issue"
-        assert result.confidence == 0.95
+        assert result.output.label == "payment_issue"
+        assert result.output.confidence == 0.95
 
 
     def test_existing_pydantic_model_is_returned_as_copy(
@@ -242,8 +342,8 @@ class TestStructuredGeneration:
             response_model=ExampleStructuredResponse,
         )
 
-        assert result == fixture
-        assert result is not fixture
+        assert result.output == fixture
+        assert result.output is not fixture
 
 
     def test_other_basemodel_is_converted_through_dump(
@@ -270,8 +370,8 @@ class TestStructuredGeneration:
             response_model=ExampleStructuredResponse,
         )
 
-        assert result.label == "order_status"
-        assert result.confidence == 0.8
+        assert result.output.label == "order_status"
+        assert result.output.confidence == 0.8
 
 
     def test_structured_resolver_used_when_configured(
@@ -303,8 +403,8 @@ class TestStructuredGeneration:
             response_model=ExampleStructuredResponse,
         )
 
-        assert result.label == "resolved"
-        assert result.confidence == 0.77
+        assert result.output.label == "resolved"
+        assert result.output.confidence == 0.77
 
 
     def test_missing_structured_fixture_fails_in_strict_mode(
@@ -342,8 +442,8 @@ class TestStructuredGeneration:
             response_model=DefaultOnlyResponse,
         )
 
-        assert result.label == "default"
-        assert result.confidence == 0.5
+        assert result.output.label == "default"
+        assert result.output.confidence == 0.5
 
 
     def test_non_strict_mode_still_fails_required_schema(
@@ -472,7 +572,7 @@ class TestFaultInjection:
             user_prompt="second",
         )
 
-        assert result == "Mock response"
+        assert result.content == "Mock response"
 
 
     def test_queue_timeout_affects_next_call(self) -> None:
@@ -509,7 +609,7 @@ class TestFaultInjection:
             user_prompt="second",
         )
 
-        assert result == "Mock response"
+        assert result.content == "Mock response"
 
 
     def test_timeout_has_priority_over_failure(
@@ -737,7 +837,7 @@ class TestReset:
             user_prompt="hello",
         )
 
-        assert result == "Mock response"
+        assert result.content == "Mock response"
 
 
     def test_reset_clears_queued_timeout(self) -> None:
@@ -751,7 +851,7 @@ class TestReset:
             user_prompt="hello",
         )
 
-        assert result == "Mock response"
+        assert result.content == "Mock response"
 
 
 # ---------------------------------------------------------------------------

@@ -42,6 +42,7 @@ from packages.ai.intent.schemas import IntentResult
 from packages.ai.intent.taxonomy import IntentType
 from packages.ai.providers.base import LLMProvider
 from packages.ai.providers.errors import LLMProviderError, LLMProviderResponseError, LLMProviderTimeoutError
+from packages.ai.providers.types import StructuredLLMResponse, TokenUsage
 
 # ---------------------------------------------------------------------------
 # Fixtures & helpers
@@ -71,6 +72,17 @@ def make_intent_result(**overrides) -> IntentResult:
 
     return IntentResult(**values)
 
+def make_provider_response(intent: IntentResult | None = None, *, input_tokens: int = 0, output_tokens: int = 0) -> StructuredLLMResponse[IntentResult]:
+    return StructuredLLMResponse(
+        output=intent or make_intent_result(),
+        provider="mock",
+        model="mock-llm-v1",
+        usage=TokenUsage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        ),
+    )
+
 
 def get_call_kwargs(mock_provider) -> dict:
     _, kwargs = mock_provider.generate_structured.call_args
@@ -89,7 +101,7 @@ def test_valid_payment_classification(classifier, mock_provider):
         reason_summary="Customer reports being charged twice for one order.",
         needs_clarification=False,
     )
-    mock_provider.generate_structured.return_value = expected
+    mock_provider.generate_structured.return_value = make_provider_response(expected)
 
     result = classifier.classify(
         customer_message="I was charged twice for the same order, please help."
@@ -108,7 +120,7 @@ def test_valid_unknown_classification(classifier, mock_provider):
         reason_summary="Message does not map to any canonical intent.",
         needs_clarification=True,
     )
-    mock_provider.generate_structured.return_value = expected
+    mock_provider.generate_structured.return_value = make_provider_response(expected)
 
     result = classifier.classify(customer_message="asdkjfh random gibberish??")
 
@@ -128,7 +140,7 @@ def test_missing_order_id_still_allows_order_status(classifier, mock_provider):
         reason_summary="Customer is asking about order status but gave no order ID.",
         needs_clarification=True,
     )
-    mock_provider.generate_structured.return_value = expected
+    mock_provider.generate_structured.return_value = make_provider_response(expected)
 
     result = classifier.classify(customer_message="Hey, what's going on with my order?")
 
@@ -176,7 +188,7 @@ def test_oversized_message_rejected(mock_provider):
 
 def test_message_at_default_limit_boundary_is_accepted(classifier, mock_provider):
     """A message exactly at the configured max length should NOT be rejected."""
-    mock_provider.generate_structured.return_value = make_intent_result()
+    mock_provider.generate_structured.return_value = make_provider_response()
     boundary_message = "a" * DEFAULT_MAX_MESSAGE_LENGTH
 
     classifier.classify(customer_message=boundary_message)
@@ -198,7 +210,7 @@ def test_message_over_default_limit_is_rejected(classifier, mock_provider):
 
 
 def test_none_context_renders_as_no_context_placeholder(classifier, mock_provider):
-    mock_provider.generate_structured.return_value = make_intent_result()
+    mock_provider.generate_structured.return_value = make_provider_response()
 
     classifier.classify(customer_message="Where is my order?", conversation_context=None)
 
@@ -208,7 +220,7 @@ def test_none_context_renders_as_no_context_placeholder(classifier, mock_provide
 
 
 def test_whitespace_only_context_normalizes_to_none(classifier, mock_provider):
-    mock_provider.generate_structured.return_value = make_intent_result()
+    mock_provider.generate_structured.return_value = make_provider_response()
 
     classifier.classify(
         customer_message="Where is my order?",
@@ -221,7 +233,7 @@ def test_whitespace_only_context_normalizes_to_none(classifier, mock_provider):
 
 
 def test_context_is_stripped_and_wrapped_when_present(classifier, mock_provider):
-    mock_provider.generate_structured.return_value = make_intent_result()
+    mock_provider.generate_structured.return_value = make_provider_response()
 
     classifier.classify(
         customer_message="Where is my order?",
@@ -313,7 +325,7 @@ def test_unexpected_exception_is_wrapped_not_swallowed(classifier, mock_provider
 
 
 def test_provider_invoked_exactly_once_per_classification(classifier, mock_provider):
-    mock_provider.generate_structured.return_value = make_intent_result()
+    mock_provider.generate_structured.return_value = make_provider_response()
 
     classifier.classify(customer_message="Hi there")
     assert mock_provider.generate_structured.call_count == 1
@@ -323,7 +335,7 @@ def test_provider_invoked_exactly_once_per_classification(classifier, mock_provi
 
 
 def test_provider_called_with_response_model_intent_result(classifier, mock_provider):
-    mock_provider.generate_structured.return_value = make_intent_result()
+    mock_provider.generate_structured.return_value = make_provider_response()
 
     classifier.classify(customer_message="Hi there")
 
@@ -337,7 +349,7 @@ def test_provider_called_with_response_model_intent_result(classifier, mock_prov
 
 
 def test_prompt_contains_every_canonical_intent(classifier, mock_provider):
-    mock_provider.generate_structured.return_value = make_intent_result()
+    mock_provider.generate_structured.return_value = make_provider_response()
 
     classifier.classify(customer_message="Test message for taxonomy coverage")
 
@@ -347,7 +359,7 @@ def test_prompt_contains_every_canonical_intent(classifier, mock_provider):
 
 
 def test_customer_message_is_delimited_in_user_prompt(classifier, mock_provider):
-    mock_provider.generate_structured.return_value = make_intent_result()
+    mock_provider.generate_structured.return_value = make_provider_response()
 
     classifier.classify(customer_message="Refund my last order please")
 
@@ -375,3 +387,33 @@ def test_config_rejects_non_positive_max_message_length():
 def test_config_rejects_negative_max_examples_per_intent():
     with pytest.raises(ValueError):
         IntentClassifierConfig(max_examples_per_intent=-1)
+        
+
+# ---------------------------------------------------------------------------
+# Full provider response contract
+# ---------------------------------------------------------------------------
+
+
+def test_classify_with_response_preserves_provider_response(classifier, mock_provider):
+    intent = make_intent_result(intent=IntentType.PAYMENT_ISSUE, confidence=0.92)
+    provider_response = make_provider_response(intent, input_tokens=100, output_tokens=25)
+    mock_provider.generate_structured.return_value = provider_response
+    result = classifier.classify_with_response(customer_message="I was charged twice.")
+
+    assert result is provider_response
+    assert result.output is intent
+
+    assert result.provider == "mock"
+    assert result.model == "mock-llm-v1"
+
+    assert result.usage.input_tokens == 100
+    assert result.usage.output_tokens == 25
+    assert result.usage.total_tokens == 125
+    
+def test_classify_returns_only_intent_result(classifier, mock_provider):
+    intent = make_intent_result()
+    mock_provider.generate_structured.return_value = make_provider_response(intent)
+    result = classifier.classify(customer_message="hello")
+
+    assert result is intent
+    assert isinstance(result, IntentResult)

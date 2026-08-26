@@ -9,15 +9,12 @@ from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any, TypeVar
 from datetime import datetime, timezone
-
 from pydantic import BaseModel, ValidationError
+from decimal import Decimal
 
 from packages.ai.providers.base import LLMProvider
-from packages.ai.providers.errors import (
-    LLMProviderError,
-    LLMProviderResponseError,
-    LLMProviderTimeoutError,
-)
+from packages.ai.providers.errors import LLMProviderError, LLMProviderResponseError, LLMProviderTimeoutError
+from packages.ai.providers.types import LLMResponse, ProviderMetadata, StructuredLLMResponse, TokenUsage
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -50,17 +47,31 @@ class MockProviderConfig:
     """
 
     default_text_response: str = "Mock response"
-
     latency_seconds: float = 0.0
-
     fail_next_call: bool = False
     timeout_next_call: bool = False
-
     strict_structured_responses: bool = True
+    
+    # Deterministic provider telemetry
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_input_tokens: int = 0
+    estimated_cost_usd: Decimal | None = None
+    provider_request_id: str | None = None
+    finish_reason: str | None = "stop"
 
     def __post_init__(self) -> None:
         if self.latency_seconds < 0:
             raise ValueError("latency_seconds cannot be negative")
+        
+        TokenUsage(
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            cached_input_tokens=self.cached_input_tokens,
+        )
+        
+        if self.estimated_cost_usd is not None and self.estimated_cost_usd < 0:
+            raise ValueError("estimated_cost_usd cannot be negative")
         
 
 StructuredResponseResolver = Callable[
@@ -155,7 +166,7 @@ class MockLLMProvider(LLMProvider):
             self._config.fail_next_call = False
             self._config.timeout_next_call = False
 
-    def generate(self, *, system_prompt: str, user_prompt: str) -> str:
+    def generate(self, *, system_prompt: str, user_prompt: str) -> LLMResponse:
         """
         Produce a deterministic plain-text response.
         """
@@ -202,9 +213,16 @@ class MockLLMProvider(LLMProvider):
                 message="Mock provider returned an empty response.",
             )
 
-        return response
+        return LLMResponse(
+            content=response,
+            provider=self.PROVIDER_NAME,
+            model=self.MODEL_NAME,
+            usage=self._build_usage(),
+            metadata=self._build_metadata(),
+            estimated_cost_usd=self._config.estimated_cost_usd,
+        )
 
-    def generate_structured(self, *, system_prompt: str, user_prompt: str, response_model: type[T]) -> T:
+    def generate_structured(self, *, system_prompt: str, user_prompt: str, response_model: type[T]) -> StructuredLLMResponse[T]:
         """
         Produce a deterministic response validated against a Pydantic model.
         """
@@ -232,13 +250,20 @@ class MockLLMProvider(LLMProvider):
 
             if isinstance(raw_response, response_model):
                 # Defensive copy ensures callers cannot mutate provider fixture.
-                return raw_response.model_copy(deep=True)
+                validated_output = raw_response.model_copy(deep=True)
+            else:
+                if isinstance(raw_response, BaseModel):
+                    raw_response = raw_response.model_dump()
+                
+                validated_output = response_model.model_validate(copy.deepcopy(raw_response))
 
-            if isinstance(raw_response, BaseModel):
-                raw_response = raw_response.model_dump()
-
-            return response_model.model_validate(
-                copy.deepcopy(raw_response)
+            return StructuredLLMResponse(
+                output=validated_output,
+                provider=self.PROVIDER_NAME,
+                model=self.MODEL_NAME,
+                usage=self._build_usage(),
+                metadata=self._build_metadata(),
+                estimated_cost_usd=self._config.estimated_cost_usd,
             )
 
         except ValidationError as exc:
@@ -344,6 +369,21 @@ class MockLLMProvider(LLMProvider):
     def _simulate_latency(self) -> None:
         if self._config.latency_seconds > 0:
             time.sleep(self._config.latency_seconds)
+            
+    def _build_usage(self) -> TokenUsage:
+        return TokenUsage(
+            input_tokens=self._config.input_tokens,
+            output_tokens=self._config.output_tokens,
+            cached_input_tokens=self._config.cached_input_tokens,
+        )
+
+
+    def _build_metadata(self) -> ProviderMetadata:
+        return ProviderMetadata(
+            provider_request_id=self._config.provider_request_id,
+            finish_reason=self._config.finish_reason,
+            raw_model_name=self.MODEL_NAME,
+        )
 
     @staticmethod
     def _validate_prompts(*, system_prompt: str, user_prompt: str) -> None:
