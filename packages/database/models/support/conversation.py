@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, func, text
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Index, String, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -29,6 +29,11 @@ class ConversationModel(Base):
             "channel IN ('web', 'mobile', 'email', 'api')",
             name="valid_channel",
         ),
+        CheckConstraint(
+            "next_message_sequence >= 1",
+            name="valid_next_message_sequence",
+        ),
+        
         Index(
             "idx_conversations_user_created_at",
             "user_id",
@@ -64,6 +69,12 @@ class ConversationModel(Base):
     title: Mapped[str | None] = mapped_column(
         String(500),
         nullable=True,
+    )
+    
+    next_message_sequence: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        server_default="1",
     )
 
     created_at: Mapped[datetime] = mapped_column(
