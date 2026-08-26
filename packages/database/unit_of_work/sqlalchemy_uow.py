@@ -90,6 +90,11 @@ class SqlAlchemyUnitOfWork:
         finally:
             self.session.close()
             self._clear_state()
+            
+    ## This design helps to follow this
+    # explicit commit      → persist
+    # exception            → rollback
+    # forgot commit        → rollback
 
     # Transaction operations
     def commit(self) -> None:
