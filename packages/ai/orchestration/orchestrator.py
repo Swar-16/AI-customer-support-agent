@@ -2,13 +2,14 @@
 from __future__ import annotations
 import uuid
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from packages.ai.decision.engine import DecisionEngine
 from packages.ai.intent.classifier import IntentClassificationError, IntentClassificationProviderError, IntentClassificationTimeoutError, InvalidIntentInputError, InvalidIntentResponseError, IntentClassifier
 from packages.ai.orchestration.state import AIState, PipelineError, PipelineStage
 
 # Observer contract
+@runtime_checkable
 class OrchestrationObserver(Protocol):
     """
     Observer contract for orchestration lifecycle events.
