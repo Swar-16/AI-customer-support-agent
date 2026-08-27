@@ -17,3 +17,7 @@ dependencies = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "integration: tests requiring external infrastructure or services",
+    "live_provider: tests making real external LLM API calls",
+]
