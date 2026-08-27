@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     database_password: str
     database_echo: bool = False
     
+    llm_provider: str = "groq"
+    
     ## Groq / LLM
     groq_api_key: str | None = None
     groq_model: str = "openai/gpt-oss-20b"

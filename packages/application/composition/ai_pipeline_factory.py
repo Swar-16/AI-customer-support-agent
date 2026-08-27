@@ -116,8 +116,8 @@ class AIPipelineFactory:
                  decision_engine_config: DecisionEngineConfig | None = None, orchestrator_config: AIOrchestratorConfig | None = None,
                  observer: OrchestrationObserver | None = None, config: AIPipelineFactoryConfig | None = None,
     ) -> None:
-        if base_provider is None:
-            raise TypeError("base_provider cannot be None")
+        if not isinstance(base_provider, LLMProvider):
+            raise TypeError("base_provider must implement LLMProvider")
 
         self._base_provider = base_provider
         self._intent_classifier_config = intent_classifier_config or IntentClassifierConfig()
@@ -184,6 +184,15 @@ class AIPipelineFactory:
     def provider_name(self) -> str:
         return self._base_provider.provider_name
 
+    @property
+    def base_provider(self) -> LLMProvider:
+        """
+        Expose the configured provider without allowing replacement.
+        
+        Primarily useful for health checks and application diagnostics.
+        """
+        return self._base_provider
+    
     @property
     def model_name(self) -> str:
         return self._base_provider.model_name
