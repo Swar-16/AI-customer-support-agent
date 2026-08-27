@@ -19,9 +19,12 @@ from packages.database.base import Base
 
 import packages.database.models
 
-settings = get_settings()
+x_args = context.get_x_argument(as_dictionary=True)
+environment = x_args.get("env", "development",)
+settings = get_settings(environment)
 
-
+if environment == "test" and settings.database_name != "support_ai_test":
+    raise RuntimeError(f"Refusing to run test migrations against database {settings.database_name!r}")
 
 target_metadata = Base.metadata
 
@@ -54,9 +57,17 @@ def run_migrations_offline() -> None:
     with context.begin_transaction():
         context.run_migrations()
 
-
+## Then your commands work like:
+## alembic -x env=development current
+## alembic -x env=test current
+## alembic -x env=test upgrade head
 def run_migrations_online() -> None:
-    settings = get_settings()
+    x_args = context.get_x_argument(as_dictionary=True)
+    environment = x_args.get("env", "development",)
+    settings = get_settings(environment)
+    
+    if environment == "test" and settings.database_name != "support_ai_test":
+        raise RuntimeError(f"Refusing to run test migrations against database {settings.database_name!r}")
 
     connectable = create_engine(
         settings.database_url,

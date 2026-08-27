@@ -20,7 +20,7 @@ from packages.database.repositories.ai.intent_prediction_repository import Inten
 from packages.database.repositories.ai.llm_call_repository import LLMCallRepository
 from packages.database.repositories.support.conversation_repository import ConversationRepository
 from packages.database.repositories.support.message_repository import MessageRepository
-from packages.application.composition.ai_pipeline_factory import AIPipelineFactory, AITelemetryRepositories)
+from packages.application.composition.ai_pipeline_factory import AIPipelineFactory, AITelemetryRepositories
 
 
 @dataclass(frozen=True, slots=True)

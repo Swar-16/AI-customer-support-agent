@@ -1,4 +1,6 @@
+from __future__ import annotations
 from functools import lru_cache
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
@@ -14,7 +16,6 @@ class Settings(BaseSettings):
     database_echo: bool = False
     
     model_config = SettingsConfigDict(
-        env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -30,7 +31,22 @@ class Settings(BaseSettings):
         port=self.database_port,
         database=self.database_name,
     )
+
+ENV_FILES = {
+    "development": ".env",
+    "test": ".env.test",
+    "production": ".env.production",
+}        
         
 @lru_cache
-def get_settings() -> Settings:
-    return Settings()
+def get_settings(environment: str = "development") -> Settings:
+    try:
+        env_file = ENV_FILES[environment]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported environment: {environment!r}. Expected one of {tuple(ENV_FILES)}.") from exc
+    
+    return Settings(
+        _env_file=Path(env_file),
+        _env_file_encoding="utf-8",
+        app_env=environment,
+    )
