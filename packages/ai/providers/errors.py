@@ -21,20 +21,22 @@ class LLMProviderError(RuntimeError):
 
 class LLMProviderTimeoutError(LLMProviderError):
     def __init__(self, *, provider: str, message: str = "Provider request timed out.", metadata: dict[str, Any] | None = None) -> None:
-        super().__init__(
-            provider=provider,
-            message=message,
-            error_code="TIMEOUT",
-            retryable=True,
-            metadata=metadata,
-        )
+        super().__init__(provider=provider, message=message, error_code="TIMEOUT", retryable=True, metadata=metadata)
 
 class LLMProviderResponseError(LLMProviderError):
     def __init__(self, *, provider: str, message: str, metadata: dict[str, Any] | None = None) -> None:
-        super().__init__(
-            provider=provider,
-            message=message,
-            error_code="INVALID_RESPONSE",
-            retryable=False,
-            metadata=metadata,
-        )
+        super().__init__(provider=provider, message=message, error_code="INVALID_RESPONSE", retryable=False, metadata=metadata)
+        
+class LLMProviderRateLimitError(LLMProviderError):
+    def __init__(self, *, provider: str, message: str = "Provider rate limit exceeded.", metadata: dict[str, Any] | None = None) -> None:
+        super().__init__(provider=provider, message=message, error_code="RATE_LIMITED", retryable=True, metadata=metadata)
+
+
+class LLMProviderAuthenticationError(LLMProviderError):
+    def __init__(self, *, provider: str, message: str = "Provider authentication failed.", metadata: dict[str, Any] | None = None) -> None:
+        super().__init__(provider=provider, message=message, error_code="AUTHENTICATION_FAILED", retryable=False, metadata=metadata)
+
+
+class LLMProviderUnavailableError(LLMProviderError):
+    def __init__(self, *, provider: str, message: str = "Provider is temporarily unavailable.", metadata: dict[str, Any] | None = None) -> None:
+        super().__init__(provider=provider, message=message, error_code="PROVIDER_UNAVAILABLE", retryable=True, metadata=metadata)

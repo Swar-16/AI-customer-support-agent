@@ -8,12 +8,20 @@ class Settings(BaseSettings):
     app_env: str = "development"
     app_name: str = "support-ai"
 
+    ## Database
     database_host: str = "localhost"
     database_port: int = 5432
-    database_name: str = "support_ai"
+    database_name: str
     database_user: str = "support_ai_admin"
     database_password: str
     database_echo: bool = False
+    
+    ## Groq / LLM
+    groq_api_key: str | None = None
+    groq_model: str = "openai/gpt-oss-20b"
+    groq_timeout_seconds: float = 30.0
+    groq_max_completion_tokens: int = 1024
+    groq_temperature: float = 0.0
     
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
