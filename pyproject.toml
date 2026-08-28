@@ -1,0 +1,25 @@
+[project]
+name = "support-ai"
+version = "0.1.0"
+description = "Production-oriented AI customer support platform"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "sqlalchemy",
+    "psycopg[binary]",
+    "alembic",
+    "pydantic",
+    "pydantic-settings",
+    "python-dotenv"
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "integration: tests requiring external infrastructure or services",
+    "live_provider: tests making real external LLM API calls",
+    "live_smoke: full real application smoke tests"
+]
+asyncio_mode = "auto"
