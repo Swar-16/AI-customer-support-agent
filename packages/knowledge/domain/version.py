@@ -64,24 +64,19 @@ class KnowledgeDocumentVersion:
         self._validate_enums()
         self._validate_source_content()
         self._validate_content_hash()
-        self._validate_source_metadata()
-        self._validate_metadata()
         self._validate_failure_fields()
         self._validate_timestamps()
         self._validate_lifecycle_consistency()
+        
+        normalized_source_name = self._normalize_optional_text(self.source_name, field_name="source_name", max_length=MAX_SOURCE_NAME_LENGTH)
+        normalized_source_uri = self._normalize_optional_text(self.source_uri, field_name="source_uri", max_length=MAX_SOURCE_URI_LENGTH)
+        normalized_metadata = self._normalize_metadata(self.metadata)
 
         object.__setattr__(self, "source_content", self.source_content.strip())
         object.__setattr__(self, "content_hash", self.content_hash.strip())
-
-        if self.source_name is not None:
-            normalized_source_name = self.source_name.strip()
-            object.__setattr__(self, "source_name", normalized_source_name or None)
-
-        if self.source_uri is not None:
-            normalized_source_uri = self.source_uri.strip()
-            object.__setattr__(self, "source_uri", normalized_source_uri or None)
-
-        object.__setattr__(self, "metadata", dict(self.metadata))
+        object.__setattr__(self, "source_name", normalized_source_name or None)
+        object.__setattr__(self, "source_uri", normalized_source_uri or None)
+        object.__setattr__(self, "metadata", normalized_metadata)
 
     # Queries
     @property
@@ -345,7 +340,7 @@ class KnowledgeDocumentVersion:
             raise TypeError("status must be a KnowledgeVersionStatus.")
 
         if not isinstance(self.ingestion_status, KnowledgeIngestionStatus):
-            raise TypeError("Ingestion_status must be a KnowledgeIngestionStatus.")
+            raise TypeError("ingestion_status must be a KnowledgeIngestionStatus.")
 
     def _validate_source_content(self) -> None:
         if not isinstance(self.source_content, str):
@@ -360,13 +355,6 @@ class KnowledgeDocumentVersion:
 
         if not self.content_hash.strip():
             raise KnowledgeVersionContentError(reason="Content hash cannot be empty.")
-
-    def _validate_source_metadata(self) -> None:
-        self._normalize_optional_text(self.source_name, field_name="source_name", max_length=MAX_SOURCE_NAME_LENGTH)
-        self._normalize_optional_text(self.source_uri, field_name="source_uri", max_length=MAX_SOURCE_URI_LENGTH)
-
-    def _validate_metadata(self) -> None:
-        self._normalize_metadata(self.metadata)
 
     def _validate_failure_fields(self) -> None:
         self._normalize_optional_text(self.failure_code, field_name="failure_code", max_length=MAX_FAILURE_CODE_LENGTH)

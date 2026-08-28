@@ -44,23 +44,17 @@ class KnowledgeDocument:
 
     def __post_init__(self) -> None:
         self._validate_id()
-        self._validate_title()
         self._validate_enums()
-        self._validate_description()
-        self._validate_metadata()
         self._validate_timestamps()
         self._validate_lifecycle_consistency()
 
-        # The entity is frozen, but we still normalize values during
-        # construction so every valid instance has canonical state.
-        object.__setattr__(self, "title", self.title.strip())
+        normalized_title = self._normalize_title(self.title)
+        normalized_description = self._normalize_description(self.description)
+        normalized_metadata = self._normalize_metadata(self.metadata)
         
-        if self.description is not None:
-            normalized_description = self.description.strip()
-            object.__setattr__(self, "description", normalized_description or None)
-
-        # Do not retain a mutable mapping supplied by the caller.
-        object.__setattr__(self, "metadata", dict(self.metadata))
+        object.__setattr__(self, "title", normalized_title)
+        object.__setattr__(self, "description", normalized_description)
+        object.__setattr__(self, "metadata", normalized_metadata)
 
     # Queries
     @property
@@ -102,9 +96,10 @@ class KnowledgeDocument:
         """
         self.ensure_mutable()
         normalized_title = self._normalize_title(title)
-        changed_at = self._resolve_mutation_time(occurred_at)
         if normalized_title == self.title:
-            return self
+                    return self
+                
+        changed_at = self._resolve_mutation_time(occurred_at)
 
         return replace(self, title=normalized_title, updated_at=changed_at)
 
@@ -112,9 +107,10 @@ class KnowledgeDocument:
         """Return a new document with updated descriptive metadata."""
         self.ensure_mutable()
         normalized_description = self._normalize_description(description)
-        changed_at = self._resolve_mutation_time(occurred_at)
         if normalized_description == self.description:
-            return self
+                    return self
+                
+        changed_at = self._resolve_mutation_time(occurred_at)
 
         return replace(self, description=normalized_description, updated_at=changed_at)
 
@@ -161,7 +157,9 @@ class KnowledgeDocument:
         if normalized_metadata == dict(self.metadata):
             return self
         
-        return replace(self, metadata=normalized_metadata, updated_at=self._resolve_mutation_time(occurred_at))
+        changed_at = self._resolve_mutation_time(occurred_at)
+        
+        return replace(self, metadata=normalized_metadata, updated_at=changed_at)
 
     def archive(self, *, occurred_at: datetime | None = None) -> KnowledgeDocument:
         """
@@ -231,9 +229,6 @@ class KnowledgeDocument:
         if not isinstance(self.id, UUID):
             raise TypeError("id must be a UUID.")
 
-    def _validate_title(self) -> None:
-        self._normalize_title(self.title)
-
     def _validate_enums(self) -> None:
         if not isinstance(self.content_type, KnowledgeContentType):
             raise TypeError("content_type must be a KnowledgeContentType.")
@@ -243,12 +238,6 @@ class KnowledgeDocument:
 
         if not isinstance(self.status, KnowledgeDocumentStatus):
             raise TypeError("status must be a KnowledgeDocumentStatus.")
-
-    def _validate_description(self) -> None:
-        self._normalize_description(self.description)
-
-    def _validate_metadata(self) -> None:
-        self._normalize_metadata(self.metadata)
 
     def _validate_timestamps(self) -> None:
         self._ensure_aware_datetime("created_at", self.created_at)
@@ -261,7 +250,7 @@ class KnowledgeDocument:
             self._ensure_aware_datetime("deleted_at", self.deleted_at)
 
         if self.updated_at < self.created_at:
-            raise ValueError("updated_at cannot be earlier than created_at.")
+            raise InvalidKnowledgeDocumentError(reason="updated_at cannot be earlier than created_at.")
 
     def _validate_lifecycle_consistency(self) -> None:
         if self.status is KnowledgeDocumentStatus.ACTIVE and self.archived_at is not None:

@@ -53,15 +53,16 @@ class KnowledgeChunk:
         self._validate_section_title()
         self._validate_offsets()
         self._validate_token_count()
-        self._validate_metadata()
         self._validate_timestamps()
+        
+        normalized_metadata = self._normalize_metadata(self.metadata)
 
         object.__setattr__(self, "content", self.content.strip())
         if self.section_title is not None:
             normalized_section_title = self.section_title.strip()
             object.__setattr__(self, "section_title", normalized_section_title or None)
 
-        object.__setattr__(self, "metadata", dict(self.metadata))
+        object.__setattr__(self, "metadata", normalized_metadata)
 
     # Queries
     @property
@@ -115,7 +116,7 @@ class KnowledgeChunk:
     # Validation
     def _validate_ids(self) -> None:
         if not isinstance(self.id, UUID):
-            raise TypeError("ID must be a UUID.")
+            raise TypeError("id must be a UUID.")
 
         if not isinstance(self.version_id, UUID):
             raise TypeError("version_id must be a UUID.")
@@ -190,9 +191,6 @@ class KnowledgeChunk:
 
     def _validate_token_count(self) -> None:
         self._validate_token_count_value(self.token_count)
-
-    def _validate_metadata(self) -> None:
-        self._normalize_metadata(self.metadata)
 
     def _validate_timestamps(self) -> None:
         self._ensure_aware_datetime("created_at", self.created_at)
