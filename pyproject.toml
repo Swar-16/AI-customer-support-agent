@@ -22,3 +22,4 @@ markers = [
     "live_provider: tests making real external LLM API calls",
     "live_smoke: full real application smoke tests"
 ]
+asyncio_mode = "auto"

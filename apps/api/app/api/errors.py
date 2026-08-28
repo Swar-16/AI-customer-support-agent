@@ -121,7 +121,7 @@ async def request_validation_exception_handler(request: Request, exc: RequestVal
     )
 
     return _error_response(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         code=ERROR_INVALID_REQUEST,
         message="The request contains invalid data.",
         trace_id=trace_id,
