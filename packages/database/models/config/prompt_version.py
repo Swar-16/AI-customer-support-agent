@@ -1,17 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import Any
-
-from sqlalchemy import (
-    CheckConstraint,
-    DateTime,
-    Integer,
-    String,
-    Text,
-    UniqueConstraint,
-    func,
-    text,
-)
+from sqlalchemy import CheckConstraint, DateTime, Integer, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,17 +10,18 @@ from packages.database.base import Base
 
 class PromptVersionModel(Base):
     __tablename__ = "prompt_versions"
-
     __table_args__ = (
         CheckConstraint(
             "status IN ('draft', 'active', 'retired')",
             name="valid_status",
         ),
+        
         UniqueConstraint(
             "prompt_name",
             "version",
             name="uq_prompt_name_version",
         ),
+        
         {"schema": "config"},
     )
 

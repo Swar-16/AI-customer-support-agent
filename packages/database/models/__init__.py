@@ -9,6 +9,10 @@ from packages.database.models.ai.llm_call import LLMCallModel
 from packages.database.models.ai.intent_prediction import IntentPredictionModel
 from packages.database.models.ai.decision import AIDecisionModel
 
+from packages.database.models.knowledge import KnowledgeChunkModel
+from packages.database.models.knowledge import KnowledgeDocumentModel
+from packages.database.models.knowledge import KnowledgeDocumentVersionModel
+
 __all__ = [
     "UserModel",
     "ConversationModel",
@@ -18,4 +22,7 @@ __all__ = [
     "LLMCallModel",
     "IntentPredictionModel",
     "AIDecisionModel",
+    "KnowledgeChunkModel",
+    "KnowledgeDocumentModel",
+    "KnowledgeDocumentVersionModel",
 ]
