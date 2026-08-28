@@ -95,6 +95,13 @@ class KnowledgeDocumentTitleError(KnowledgeDocumentError):
                 "reason": reason,
             },
         )
+        
+class InvalidKnowledgeDocumentError(KnowledgeDocumentError):
+    code = "KNOWLEDGE_DOCUMENT_INVALID"
+    
+    def __init__(self, *, reason: str) -> None:
+        self.reason = reason
+        super().__init__("Knowledge document is invalid.", context={"reason": reason})
 
 # Version errors
 class KnowledgeVersionError(KnowledgeDomainError):
@@ -165,6 +172,13 @@ class KnowledgeVersionContentError(KnowledgeVersionError):
                 "reason": reason,
             },
         )
+        
+class InvalidKnowledgeVersionError(KnowledgeVersionError):
+    code = "KNOWLEDGE_VERSION_INVALID"
+
+    def __init__(self, *, reason: str) -> None:
+        self.reason = reason
+        super().__init__("Knowledge document version is invalid.", context={"reason": reason})
 
 # Lifecycle / transition errors
 @dataclass(frozen=True, slots=True)
