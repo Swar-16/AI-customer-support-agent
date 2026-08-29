@@ -5,8 +5,11 @@ from typing import Protocol, Self
 from packages.knowledge.repositories import KnowledgeChunkRepository, KnowledgeDocumentRepository, KnowledgeVersionRepository
 
 
-class KnowledgeUnitOfWork(Protocol):
+class KnowledgeUnitOfWorkFactory(Protocol):
+    def __call__(self) -> KnowledgeUnitOfWork:
+        ...
 
+class KnowledgeUnitOfWork(Protocol):
     @property
     def documents(self) -> KnowledgeDocumentRepository:
         ...
