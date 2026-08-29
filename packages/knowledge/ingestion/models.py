@@ -150,35 +150,55 @@ class ParsedDocument:
     """
     Format-independent result produced by a DocumentParser.
 
-    Once parsing is complete, downstream normalization/chunking logic should
-    operate on this representation rather than PDF, Markdown, DOCX, HTML, etc.
+    Parser provenance is stored as primitive values rather than depending on
+    ParserDescriptor directly. This keeps ingestion models independent from
+    concrete parser abstractions and makes provenance easy to persist.
+
+    `parser_strategy_id` identifies the parsing strategy.
+    `parser_version` identifies the behavior/version of that strategy.
+    `parser_config_fingerprint` identifies output-affecting configuration.
+
+    Downstream normalization and chunking operate on this representation
+    rather than on PDF, Markdown, DOCX, HTML, etc.
     """
     version_id: UUID
     segments: tuple[ParsedSegment, ...]
-    parser_name: str
+    parser_strategy_id: str
     parser_version: str
+    parser_config_fingerprint: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        self._validate_version_id()
+        self._validate_segments()
+        self._validate_parser_provenance()
+        self._validate_metadata()
+
+    def _validate_version_id(self) -> None:
         if not isinstance(self.version_id, UUID):
             raise TypeError("version_id must be a UUID.")
-
+        
+    def _validate_segments(self) -> None:
         if not isinstance(self.segments, tuple):
             raise TypeError("segments must be a tuple.")
-
+        
         if not self.segments:
             raise ValueError("Parsed document must contain at least one segment.")
 
         if not all(isinstance(segment, ParsedSegment) for segment in self.segments):
             raise TypeError("Every segment must be a ParsedSegment.")
 
-        self._validate_segment_order()
+        indexes = [segment.index for segment in self.segments]
+        expected_indexes = list(range(len(self.segments)))
+        if indexes != expected_indexes:
+            raise ValueError("Parsed segment indexes must be contiguous, ordered, and zero-based.")
+        
+    def _validate_parser_provenance(self) -> None:
+        if not isinstance(self.parser_strategy_id, str):
+            raise TypeError("parser_strategy_id must be a string.")
 
-        if not isinstance(self.parser_name, str):
-            raise TypeError("parser_name must be a string.")
-
-        if not self.parser_name.strip():
-            raise ValueError("parser_name must not be blank.")
+        if not self.parser_strategy_id.strip():
+            raise ValueError("parser_strategy_id must not be blank.")
 
         if not isinstance(self.parser_version, str):
             raise TypeError("parser_version must be a string.")
@@ -186,16 +206,18 @@ class ParsedDocument:
         if not self.parser_version.strip():
             raise ValueError("parser_version must not be blank.")
 
+        fingerprint = self.parser_config_fingerprint
+        if fingerprint is not None and not isinstance(fingerprint, str):
+            raise TypeError("parser_config_fingerprint must be a string or None.")
+
+        if fingerprint is not None and not fingerprint.strip():
+            raise ValueError("parser_config_fingerprint must not be blank.")
+        
+    def _validate_metadata(self) -> None:
         if not isinstance(self.metadata, Mapping):
             raise TypeError("metadata must be a mapping.")
 
         object.__setattr__(self, "metadata", _freeze_metadata(self.metadata))
-
-    def _validate_segment_order(self) -> None:
-        indexes = [segment.index for segment in self.segments]
-        expected = list(range(len(self.segments)))
-        if indexes != expected:
-            raise ValueError("Parsed segment indexes must be contiguous, ordered, and zero-based.")
 
     @property
     def segment_count(self) -> int:
@@ -209,3 +231,13 @@ class ParsedDocument:
         Structural information remains available through `segments`.
         """
         return "\n\n".join(segment.text for segment in self.segments)
+    
+    @property
+    def parser_identity(self) -> str:
+        """
+        Human-readable parser identity useful for diagnostics and
+        observability.
+
+        This is not intended to be used as a database identity.
+        """
+        return (f"{self.parser_strategy_id}@{self.parser_version}")

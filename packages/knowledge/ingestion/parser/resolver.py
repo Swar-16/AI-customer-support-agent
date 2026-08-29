@@ -3,7 +3,7 @@ from collections.abc import Iterable
 
 from packages.knowledge.domain.enums import KnowledgeSourceType
 from packages.knowledge.ingestion.errors import KnowledgeParserConfigurationError, UnsupportedKnowledgeSourceTypeError
-from packages.knowledge.ingestion.parser.base import DocumentParser, DocumentParserResolver
+from packages.knowledge.ingestion.parser.base import DocumentParser, DocumentParserResolver, ParserDescriptor
 
 
 class DefaultDocumentParserResolver(DocumentParserResolver):
@@ -51,7 +51,7 @@ class DefaultDocumentParserResolver(DocumentParserResolver):
                 if existing is not None:
                     raise KnowledgeParserConfigurationError(
                         f"Multiple document parsers are registered for source type '{source_type.value}'.",
-                        parser_name=parser.name,
+                        parser_name=parser.descriptor.strategy_id,
                         source_type=source_type,
                     )
 
@@ -64,32 +64,25 @@ class DefaultDocumentParserResolver(DocumentParserResolver):
         if not isinstance(parser, DocumentParser):
             raise KnowledgeParserConfigurationError("Registered parser does not satisfy the DocumentParser contract.")
 
-        if not isinstance(parser.name, str):
-            raise KnowledgeParserConfigurationError("Parser name must be a string.")
-
-        if not parser.name.strip():
-            raise KnowledgeParserConfigurationError("Parser name must not be blank.")
-
-        if not isinstance(parser.version, str):
-            raise KnowledgeParserConfigurationError("Parser version must be a string.", parser_name=parser.name)
-
-        if not parser.version.strip():
-            raise KnowledgeParserConfigurationError("Parser version must not be blank.", parser_name=parser.name)
+        descriptor = parser.descriptor
+        if not isinstance(descriptor, ParserDescriptor):
+            raise KnowledgeParserConfigurationError("Parser descriptor must be a ParserDescriptor.")
 
         supported_source_types = parser.supported_source_types
+
         if not isinstance(supported_source_types, frozenset):
-            raise KnowledgeParserConfigurationError("supported_source_types must be a frozenset.", parser_name=parser.name)
+            raise KnowledgeParserConfigurationError("supported_source_types must be a frozenset.", parser_name=descriptor.strategy_id)
 
         if not supported_source_types:
-            raise KnowledgeParserConfigurationError("Parser must support at least one knowledge source type.", parser_name=parser.name)
+            raise KnowledgeParserConfigurationError("Parser must support at least one knowledge source type.", parser_name=descriptor.strategy_id)
 
         for source_type in supported_source_types:
             if not isinstance(source_type, KnowledgeSourceType):
-                raise KnowledgeParserConfigurationError("Parser contains an invalid supported source type.", parser_name=parser.name)
+                raise KnowledgeParserConfigurationError("Parser contains an invalid supported source type.", parser_name=descriptor.strategy_id)
 
             if not parser.supports(source_type):
                 raise KnowledgeParserConfigurationError(
                     "Parser reports a source type in supported_source_types but supports() returns False for that same type.",
-                    parser_name=parser.name,
+                    parser_name=descriptor.strategy_id,
                     source_type=source_type,
                 )

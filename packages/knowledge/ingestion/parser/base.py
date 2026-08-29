@@ -1,9 +1,50 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from packages.knowledge.domain.enums import KnowledgeSourceType
 from packages.knowledge.ingestion.models import IngestionSource, ParsedDocument
+
+
+@dataclass(frozen=True, slots=True)
+class ParserDescriptor:
+    """
+    Stable identity and provenance for a parser strategy.
+
+    strategy_id:
+        Stable logical implementation identity.
+        Example: "plain-text-structural", "pymupdf", "docling".
+
+    version:
+        Version of parser behavior. Change when parsing semantics change.
+
+    config_fingerprint:
+        Fingerprint of configuration that can affect parser output.
+        None when the parser has no output-affecting configuration.
+    """
+    strategy_id: str
+    version: str
+    config_fingerprint: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.strategy_id, str):
+            raise TypeError("strategy_id must be a string.")
+
+        if not self.strategy_id.strip():
+            raise ValueError("strategy_id must not be blank.")
+
+        if not isinstance(self.version, str):
+            raise TypeError("version must be a string.")
+
+        if not self.version.strip():
+            raise ValueError("version must not be blank.")
+
+        if self.config_fingerprint is not None and not isinstance(self.config_fingerprint, str):
+            raise TypeError("config_fingerprint must be a string or None.")
+
+        if self.config_fingerprint is not None and not self.config_fingerprint.strip():
+            raise ValueError("config_fingerprint must not be blank.")
 
 
 @runtime_checkable
@@ -19,80 +60,30 @@ class DocumentParser(Protocol):
     content and parser version.
     """
     @property
-    def name(self) -> str:
-        """
-        Stable parser identifier used for provenance and observability.
-
-        Examples:
-            "markdown-parser"
-            "plain-text-parser"
-            "pymupdf-parser"
-        """
-        ...
-
-    @property
-    def version(self) -> str:
-        """
-        Parser implementation/version identifier.
-
-        This value should change whenever parser behavior changes in a way
-        that could alter the produced ParsedDocument.
-        """
+    def descriptor(self) -> ParserDescriptor:
         ...
 
     @property
     def supported_source_types(self) -> frozenset[KnowledgeSourceType]:
-        """
-        Source types this parser can process.
-
-        A parser may support more than one source type where doing so is
-        semantically appropriate.
-        """
         ...
 
     def supports(self, source_type: KnowledgeSourceType) -> bool:
-        """
-        Return whether this parser supports the supplied source type.
-
-        Implementations normally do not need to override this method when
-        using a concrete base class. Protocol implementations may provide
-        equivalent behavior themselves.
-        """
         ...
 
     def parse(self, source: IngestionSource) -> ParsedDocument:
-        """
-        Parse a source document into a format-independent representation.
-
-        Implementations should:
-        - preserve source ordering;
-        - preserve meaningful document structure where possible;
-        - preserve provenance such as sections/pages/offsets when available;
-        - never perform retrieval chunking;
-        - never generate embeddings;
-        - never persist anything.
-
-        Parsing failures should be raised as ingestion/parser-specific
-        exceptions rather than silently returning partial or empty output.
-        """
         ...
 
 
 class BaseDocumentParser(ABC):
     """
-    Convenience base class for concrete parser implementations.
+    Convenience base class for parser strategies.
 
-    The application layer should depend on DocumentParser, not on this class.
+    Application code depends on DocumentParser, not this class.
     """
 
     @property
     @abstractmethod
-    def name(self) -> str:
-        raise NotImplementedError
-
-    @property
-    @abstractmethod
-    def version(self) -> str:
+    def descriptor(self) -> ParserDescriptor:
         raise NotImplementedError
 
     @property
@@ -122,13 +113,6 @@ class DocumentParserResolver(Protocol):
 
     def supports(self, source_type: KnowledgeSourceType) -> bool:
         ...
-    
-    def resolve(self, source_type: KnowledgeSourceType) -> DocumentParser:
-        """
-        Return the parser configured for the requested source type.
 
-        Raises:
-            An ingestion-specific error when no parser is configured for the
-            supplied source type.
-        """
+    def resolve(self, source_type: KnowledgeSourceType) -> DocumentParser:
         ...
