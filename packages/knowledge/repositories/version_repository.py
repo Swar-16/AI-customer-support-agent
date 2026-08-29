@@ -20,6 +20,13 @@ class KnowledgeVersionRepository(Protocol):
     def get_by_id(self, version_id: UUID) -> KnowledgeDocumentVersion | None:
         """Return a version by identity, or None if it does not exist."""
         ...
+        
+    def get_by_id_for_update(self, version_id: UUID) -> KnowledgeDocumentVersion | None:
+        """
+        Return a version while acquiring a row-level write lock
+        for the lifetime of the surrounding transaction.
+        """
+        ...
 
     def save(self, version: KnowledgeDocumentVersion) -> None:
         """Persist the current state of an existing version."""

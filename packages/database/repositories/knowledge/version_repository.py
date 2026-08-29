@@ -32,6 +32,33 @@ class SQLAlchemyKnowledgeVersionRepository:
             return None
 
         return version_to_domain(model)
+    
+    def get_by_id_for_update(self, version_id: UUID) -> KnowledgeDocumentVersion | None:
+        """
+        Load a knowledge-document version while acquiring a PostgreSQL
+        row-level write lock for the lifetime of the current transaction.
+
+        Intended for lifecycle transitions such as:
+            DRAFT -> PROCESSING
+            PROCESSING -> READY
+            PROCESSING -> FAILED
+            READY -> PUBLISHED
+
+        The lock prevents two concurrent workers from successfully claiming
+        or completing the same version at the same time.
+
+        Transaction ownership remains with the surrounding Unit of Work.
+        """
+        statement = (select(KnowledgeDocumentVersionModel)
+                     .where(KnowledgeDocumentVersionModel.id == version_id)
+                     .with_for_update()
+        )
+
+        model = self._session.scalar(statement)
+        if model is None:
+            return None
+
+        return version_to_domain(model)
 
     def save(self, version: KnowledgeDocumentVersion) -> None:
         """
