@@ -162,6 +162,7 @@ class ParsedDocument:
     rather than on PDF, Markdown, DOCX, HTML, etc.
     """
     version_id: UUID
+    source_type: KnowledgeSourceType
     segments: tuple[ParsedSegment, ...]
     parser_strategy_id: str
     parser_version: str
@@ -170,6 +171,7 @@ class ParsedDocument:
 
     def __post_init__(self) -> None:
         self._validate_version_id()
+        self._validate_source_type()
         self._validate_segments()
         self._validate_parser_provenance()
         self._validate_metadata()
@@ -178,6 +180,10 @@ class ParsedDocument:
         if not isinstance(self.version_id, UUID):
             raise TypeError("version_id must be a UUID.")
         
+    def _validate_source_type(self) -> None:
+        if not isinstance(self.source_type, KnowledgeSourceType):
+            raise TypeError("source_type must be a KnowledgeSourceType.")
+    
     def _validate_segments(self) -> None:
         if not isinstance(self.segments, tuple):
             raise TypeError("segments must be a tuple.")
