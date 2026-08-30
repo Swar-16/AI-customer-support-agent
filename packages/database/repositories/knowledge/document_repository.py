@@ -35,6 +35,18 @@ class SQLAlchemyKnowledgeDocumentRepository:
             return None
 
         return document_to_domain(model)
+    
+    def get_by_id_for_update(self, document_id: UUID) -> KnowledgeDocument | None:
+        statement = (select(KnowledgeDocumentModel)
+                     .where(KnowledgeDocumentModel.id == document_id)
+                     .with_for_update()
+        )
+
+        model = self._session.scalar(statement)
+        if model is None:
+            return None
+
+        return document_to_domain(model)
 
     def save(self, document: KnowledgeDocument) -> None:
         """

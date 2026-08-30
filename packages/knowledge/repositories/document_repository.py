@@ -20,6 +20,16 @@ class KnowledgeDocumentRepository(Protocol):
         """Return a document by identity, or None when it does not exist."""
         ...
 
+    def get_by_id_for_update(self, document_id: UUID) -> KnowledgeDocument | None:
+        """
+        Return the document while acquiring a row-level write lock
+        for the lifetime of the surrounding transaction.
+
+        Used to serialize aggregate-level lifecycle operations such as
+        publishing document versions.
+        """
+        ...
+
     def save(self, document: KnowledgeDocument) -> None:
         """
         Persist the current state of an existing document.
