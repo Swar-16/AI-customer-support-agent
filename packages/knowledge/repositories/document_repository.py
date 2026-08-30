@@ -1,9 +1,17 @@
 from __future__ import annotations
+from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
 from packages.knowledge.domain.document import KnowledgeDocument
+from packages.knowledge.domain.enums import KnowledgeContentType, KnowledgeDocumentStatus, KnowledgeVisibility
 
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeDocumentListFilter:
+    status: KnowledgeDocumentStatus | None = None
+    content_type: KnowledgeContentType | None = None
+    visibility: KnowledgeVisibility | None = None
 
 class KnowledgeDocumentRepository(Protocol):
     """
@@ -41,4 +49,13 @@ class KnowledgeDocumentRepository(Protocol):
 
     def exists(self, document_id: UUID) -> bool:
         """Return whether the document exists in persistence."""
+        ...
+        
+    def get_by_id_for_update(self, document_id: UUID) -> KnowledgeDocument | None:
+        ...
+
+    def list(self, *, filter_: KnowledgeDocumentListFilter, limit: int, offset: int) -> list[KnowledgeDocument]:
+        ...
+
+    def count(self, *, filter_: KnowledgeDocumentListFilter) -> int:
         ...

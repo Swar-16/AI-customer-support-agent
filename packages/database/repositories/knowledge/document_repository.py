@@ -1,11 +1,12 @@
 from __future__ import annotations
 from uuid import UUID
-from sqlalchemy import exists, select
+from sqlalchemy import exists, select, func
 from sqlalchemy.orm import Session
 
 from packages.database.models.knowledge.document import KnowledgeDocumentModel
 from packages.database.repositories.knowledge.mappers import document_to_domain, document_to_model, update_document_model
 from packages.knowledge.domain.document import KnowledgeDocument
+from packages.knowledge.repositories.document_repository import KnowledgeDocumentListFilter
 
 
 class SQLAlchemyKnowledgeDocumentRepository:
@@ -18,6 +19,19 @@ class SQLAlchemyKnowledgeDocumentRepository:
     """
     def __init__(self, session: Session) -> None:
         self._session = session
+        
+    @staticmethod
+    def _apply_filter(statement, filter_: KnowledgeDocumentListFilter):
+        if filter_.status is not None:
+            statement = statement.where(KnowledgeDocumentModel.status == filter_.status.value)
+
+        if filter_.content_type is not None:
+            statement = statement.where(KnowledgeDocumentModel.content_type == filter_.content_type.value)
+
+        if filter_.visibility is not None:
+            statement = statement.where(KnowledgeDocumentModel.visibility == filter_.visibility.value)
+
+        return statement
 
     def add(self, document: KnowledgeDocument) -> None:
         """
@@ -69,3 +83,24 @@ class SQLAlchemyKnowledgeDocumentRepository:
         )
 
         return bool(self._session.scalar(statement))
+    
+    def list(self, *, filter_: KnowledgeDocumentListFilter, limit: int, offset: int) -> list[KnowledgeDocument]:
+        statement = select(KnowledgeDocumentModel)
+        statement = self._apply_filter(statement, filter_,)
+        statement = (statement
+                     .order_by(
+                         KnowledgeDocumentModel.created_at.desc(),
+                         KnowledgeDocumentModel.id.asc()
+                         )
+                     .limit(limit)
+                     .offset(offset)
+        )
+        models = self._session.scalars(statement).all()
+
+        return [document_to_domain(model) for model in models]
+    
+    def count(self, *, filter_: KnowledgeDocumentListFilter) -> int:
+        statement = select(func.count(KnowledgeDocumentModel.id))
+        statement = self._apply_filter(statement, filter_)
+
+        return int(self._session.scalar(statement) or 0)
