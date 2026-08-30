@@ -12,6 +12,9 @@ from packages.database.models.ai.run import AIRunModel
 from packages.database.models.support.conversation import ConversationModel
 from packages.database.models.support.message import MessageModel
 from packages.database.models.support.user import UserModel
+from packages.database.models.knowledge.chunk import KnowledgeChunkModel
+from packages.database.models.knowledge.document_version import KnowledgeDocumentVersionModel
+from packages.database.models.knowledge.document import KnowledgeDocumentModel
 
 
 @pytest.fixture(scope="session")
@@ -47,5 +50,9 @@ def _clear_database(session_factory: sessionmaker) -> None:
         session.execute(delete(MessageModel))
         session.execute(delete(ConversationModel))
         session.execute(delete(UserModel))
+        
+        session.execute(delete(KnowledgeChunkModel))
+        session.execute(delete(KnowledgeDocumentModel))
+        session.execute(delete(KnowledgeDocumentVersionModel))
 
         session.commit()
