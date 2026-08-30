@@ -86,7 +86,7 @@ class MarkdownStructuralParser(BaseDocumentParser):
     - expose block-level metadata
     - attach parser provenance
     """
-    _DESCRIPTOR = ParserDescriptor(strategy_id="markdown-structural", version="1.0.0", config_fingerprint=None)
+    _DESCRIPTOR = ParserDescriptor(strategy_id="markdown-structural", version="1.1.0", config_fingerprint=None)
     _SUPPORTED_SOURCE_TYPES = frozenset({KnowledgeSourceType.MARKDOWN,})
 
     def __init__(self) -> None:
@@ -195,12 +195,8 @@ class MarkdownStructuralParser(BaseDocumentParser):
                 heading_text = self._extract_heading_text(token_list, index)
                 section_stack = self._update_section_stack(section_stack, heading_level, heading_text)
 
-                yield _StructuralBlock(
-                    start_line=token.map[0],
-                    end_line=token.map[1],
-                    section_path=tuple(section_stack),
-                    block_type="heading",
-                )
+                # Heading text is represented structurally through section_path.
+                # Do not also emit a standalone lexical segment, otherwise heading-only retrieval chunks can be produced.
 
                 index += 1
                 continue
@@ -286,6 +282,7 @@ class MarkdownStructuralParser(BaseDocumentParser):
             "bullet_list_open",
             "ordered_list_open",
             "list_item_open",
+            "hr",
         }
 
         return token.type not in excluded_types
@@ -386,13 +383,11 @@ class MarkdownStructuralParser(BaseDocumentParser):
             return ()
 
         priority = {
-            "heading": 100,
             "fenced_code": 90,
             "indented_code": 90,
             "table": 85,
             "html": 80,
             "paragraph": 70,
-            "thematic_break": 60,
         }
 
         grouped: dict[tuple[int, int], tuple[int, int, _StructuralBlock]] = {}

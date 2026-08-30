@@ -3,6 +3,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Mapping
 from uuid import UUID
+import hashlib
+import json
 
 from packages.knowledge.domain.enums import KnowledgeSourceType
 
@@ -60,13 +62,23 @@ class ChunkSourceSpan:
 @dataclass(frozen=True, slots=True)
 class ChunkCandidate:
     """
-    One retrieval-oriented chunk produced by a document chunker.
+    Canonical content chunk produced by a document chunker.
 
-    A candidate is still an ingestion artifact. It is deliberately independent of the database 
-    KnowledgeChunk model so that chunking remains testable and persistence-agnostic.
+    `text` contains the semantic content belonging to the chunk itself.
+    It must not contain synthetic retrieval context solely for the benefit of an embedding model.
 
-    source_spans provide traceability back to normalized segments.
-    Multiple chunks may reference the same normalized segment because splitting and overlap are legitimate chunking operations.
+    Structural context such as document headings is represented through
+    `section_path`.
+
+    Downstream retrieval or embedding stages may construct a
+    model-specific contextual representation from:
+
+        section_path + text
+
+    without mutating the canonical chunk content.
+
+    `source_spans` preserve deterministic provenance back to normalized segments. Multiple chunks may reference
+    the same normalized segment because splitting and overlap are legitimate chunking operations.
     """
     index: int
     text: str
@@ -164,6 +176,45 @@ class ChunkCandidate:
             return None
 
         return self.section_path[-1]
+    
+    @property
+    def section_context(self) -> str | None:
+        """
+        Human-readable representation of the complete section hierarchy.
+
+        This is derived metadata only. It does not modify canonical chunk text and is not tied to any embedding model.
+        """
+        if not self.section_path:
+            return None
+
+        return " > ".join(self.section_path)
+    
+    @property
+    def content_fingerprint(self) -> str:
+        """
+        Deterministic fingerprint of the chunk's semantic retrieval identity.
+
+        Includes both canonical text and structural section context because identical text under different
+        document sections may have different meaning.
+
+        Source offsets are deliberately excluded. Moving unchanged semantic content within a source document 
+        should not necessarily change its semantic identity.
+        """
+        payload = {
+            "text": self.text,
+            "section_path": list(self.section_path),
+        }
+
+        serialized = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+
+        digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+        return f"sha256:{digest}"
 
     @property
     def char_count(self) -> int:

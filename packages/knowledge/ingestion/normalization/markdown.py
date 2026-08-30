@@ -30,6 +30,7 @@ class MarkdownNormalizerConfig:
     preserve_table_structure: bool = True
     collapse_internal_whitespace: bool = True
     max_consecutive_newlines: int = 2
+    preserve_list_markers: bool = True
 
     def __post_init__(self) -> None:
         boolean_fields = (
@@ -39,6 +40,7 @@ class MarkdownNormalizerConfig:
             "include_image_destinations",
             "preserve_table_structure",
             "collapse_internal_whitespace",
+            "preserve_list_markers",
         )
 
         for field_name in boolean_fields:
@@ -152,7 +154,7 @@ class MarkdownNormalizer(BaseDocumentNormalizer):
       - record normalization provenance
     """
     _STRATEGY_ID = "markdown-semantic"
-    _VERSION = "1.0.0"
+    _VERSION = "1.1.0"
     _SUPPORTED_SOURCE_TYPES = frozenset({KnowledgeSourceType.MARKDOWN})
 
     _HORIZONTAL_WHITESPACE = re.compile(r"[^\S\r\n]+")
@@ -197,19 +199,16 @@ class MarkdownNormalizer(BaseDocumentNormalizer):
                 ) from exc
 
             if not normalized.strip():
-                # Normalization is deliberately loss-resistant.
-
-                # Some structural Markdown blocks, extensions or malformed-but-parseable input
-                # can carry source text without yielding semantic inline content.
-                
-                # Preserving the original segment instead of silently deleting information.
-                normalized = parsed_segment.text.strip()
-
+                # A source-backed structural segment may legitimately contain no retrieval-worthy lexical content after normalization.
+                #
+                # Do not restore the original Markdown syntax here because doing so would undo normalization decisions.
+                continue
+            
             if not normalized:
                 raise KnowledgeNormalizerOutputError(
-                    "Markdown normalization produced an empty segment.",
+                    "Markdown normalizer produced no normalized segments.",
                     normalizer_name=self.descriptor.strategy_id,
-                    source_segment_index=parsed_segment.index,
+                    # source_segment_index=parsed_segment.index,
                 )
 
             normalized_segments.append(
@@ -279,6 +278,7 @@ class MarkdownNormalizer(BaseDocumentNormalizer):
     def _render_tokens(self, tokens: Iterable[Token]) -> str:
         token_list = tuple(tokens)
         parts: list[str] = []
+        ordered_stack: list[int | None] = []
         index = 0
 
         while index < len(token_list):
@@ -321,6 +321,27 @@ class MarkdownNormalizer(BaseDocumentNormalizer):
 
             elif token_type in {"paragraph_close", "heading_close", "blockquote_close", "list_item_close"}:
                 parts.append("\n")
+                
+            elif token_type == "bullet_list_open":
+                ordered_stack.append(None)
+
+            elif token_type == "ordered_list_open":
+                start = token.attrGet("start")
+                ordered_stack.append(int(start) if start is not None else 1)
+
+            elif token_type in {"bullet_list_close", "ordered_list_close"}:
+                if ordered_stack:
+                    ordered_stack.pop()
+
+            elif token_type == "list_item_open":
+                if self._config.preserve_list_markers and ordered_stack:
+                    marker = ordered_stack[-1]
+
+                    if marker is None:
+                        parts.append("- ")
+                    else:
+                        parts.append(f"{marker}. ")
+                        ordered_stack[-1] = marker + 1
 
             index += 1
 

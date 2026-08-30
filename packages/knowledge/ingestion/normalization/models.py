@@ -14,15 +14,15 @@ def _freeze_metadata(metadata: Mapping[str, Any]) -> Mapping[str, Any]:
 @dataclass(frozen=True, slots=True)
 class NormalizedSegment:
     """
-    Retrieval-oriented representation of one ParsedSegment.
+    Retrieval-oriented representation derived from one ParsedSegment.
 
-    A normalized segment is still NOT a retrieval chunk.
+    A normalized segment is still NOT a retrieval chunk. Combining or splitting normalized segments belongs to the chunking stage.
 
-    Normalization is intentionally one-to-one with parsed segments.
-    Combining or splitting segments belongs to the chunking stage.
+    Normalization is not required to preserve a one-to-one cardinality with parsed segments. A parser may expose source-backed 
+    structural segments that intentionally produce no retrieval-worthy lexical representation during normalization.
 
-    `source_segment_index` maintains deterministic provenance back to
-    the exact ParsedSegment from which this representation originated.
+    Each emitted NormalizedSegment, however, must originate from exactly one ParsedSegment. `source_segment_index` 
+    preserves deterministic provenance back to that source segment.
     """
     index: int
     source_segment_index: int
