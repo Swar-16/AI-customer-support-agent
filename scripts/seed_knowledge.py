@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID, uuid5
 from uuid6 import uuid7
+import traceback
 
 from packages.database.session import SessionLocal
 from packages.database.unit_of_work.knowledge import SQLAlchemyKnowledgeUnitOfWork
@@ -512,6 +513,8 @@ def main() -> int:
         except Exception as exc:
             summary.failed += 1
             print(f"  [FAILED] {type(exc).__name__}: {exc}")
+            traceback.print_exc()
+            raise
             # Continue with independent knowledge documents.
 
             # A broken refund document should not prevent us from discovering whether shipping/payment/etc. 

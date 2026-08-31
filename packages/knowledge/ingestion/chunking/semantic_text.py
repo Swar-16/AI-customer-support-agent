@@ -818,14 +818,6 @@ class StructuralTextChunker(BaseDocumentChunker):
                 chunker_name=self.descriptor.strategy_id,
                 version_id=document.version_id,
             )
-            
-        if chunk.section_title is not None and chunk.text.strip() == chunk.section_title.strip():
-            raise KnowledgeChunkerOutputError(
-                "Chunk contains section heading without semantic body content.",
-                chunker_name=self.descriptor.strategy_id,
-                version_id=document.version_id,
-                chunk_index=chunk.index,
-            )
 
         for expected_index, chunk in enumerate(chunks):
             if chunk.index != expected_index:
@@ -853,6 +845,14 @@ class StructuralTextChunker(BaseDocumentChunker):
                     chunk_index=chunk.index,
                     actual_chars=len(chunk.text),
                     max_chars=self._config.max_chars,
+                )
+                
+            if chunk.section_title is not None and chunk.text.strip() == chunk.section_title.strip():
+                raise KnowledgeChunkerOutputError(
+                    "Chunk contains section heading without semantic body content.",
+                    chunker_name=self.descriptor.strategy_id,
+                    version_id=document.version_id,
+                    chunk_index=chunk.index,
                 )
 
             self._validate_chunk_spans(document=document, chunk=chunk)
