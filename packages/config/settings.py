@@ -1,6 +1,7 @@
 from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
@@ -25,11 +26,51 @@ class Settings(BaseSettings):
     groq_max_completion_tokens: int = 1024
     groq_temperature: float = 0.0
     
+    ## Embeddings
+    embedding_provider: str = "jina"
+    embedding_dimensions: int = 1024
+    embedding_batch_size: int = 16
+    
+    ## Jina / Embeddings
+    jina_api_key: str | None = None
+    jina_embedding_model: str = "jina-embeddings-v4"
+    jina_embedding_timeout_seconds: float = 30.0
+    
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
     )
+    
+    @model_validator(mode="after")
+    def validate_provider_configuration(self) -> "Settings":
+        self.llm_provider = self.llm_provider.strip().lower()
+        self.embedding_provider = self.embedding_provider.strip().lower()
+
+        if not self.llm_provider:
+            raise ValueError("llm_provider must not be blank.")
+
+        if not self.embedding_provider:
+            raise ValueError("embedding_provider must not be blank.")
+
+        if self.embedding_provider == "jina" and (self.jina_api_key is None or not self.jina_api_key.strip()):
+            raise ValueError("jina_api_key must be configured when embedding_provider='jina'.")
+
+        if self.embedding_dimensions <= 0:
+            raise ValueError("embedding_dimensions must be greater than zero.")
+
+        if self.embedding_batch_size <= 0:
+            raise ValueError("embedding_batch_size must be greater than zero.")
+
+        if self.jina_embedding_timeout_seconds <= 0:
+            raise ValueError("jina_embedding_timeout_seconds must be greater than zero.")
+
+        if not self.jina_embedding_model or not self.jina_embedding_model.strip():
+            raise ValueError("jina_embedding_model must not be blank.")
+
+        self.jina_embedding_model = self.jina_embedding_model.strip()
+        
+        return self
     
     @property
     def database_url(self) -> URL:
