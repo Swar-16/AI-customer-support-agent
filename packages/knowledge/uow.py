@@ -2,7 +2,7 @@ from __future__ import annotations
 from types import TracebackType
 from typing import Protocol, Self
 
-from packages.knowledge.repositories import KnowledgeChunkRepository, KnowledgeDocumentRepository, KnowledgeVersionRepository
+from packages.knowledge.repositories import KnowledgeChunkRepository, KnowledgeDocumentRepository, KnowledgeVersionRepository, KnowledgeEmbeddingRepository
 
 
 class KnowledgeUnitOfWorkFactory(Protocol):
@@ -20,6 +20,10 @@ class KnowledgeUnitOfWork(Protocol):
 
     @property
     def chunks(self) -> KnowledgeChunkRepository:
+        ...
+        
+    @property
+    def embeddings(self) -> KnowledgeEmbeddingRepository:
         ...
 
     def __enter__(self) -> Self:

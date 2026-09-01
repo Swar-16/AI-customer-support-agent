@@ -21,6 +21,16 @@ class KnowledgeEmbeddingRepository(Protocol):
         Persist multiple embedding artifacts as part of the surrounding transaction.
         """
         ...
+        
+    def add_many_if_absent(self, embeddings: list[KnowledgeChunkEmbedding]) -> int:
+        """
+        Persist only embedding artifacts that do not already exist.
+
+        Returns the number of artifacts actually inserted.
+
+        Implementations must not commit.
+        """
+        ...
 
     def get_by_id(self, embedding_id: UUID) -> KnowledgeChunkEmbedding | None:
         """Return an embedding artifact by identity, or None."""

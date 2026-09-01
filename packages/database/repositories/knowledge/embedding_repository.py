@@ -1,6 +1,7 @@
 from __future__ import annotations
 from uuid import UUID
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from packages.database.models.knowledge.chunk_embedding import KnowledgeChunkEmbeddingModel
@@ -39,6 +40,48 @@ class SQLAlchemyKnowledgeEmbeddingRepository:
 
         models = [chunk_embedding_to_model(embedding) for embedding in embeddings]
         self._session.add_all(models)
+        
+    def add_many_if_absent(self, embeddings: list[KnowledgeChunkEmbedding]) -> int:
+            """
+            Insert immutable embedding artifacts idempotently.
+    
+            Concurrent workers may independently generate the same logical artifact. PostgreSQL's unique constraint is the final authority.
+    
+            Returns:
+                Number of rows actually inserted.
+    
+            This method does not commit.
+            """
+            if not embeddings:
+                return 0
+    
+            values = [
+                {
+                    "id": embedding.id,
+                    "chunk_id": embedding.chunk_id,
+                    "provider": embedding.provider.provider,
+                    "model": embedding.provider.model,
+                    "model_revision": embedding.provider.revision,
+                    "dimensions": embedding.provider.dimensions,
+                    "embedding": list(embedding.vector.values),
+                    "input_strategy_id": embedding.input_descriptor.strategy_id,
+                    "input_strategy_version": embedding.input_descriptor.version,
+                    "input_config_fingerprint": embedding.input_descriptor.config_fingerprint,
+                    "input_fingerprint": embedding.input_fingerprint,
+                }
+                for embedding in embeddings
+            ]
+    
+            statement = (insert(KnowledgeChunkEmbeddingModel)
+                         .values(values)
+                         .on_conflict_do_nothing(constraint="uq_knowledge_chunk_embeddings_artifact")
+                         .returning(KnowledgeChunkEmbeddingModel.id)
+            )
+    
+            inserted_ids = list(self._session.scalars(statement))
+    
+            return len(inserted_ids)
+    
 
     def get_by_id(self, embedding_id: UUID) -> KnowledgeChunkEmbedding | None:
         model = self._session.get(KnowledgeChunkEmbeddingModel, embedding_id)
@@ -46,7 +89,7 @@ class SQLAlchemyKnowledgeEmbeddingRepository:
             return None
 
         return chunk_embedding_to_domain(model)
-
+    
     def list_for_chunk(self, chunk_id: UUID) -> list[KnowledgeChunkEmbedding]:
         statement = (select(KnowledgeChunkEmbeddingModel)
                      .where(KnowledgeChunkEmbeddingModel.chunk_id == chunk_id)
@@ -75,7 +118,7 @@ class SQLAlchemyKnowledgeEmbeddingRepository:
                             KnowledgeChunkEmbeddingModel.input_config_fingerprint == input_descriptor.config_fingerprint)
         )
 
-        if provider.model_revision is None:
+        if provider.revision is None:
             statement = statement.where(KnowledgeChunkEmbeddingModel.model_revision.is_(None))
         else:
             statement = statement.where(KnowledgeChunkEmbeddingModel.model_revision == provider.revision)
