@@ -10,6 +10,7 @@ from packages.database.base import Base
 
 if TYPE_CHECKING:
     from packages.database.models.knowledge.document_version import KnowledgeDocumentVersionModel
+    from packages.database.models.knowledge.chunk_embedding import KnowledgeChunkEmbeddingModel
 
 
 class KnowledgeChunkModel(Base):
@@ -146,8 +147,14 @@ class KnowledgeChunkModel(Base):
     )
 
     # Relationships
-
     version: Mapped["KnowledgeDocumentVersionModel"] = relationship(
         "KnowledgeDocumentVersionModel",
         back_populates="chunks",
+    )
+    
+    embeddings: Mapped[list["KnowledgeChunkEmbeddingModel"]] = relationship(
+        "KnowledgeChunkEmbeddingModel",
+        back_populates="chunk",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )

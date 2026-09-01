@@ -12,6 +12,7 @@ from packages.database.models.ai.decision import AIDecisionModel
 from packages.database.models.knowledge import KnowledgeChunkModel
 from packages.database.models.knowledge import KnowledgeDocumentModel
 from packages.database.models.knowledge import KnowledgeDocumentVersionModel
+from packages.database.models.knowledge import KnowledgeChunkEmbeddingModel
 
 __all__ = [
     "UserModel",
@@ -25,4 +26,5 @@ __all__ = [
     "KnowledgeChunkModel",
     "KnowledgeDocumentModel",
     "KnowledgeDocumentVersionModel",
+    "KnowledgeChunkEmbeddingModel",
 ]

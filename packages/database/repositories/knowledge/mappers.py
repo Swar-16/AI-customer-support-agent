@@ -8,6 +8,9 @@ from packages.knowledge.domain.document import KnowledgeDocument
 from packages.knowledge.domain.enums import KnowledgeContentType, KnowledgeDocumentStatus, KnowledgeIngestionStatus
 from packages.knowledge.domain.enums import KnowledgeSourceType, KnowledgeVersionStatus, KnowledgeVisibility
 from packages.knowledge.domain.version import KnowledgeDocumentVersion
+from packages.database.models.knowledge.chunk_embedding import KnowledgeChunkEmbeddingModel
+from packages.knowledge.domain.embedding import KnowledgeChunkEmbedding
+from packages.knowledge.embeddings.models import EmbeddingInputDescriptor, EmbeddingProviderDescriptor, EmbeddingVector
 
 
 # Knowledge Document
@@ -160,4 +163,44 @@ def chunk_to_model(chunk: KnowledgeChunk) -> KnowledgeChunkModel:
         metadata_=dict(chunk.metadata),
         created_at=chunk.created_at,
         updated_at=chunk.updated_at,
+    )
+    
+# Knowledge Chunk Embedding
+def chunk_embedding_to_domain(model: KnowledgeChunkEmbeddingModel) -> KnowledgeChunkEmbedding:
+    return KnowledgeChunkEmbedding(
+        id=model.id,
+        chunk_id=model.chunk_id,
+        provider=EmbeddingProviderDescriptor(
+            provider=model.provider,
+            model=model.model,
+            revision=model.model_revision,
+            dimensions=model.dimensions,
+        ),
+        input_descriptor=EmbeddingInputDescriptor(
+            strategy_id=model.input_strategy_id,
+            version=model.input_strategy_version,
+            config_fingerprint=model.input_config_fingerprint,
+        ),
+        input_fingerprint=model.input_fingerprint,
+        vector=EmbeddingVector.from_sequence(model.embedding),
+        created_at=model.created_at,
+    )
+
+
+def chunk_embedding_to_model(
+    embedding: KnowledgeChunkEmbedding,
+) -> KnowledgeChunkEmbeddingModel:
+    return KnowledgeChunkEmbeddingModel(
+        id=embedding.id,
+        chunk_id=embedding.chunk_id,
+        provider=embedding.provider.provider,
+        model=embedding.provider.model,
+        model_revision=embedding.provider.revision,
+        dimensions=embedding.provider.dimensions,
+        embedding=list(embedding.vector.values),
+        input_strategy_id=embedding.input_descriptor.strategy_id,
+        input_strategy_version=embedding.input_descriptor.version,
+        input_config_fingerprint=embedding.input_descriptor.config_fingerprint,
+        input_fingerprint=embedding.input_fingerprint,
+        created_at=embedding.created_at,
     )

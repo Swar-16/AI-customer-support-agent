@@ -3,16 +3,16 @@ from types import TracebackType
 from typing import Self
 from sqlalchemy.orm import Session, sessionmaker
 
-from packages.database.repositories.knowledge import SQLAlchemyKnowledgeChunkRepository, SQLAlchemyKnowledgeDocumentRepository, SQLAlchemyKnowledgeVersionRepository
+from packages.database.repositories.knowledge import SQLAlchemyKnowledgeChunkRepository, SQLAlchemyKnowledgeDocumentRepository
+from packages.database.repositories.knowledge import SQLAlchemyKnowledgeEmbeddingRepository,SQLAlchemyKnowledgeVersionRepository
 
 
 class SQLAlchemyKnowledgeUnitOfWork:
     """
     SQLAlchemy implementation of the Knowledge Unit of Work.
 
-    A UoW represents one transactional boundary. All knowledge repositories
-    exposed by this object share the same SQLAlchemy Session and therefore the
-    same database transaction.
+    A UoW represents one transactional boundary. All knowledge repositories exposed by this object share the same
+    SQLAlchemy Session and therefore the same database transaction.
 
     Transaction policy:
         - entering creates a fresh Session
@@ -28,6 +28,7 @@ class SQLAlchemyKnowledgeUnitOfWork:
         self._documents: SQLAlchemyKnowledgeDocumentRepository | None = None
         self._versions: SQLAlchemyKnowledgeVersionRepository | None = None
         self._chunks: SQLAlchemyKnowledgeChunkRepository | None = None
+        self._embeddings: SQLAlchemyKnowledgeEmbeddingRepository | None = None
 
     # Context manager
     def __enter__(self) -> Self:
@@ -39,11 +40,13 @@ class SQLAlchemyKnowledgeUnitOfWork:
         self._documents = SQLAlchemyKnowledgeDocumentRepository(session)
         self._versions = SQLAlchemyKnowledgeVersionRepository(session)
         self._chunks = SQLAlchemyKnowledgeChunkRepository(session)
+        self._embeddings = SQLAlchemyKnowledgeEmbeddingRepository(session)
 
         return self
 
     def __exit__(self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None) -> None:
         session = self._session
+
         if session is None:
             return
 
@@ -59,11 +62,11 @@ class SQLAlchemyKnowledgeUnitOfWork:
 
         finally:
             session.close()
-
             self._session = None
             self._documents = None
             self._versions = None
             self._chunks = None
+            self._embeddings = None
 
     # Repositories
     @property
@@ -87,6 +90,13 @@ class SQLAlchemyKnowledgeUnitOfWork:
 
         return self._chunks
 
+    @property
+    def embeddings(self) -> SQLAlchemyKnowledgeEmbeddingRepository:
+        if self._embeddings is None:
+            raise RuntimeError("Knowledge Unit of Work is not active. Use it inside a 'with' block.")
+
+        return self._embeddings
+
     # Transaction control
     def commit(self) -> None:
         self._require_session().commit()
@@ -101,8 +111,7 @@ class SQLAlchemyKnowledgeUnitOfWork:
         """
         Synchronize pending ORM changes with PostgreSQL without committing.
 
-        Useful when an application service needs database-generated effects,
-        FK validation, or constraint checking before continuing.
+        Useful when an application service needs database-generated effects, FK validation, or constraint checking before continuing.
         """
         self._require_session().flush()
 
