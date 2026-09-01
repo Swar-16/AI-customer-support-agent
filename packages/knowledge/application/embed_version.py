@@ -13,6 +13,7 @@ from packages.knowledge.embeddings.errors import EmbeddingVersionHasNoChunksErro
 from packages.knowledge.embeddings.models import EmbeddingInputDescriptor, EmbeddingProviderDescriptor, PreparedEmbeddingInput
 from packages.knowledge.embeddings import EmbeddingInputBuilder, EmbeddingProvider
 from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
+from packages.knowledge.embeddings import EmbeddingSourceChunk
 
 
 # Public contracts
@@ -270,16 +271,28 @@ class EmbedKnowledgeVersion:
     def _prepare_inputs(self, snapshot: _EmbeddingVersionSnapshot) -> tuple[_PreparedWorkItem, ...]:
         items: list[_PreparedWorkItem] = []
         for chunk in snapshot.chunks:
-            prepared = self._input_builder.build(chunk=chunk, document_title=snapshot.document_title)
-            if prepared.chunk_id != chunk.id:
+            source = EmbeddingSourceChunk(
+                chunk_id=chunk.id,
+                document_id=snapshot.document_id,
+                version_id=snapshot.version_id,
+                document_title=snapshot.document_title,
+                chunk_text=chunk.content,
+                section_title=chunk.section_title,
+                section_path=chunk.metadata.get("section_path", ()),
+                document_metadata=None,
+                chunk_metadata=chunk.metadata,
+            )
+
+            prepared_input = self._input_builder.build(source)
+            if prepared_input.chunk_id != chunk.id:
                 raise EmbeddingArtifactConflictError(
                     "Embedding input builder returned an input for a different chunk.",
                     version_id=snapshot.version_id,
                     chunk_id=chunk.id,
-                    prepared_chunk_id=prepared.chunk_id,
+                    prepared_chunk_id=prepared_input.chunk_id,
                 )
 
-            items.append(_PreparedWorkItem(chunk=chunk, prepared_input=prepared))
+            items.append(_PreparedWorkItem(chunk=chunk, prepared_input=prepared_input))
 
         if len(items) != len(snapshot.chunks):
             raise EmbeddingArtifactConflictError(

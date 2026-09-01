@@ -123,3 +123,15 @@ class SQLAlchemyKnowledgeVersionRepository:
         current_max = self._session.scalar(max_version_statement)
 
         return 1 if current_max is None else current_max + 1
+    
+    def list_embedding_candidates(self) -> list[KnowledgeDocumentVersion]:
+        statement = (select(KnowledgeDocumentVersionModel)
+                     .where(KnowledgeDocumentVersionModel.status == "published",
+                            KnowledgeDocumentVersionModel.ingestion_status == "completed")
+                     .order_by(KnowledgeDocumentVersionModel.created_at.asc(),
+                               KnowledgeDocumentVersionModel.id.asc())
+        )
+
+        models = self._session.scalars(statement).all()
+
+        return [version_to_domain(model) for model in models]

@@ -51,3 +51,11 @@ class KnowledgeVersionRepository(Protocol):
         when used within the surrounding transaction.
         """
         ...
+    
+    def list_embedding_candidates(self) -> list[KnowledgeDocumentVersion]:
+        """
+        Return knowledge versions eligible for embedding/backfill.
+
+        Only successfully ingested published versions are returned.
+        """
+        ...
