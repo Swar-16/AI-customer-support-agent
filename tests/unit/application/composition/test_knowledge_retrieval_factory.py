@@ -41,7 +41,16 @@ from packages.knowledge.retrieval.reranking.models import (
 from packages.knowledge.retrieval.reranking.passthrough import (
     PassthroughReranker,
 )
-
+from packages.knowledge.retrieval.query.builder import (
+    DeterministicRetrievalQueryBuilder,
+)
+from packages.knowledge.retrieval.query.models import (
+    PreparedRetrievalQuery,
+    RetrievalQueryContext,
+)
+from packages.knowledge.retrieval.query.service import (
+    RetrievalQueryPreparationService,
+)
 
 # ---------------------------------------------------------------------------
 # Test doubles
@@ -166,6 +175,16 @@ class TestKnowledgeRetrievalFactoryComposition:
             components,
             KnowledgeRetrievalComponents,
         )
+        
+        assert isinstance(
+            components.query_preparation_service,
+            RetrievalQueryPreparationService,
+        )
+        
+        assert isinstance(
+            components.query_preparation_service._builder,
+            DeterministicRetrievalQueryBuilder,
+        )
 
         assert components.vector_service is not None
         assert components.lexical_service is not None
@@ -206,11 +225,9 @@ class TestKnowledgeRetrievalFactoryComposition:
         assert components.vector_service is not None
         assert components.lexical_service is None
 
-    def test_lexical_only_profile_builds_only_lexical_branch(self):
+    def test_lexical_only_profile_does_not_require_embedding_dependencies(self):
         components = create_knowledge_retrieval_components(
             session=make_session(),
-            embedding_provider=make_embedding_provider(),
-            embedding_input_descriptor=make_input_descriptor(),
             profile=make_profile(
                 vector_enabled=False,
                 lexical_enabled=True,
@@ -220,6 +237,11 @@ class TestKnowledgeRetrievalFactoryComposition:
 
         assert components.vector_service is None
         assert components.lexical_service is not None
+
+        assert isinstance(
+            components.query_preparation_service,
+            RetrievalQueryPreparationService,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -392,6 +414,46 @@ class TestKnowledgeRetrievalFactoryWiring:
             components.retrieve_knowledge._reranking_service
             is components.reranking_service
         )
+        
+    def test_query_preparation_service_is_functional(self):
+        components = create_knowledge_retrieval_components(
+            session=make_session(),
+            embedding_provider=make_embedding_provider(),
+            embedding_input_descriptor=make_input_descriptor(),
+            profile=make_profile(),
+            default_context_budget=make_budget(),
+        )
+
+        result = (
+            components
+            .query_preparation_service
+            .prepare(
+                context=RetrievalQueryContext(
+                    customer_message=(
+                        "How long does my refund take?"
+                    ),
+                    intent_key="refund_request",
+                    entities={
+                        "issue_type": "delayed refund",
+                    },
+                )
+            )
+        )
+
+        assert isinstance(
+            result,
+            PreparedRetrievalQuery,
+        )
+
+        assert result.original_query == (
+            "How long does my refund take?"
+        )
+
+        assert result.semantic_query == (
+            "How long does my refund take?"
+        )
+
+        assert result.lexical_queries
 
 
 # ---------------------------------------------------------------------------
@@ -563,4 +625,108 @@ class TestKnowledgeRetrievalFactoryValidation:
                 profile=make_profile(),
                 default_context_budget=make_budget(),
                 token_estimator=object(),  # type: ignore[arg-type]
+            )
+    
+    def test_vector_profile_requires_embedding_provider(self):
+        with pytest.raises(
+            TypeError,
+            match=(
+                "embedding_provider must be an "
+                "EmbeddingProvider instance when "
+                "vector retrieval is enabled"
+            ),
+        ):
+            create_knowledge_retrieval_components(
+                session=make_session(),
+                profile=make_profile(
+                    vector_enabled=True,
+                    lexical_enabled=False,
+                ),
+                embedding_provider=None,
+                embedding_input_descriptor=(
+                    make_input_descriptor()
+                ),
+                default_context_budget=make_budget(),
+            )
+
+
+    def test_vector_profile_requires_embedding_input_descriptor(self):
+        with pytest.raises(
+            TypeError,
+            match=(
+                "embedding_input_descriptor must be an "
+                "EmbeddingInputDescriptor instance when "
+                "vector retrieval is enabled"
+            ),
+        ):
+            create_knowledge_retrieval_components(
+                session=make_session(),
+                profile=make_profile(
+                    vector_enabled=True,
+                    lexical_enabled=False,
+                ),
+                embedding_provider=(
+                    make_embedding_provider()
+                ),
+                embedding_input_descriptor=None,
+                default_context_budget=make_budget(),
+            )
+            
+    @pytest.mark.parametrize(
+        "embedding_provider",
+        [
+            object(),
+            "provider",
+            123,
+        ],
+    )
+    def test_lexical_only_rejects_invalid_supplied_embedding_provider(
+        self,
+        embedding_provider,
+    ):
+        with pytest.raises(
+            TypeError,
+            match=(
+                "embedding_provider must be an "
+                "EmbeddingProvider instance or None"
+            ),
+        ):
+            create_knowledge_retrieval_components(
+                session=make_session(),
+                profile=make_profile(
+                    vector_enabled=False,
+                    lexical_enabled=True,
+                ),
+                embedding_provider=embedding_provider,  # type: ignore[arg-type]
+                default_context_budget=make_budget(),
+            )
+
+
+    @pytest.mark.parametrize(
+        "descriptor",
+        [
+            object(),
+            "descriptor",
+            123,
+        ],
+    )
+    def test_lexical_only_rejects_invalid_supplied_embedding_descriptor(
+        self,
+        descriptor,
+    ):
+        with pytest.raises(
+            TypeError,
+            match=(
+                "embedding_input_descriptor must be an "
+                "EmbeddingInputDescriptor instance or None"
+            ),
+        ):
+            create_knowledge_retrieval_components(
+                session=make_session(),
+                profile=make_profile(
+                    vector_enabled=False,
+                    lexical_enabled=True,
+                ),
+                embedding_input_descriptor=descriptor,  # type: ignore[arg-type]
+                default_context_budget=make_budget(),
             )

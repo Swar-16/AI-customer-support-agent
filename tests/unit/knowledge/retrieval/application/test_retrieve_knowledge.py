@@ -35,6 +35,9 @@ from packages.knowledge.retrieval.models import (
 from packages.knowledge.retrieval.profiles import (
     RetrievalProfile,
 )
+from packages.knowledge.retrieval.query.models import (
+    PreparedRetrievalQuery,
+)
 from packages.knowledge.retrieval.reranking.service import (
     RerankingService,
 )
@@ -48,12 +51,31 @@ from packages.knowledge.retrieval.vector.service import (
 # ---------------------------------------------------------------------------
 
 
-def make_query(
-    text: str = "What is the refund policy?",
+def make_prepared_query(
+    *,
+    original_query: str = "What is the refund policy?",
+    semantic_query: str = "What is the refund policy?",
+    lexical_query: str = "refund policy",
+    filters: RetrievalFilters | None = None,
+) -> PreparedRetrievalQuery:
+    return PreparedRetrievalQuery(
+        original_query=original_query,
+        semantic_query=semantic_query,
+        lexical_queries=(lexical_query,),
+        filters=(
+            filters
+            if filters is not None
+            else RetrievalFilters()
+        ),
+    )
+
+
+def make_canonical_query(
+    prepared_query: PreparedRetrievalQuery,
 ) -> RetrievalQuery:
     return RetrievalQuery(
-        text=text,
-        filters=RetrievalFilters(),
+        text=prepared_query.original_query,
+        filters=prepared_query.filters,
     )
 
 
@@ -404,7 +426,7 @@ class TestRetrieveKnowledgeConstruction:
 
 class TestRetrieveKnowledgeInput:
     @pytest.mark.parametrize(
-        "query",
+        "prepared_query",
         [
             None,
             object(),
@@ -412,9 +434,9 @@ class TestRetrieveKnowledgeInput:
             123,
         ],
     )
-    def test_rejects_invalid_query(
+    def test_rejects_invalid_prepared_query(
         self,
-        query,
+        prepared_query,
     ):
         profile = make_profile(
             vector_enabled=True,
@@ -427,10 +449,13 @@ class TestRetrieveKnowledgeInput:
 
         with pytest.raises(
             TypeError,
-            match="query must be a RetrievalQuery instance",
+            match=(
+                "prepared_query must be a "
+                "PreparedRetrievalQuery instance"
+            ),
         ):
             service.retrieve(
-                query=query,  # type: ignore[arg-type]
+                prepared_query=prepared_query,  # type: ignore[arg-type]
             )
 
 
@@ -448,7 +473,15 @@ class TestRetrieveKnowledgeBranches:
             lexical_candidate_limit=13,
         )
 
-        query = make_query()
+        filters = RetrievalFilters(
+            visibilities=("customer",),
+        )
+        prepared_query = make_prepared_query(
+            original_query="How long does my refund take?",
+            semantic_query="How long does my refund take?",
+            lexical_query="refund duration",
+            filters=filters,
+        )
 
         vector_candidate = make_candidate(
             methods=frozenset(
@@ -481,17 +514,60 @@ class TestRetrieveKnowledgeBranches:
         )
 
         service.retrieve(
-            query=query,
+            prepared_query=prepared_query,
         )
 
         vector_service.search.assert_called_once_with(
-            query=query,
+            query=RetrievalQuery(
+                text="How long does my refund take?",
+                filters=filters,
+            ),
             limit=17,
         )
         lexical_service.search.assert_called_once_with(
-            query=query,
+            query=RetrievalQuery(
+                text="refund duration",
+                filters=filters,
+            ),
             limit=13,
         )
+
+    def test_both_branches_preserve_same_trusted_filters(
+        self,
+    ):
+        filters = RetrievalFilters(
+            content_types=("policy",),
+            visibilities=("customer",),
+        )
+        prepared_query = make_prepared_query(
+            semantic_query="Can I get a refund?",
+            lexical_query="refund",
+            filters=filters,
+        )
+
+        vector_service = make_vector_service()
+        lexical_service = make_lexical_service()
+        vector_service.search.return_value = ()
+        lexical_service.search.return_value = ()
+
+        service = build_service(
+            vector_service=vector_service,
+            lexical_service=lexical_service,
+        )
+
+        service.retrieve(
+            prepared_query=prepared_query,
+        )
+
+        vector_query = (
+            vector_service.search.call_args.kwargs["query"]
+        )
+        lexical_query = (
+            lexical_service.search.call_args.kwargs["query"]
+        )
+
+        assert vector_query.filters is filters
+        assert lexical_query.filters is filters
 
     def test_vector_only_does_not_execute_lexical(
         self,
@@ -516,7 +592,7 @@ class TestRetrieveKnowledgeBranches:
         )
 
         service.retrieve(
-            query=make_query(),
+            prepared_query=make_prepared_query(),
         )
 
         vector_service.search.assert_called_once()
@@ -552,7 +628,7 @@ class TestRetrieveKnowledgeBranches:
         )
 
         service.retrieve(
-            query=make_query(),
+            prepared_query=make_prepared_query(),
         )
 
         vector_service.search.assert_not_called()
@@ -568,7 +644,8 @@ class TestRetrieveKnowledgeEmptyResults:
     def test_returns_empty_result_when_all_enabled_branches_are_empty(
         self,
     ):
-        query = make_query()
+        prepared_query = make_prepared_query()
+        canonical_query = make_canonical_query(prepared_query)
 
         vector_service = make_vector_service()
         lexical_service = make_lexical_service()
@@ -584,14 +661,14 @@ class TestRetrieveKnowledgeEmptyResults:
         )
 
         result = service.retrieve(
-            query=query,
+            prepared_query=prepared_query,
         )
 
         assert isinstance(
             result,
             RetrievalResult,
         )
-        assert result.query == query
+        assert result.query == canonical_query
         assert result.candidates == ()
         assert result.is_empty
 
@@ -600,7 +677,8 @@ class TestRetrieveKnowledgeEmptyResults:
     def test_empty_vector_does_not_suppress_lexical_results(
         self,
     ):
-        query = make_query()
+        prepared_query = make_prepared_query()
+        canonical_query = make_canonical_query(prepared_query)
 
         lexical_candidate = make_candidate(
             methods=frozenset(
@@ -623,7 +701,7 @@ class TestRetrieveKnowledgeEmptyResults:
             vector_service=vector_service,
             lexical_service=lexical_service,
         ).retrieve(
-            query=query,
+            prepared_query=prepared_query,
         )
 
         assert result.count == 1
@@ -635,7 +713,8 @@ class TestRetrieveKnowledgeEmptyResults:
     def test_empty_lexical_does_not_suppress_vector_results(
         self,
     ):
-        query = make_query()
+        prepared_query = make_prepared_query()
+        canonical_query = make_canonical_query(prepared_query)
 
         vector_candidate = make_candidate()
 
@@ -651,7 +730,7 @@ class TestRetrieveKnowledgeEmptyResults:
             vector_service=vector_service,
             lexical_service=lexical_service,
         ).retrieve(
-            query=query,
+            prepared_query=prepared_query,
         )
 
         assert result.count == 1
@@ -670,7 +749,8 @@ class TestRetrieveKnowledgeFusion:
     def test_passes_non_empty_rankings_to_fusion_in_stable_branch_order(
         self,
     ):
-        query = make_query()
+        prepared_query = make_prepared_query()
+        canonical_query = make_canonical_query(prepared_query)
 
         vector_candidate = make_candidate(
             methods=frozenset(
@@ -699,7 +779,7 @@ class TestRetrieveKnowledgeFusion:
 
         fusion_strategy.fuse.return_value = (
             FusionResult(
-                query=query,
+                query=canonical_query,
                 candidates=(
                     vector_candidate,
                     lexical_candidate,
@@ -719,7 +799,7 @@ class TestRetrieveKnowledgeFusion:
         )
 
         service.retrieve(
-            query=query,
+            prepared_query=prepared_query,
         )
 
         fusion_strategy.fuse.assert_called_once()
@@ -739,7 +819,7 @@ class TestRetrieveKnowledgeFusion:
             fusion_input,
             FusionInput,
         )
-        assert fusion_input.query == query
+        assert fusion_input.query == canonical_query
         assert fusion_input.rankings == (
             (vector_candidate,),
             (lexical_candidate,),
@@ -748,7 +828,8 @@ class TestRetrieveKnowledgeFusion:
     def test_excludes_empty_ranking_from_fusion_input(
         self,
     ):
-        query = make_query()
+        prepared_query = make_prepared_query()
+        canonical_query = make_canonical_query(prepared_query)
         lexical_candidate = make_candidate(
             methods=frozenset(
                 {RetrievalMethod.LEXICAL}
@@ -769,7 +850,7 @@ class TestRetrieveKnowledgeFusion:
 
         fusion_strategy.fuse.return_value = (
             FusionResult(
-                query=query,
+                query=canonical_query,
                 candidates=(
                     lexical_candidate,
                 ),
@@ -781,7 +862,7 @@ class TestRetrieveKnowledgeFusion:
             lexical_service=lexical_service,
             fusion_strategy=fusion_strategy,
         ).retrieve(
-            query=query,
+            prepared_query=prepared_query,
         )
 
         fusion_input = (
@@ -803,7 +884,8 @@ class TestRetrieveKnowledgeFusion:
             lexical_enabled=False,
         )
 
-        query = make_query()
+        prepared_query = make_prepared_query()
+        canonical_query = make_canonical_query(prepared_query)
         candidate = make_candidate()
 
         vector_service = make_vector_service()
@@ -815,7 +897,7 @@ class TestRetrieveKnowledgeFusion:
 
         fusion_strategy.fuse.return_value = (
             FusionResult(
-                query=query,
+                query=canonical_query,
                 candidates=(candidate,),
             )
         )
@@ -825,7 +907,7 @@ class TestRetrieveKnowledgeFusion:
             vector_service=vector_service,
             fusion_strategy=fusion_strategy,
         ).retrieve(
-            query=query,
+            prepared_query=prepared_query,
         )
 
         fusion_strategy.fuse.assert_called_once()
@@ -833,11 +915,14 @@ class TestRetrieveKnowledgeFusion:
     def test_rejects_fusion_result_for_different_query(
         self,
     ):
-        query = make_query(
-            "refund policy"
+        prepared_query = make_prepared_query(
+            original_query="refund policy",
+            semantic_query="semantic refund policy query",
+            lexical_query="refund policy",
         )
-        different_query = make_query(
-            "shipping policy"
+        different_query = RetrievalQuery(
+            text="shipping policy",
+            filters=prepared_query.filters,
         )
 
         profile = make_profile(
@@ -872,7 +957,7 @@ class TestRetrieveKnowledgeFusion:
             match="different retrieval query",
         ):
             service.retrieve(
-                query=query,
+                prepared_query=prepared_query,
             )
 
 
@@ -890,7 +975,8 @@ class TestRetrieveKnowledgeReranking:
             final_candidate_limit=2,
         )
 
-        query = make_query()
+        prepared_query = make_prepared_query()
+        canonical_query = make_canonical_query(prepared_query)
 
         first = make_candidate()
         second = make_candidate()
@@ -912,7 +998,7 @@ class TestRetrieveKnowledgeReranking:
 
         fusion_strategy.fuse.return_value = (
             FusionResult(
-                query=query,
+                query=canonical_query,
                 candidates=(
                     first,
                     second,
@@ -933,11 +1019,11 @@ class TestRetrieveKnowledgeReranking:
             fusion_strategy=fusion_strategy,
             reranking_service=reranking_service,
         ).retrieve(
-            query=query,
+            prepared_query=prepared_query,
         )
 
         reranking_service.rerank.assert_called_once_with(
-            query=query,
+            query=canonical_query,
             candidates=(
                 first,
                 second,
@@ -958,7 +1044,8 @@ class TestRetrieveKnowledgeReranking:
             reranking_enabled=False,
         )
 
-        query = make_query()
+        prepared_query = make_prepared_query()
+        canonical_query = make_canonical_query(prepared_query)
         candidate = make_candidate()
 
         vector_service = make_vector_service()
@@ -981,7 +1068,7 @@ class TestRetrieveKnowledgeReranking:
         )
 
         service.retrieve(
-            query=query,
+            prepared_query=prepared_query,
         )
 
         reranking_service.rerank.assert_not_called()
@@ -995,7 +1082,8 @@ class TestRetrieveKnowledgeReranking:
             reranking_enabled=True,
         )
 
-        query = make_query()
+        prepared_query = make_prepared_query()
+        canonical_query = make_canonical_query(prepared_query)
         retrieved = make_candidate()
 
         vector_service = make_vector_service()
@@ -1010,7 +1098,7 @@ class TestRetrieveKnowledgeReranking:
 
         fusion_strategy.fuse.return_value = (
             FusionResult(
-                query=query,
+                query=canonical_query,
                 candidates=(),
             )
         )
@@ -1021,7 +1109,7 @@ class TestRetrieveKnowledgeReranking:
             fusion_strategy=fusion_strategy,
             reranking_service=reranking_service,
         ).retrieve(
-            query=query,
+            prepared_query=prepared_query,
         )
 
         reranking_service.rerank.assert_not_called()
@@ -1057,20 +1145,14 @@ class TestRetrieveKnowledgeLimits:
             candidates
         )
 
-        fusion_strategy.fuse.return_value = (
-            FusionResult(
-                query=make_query(),
-                candidates=candidates,
-            )
-        )
-
-        # FusionResult must carry the same RetrievalQuery instance/value
-        # used by retrieve(), so construct explicitly here.
-        query = make_query()
+        # FusionResult must carry the canonical RetrievalQuery value
+        # derived from the PreparedRetrievalQuery used by retrieve().
+        prepared_query = make_prepared_query()
+        canonical_query = make_canonical_query(prepared_query)
 
         fusion_strategy.fuse.return_value = (
             FusionResult(
-                query=query,
+                query=canonical_query,
                 candidates=candidates,
             )
         )
@@ -1080,7 +1162,7 @@ class TestRetrieveKnowledgeLimits:
             vector_service=vector_service,
             fusion_strategy=fusion_strategy,
         ).retrieve(
-            query=query,
+            prepared_query=prepared_query,
         )
 
         assert result.count == 2
@@ -1100,7 +1182,8 @@ class TestRetrieveKnowledgeLimits:
             final_candidate_limit=2,
         )
 
-        query = make_query()
+        prepared_query = make_prepared_query()
+        canonical_query = make_canonical_query(prepared_query)
 
         candidates = tuple(
             make_candidate(
@@ -1121,7 +1204,7 @@ class TestRetrieveKnowledgeLimits:
 
         fusion_strategy.fuse.return_value = (
             FusionResult(
-                query=query,
+                query=canonical_query,
                 candidates=candidates,
             )
         )
@@ -1139,7 +1222,7 @@ class TestRetrieveKnowledgeLimits:
             fusion_strategy=fusion_strategy,
             reranking_service=reranking_service,
         ).retrieve(
-            query=query,
+            prepared_query=prepared_query,
         )
 
         assert result.candidates == (
@@ -1184,7 +1267,7 @@ class TestRetrieveKnowledgeFailures:
             match="vector search failed",
         ):
             service.retrieve(
-                query=make_query(),
+                prepared_query=make_prepared_query(),
             )
 
         # Current strict semantics stop immediately. This is deliberate,
@@ -1217,7 +1300,7 @@ class TestRetrieveKnowledgeFailures:
             match="lexical search failed",
         ):
             service.retrieve(
-                query=make_query(),
+                prepared_query=make_prepared_query(),
             )
 
         vector_service.search.assert_called_once()
@@ -1247,7 +1330,7 @@ class TestRetrieveKnowledgeFailures:
             match="programming defect",
         ):
             service.retrieve(
-                query=make_query(),
+                prepared_query=make_prepared_query(),
             )
 
 
@@ -1257,7 +1340,7 @@ class TestRetrieveKnowledgeFailures:
 
 
 class TestRetrieveKnowledgeResult:
-    def test_returns_original_query_in_result(
+    def test_returns_original_customer_query_as_canonical_result_query(
         self,
     ):
         profile = make_profile(
@@ -1265,11 +1348,14 @@ class TestRetrieveKnowledgeResult:
             lexical_enabled=False,
         )
 
-        query = RetrievalQuery(
-            text="refund",
-            filters=RetrievalFilters(
-                document_ids=(uuid4(),),
-            ),
+        filters = RetrievalFilters(
+            document_ids=(uuid4(),),
+        )
+        prepared_query = make_prepared_query(
+            original_query="When will my refund arrive?",
+            semantic_query="When will my refund arrive?",
+            lexical_query="refund arrive",
+            filters=filters,
         )
 
         candidate = make_candidate()
@@ -1283,15 +1369,18 @@ class TestRetrieveKnowledgeResult:
             profile=profile,
             vector_service=vector_service,
         ).retrieve(
-            query=query,
+            prepared_query=prepared_query,
         )
 
-        assert result.query is query
+        assert result.query.text == prepared_query.original_query
+        assert result.query.filters is prepared_query.filters
+        assert result.query.text != prepared_query.lexical_queries[0]
 
     def test_real_rrf_preserves_and_merges_retrieval_provenance(
         self,
     ):
-        query = make_query()
+        prepared_query = make_prepared_query()
+        canonical_query = make_canonical_query(prepared_query)
 
         chunk_id = uuid4()
         version_id = uuid4()
@@ -1336,7 +1425,7 @@ class TestRetrieveKnowledgeResult:
             vector_service=vector_service,
             lexical_service=lexical_service,
         ).retrieve(
-            query=query,
+            prepared_query=prepared_query,
         )
 
         assert result.count == 1

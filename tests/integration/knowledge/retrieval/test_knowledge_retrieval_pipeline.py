@@ -43,6 +43,10 @@ from packages.knowledge.retrieval.models import (
 from packages.knowledge.retrieval.profiles import (
     RetrievalProfile,
 )
+from packages.knowledge.retrieval.query.models import (
+    PreparedRetrievalQuery,
+    RetrievalQueryContext,
+)
 
 
 pytestmark = pytest.mark.integration
@@ -414,6 +418,40 @@ def seed_retrievable_chunk(
 
     return document_id, version_id, chunk_id
 
+def make_query_context(
+    *,
+    customer_message: str,
+    intent_key: str | None = None,
+    filters: RetrievalFilters | None = None,
+    entities: dict[str, str] | None = None,
+) -> RetrievalQueryContext:
+    return RetrievalQueryContext(
+        customer_message=customer_message,
+        intent_key=intent_key,
+        entities=entities or {},
+        filters=filters or RetrievalFilters(),
+    )
+
+
+def prepare_query(
+    components,
+    *,
+    customer_message: str,
+    intent_key: str | None = None,
+    filters: RetrievalFilters | None = None,
+    entities: dict[str, str] | None = None,
+) -> PreparedRetrievalQuery:
+    context = make_query_context(
+        customer_message=customer_message,
+        intent_key=intent_key,
+        filters=filters,
+        entities=entities,
+    )
+
+    return components.query_preparation_service.prepare(
+        context=context,
+    )
+
 
 # ===========================================================================
 # Pipeline fixture
@@ -497,12 +535,26 @@ class TestHybridRetrievalPipeline:
             pipeline_session
         )
 
-        result = components.retrieve_knowledge.retrieve(
-            query=RetrievalQuery(
-                # text="How long does my refund take?"
-                text="refund"
-            )
+        # result = components.retrieve_knowledge.retrieve(
+        #     query=RetrievalQuery(
+        #         # text="How long does my refund take?"
+        #         text="refund"
+        #     )
+        # )
+        
+        prepared_query = prepare_query(
+            components,
+            customer_message="refund",
+            intent_key="refund_request",
         )
+
+        result = components.retrieve_knowledge.retrieve(
+            prepared_query=prepared_query,
+        )
+        
+        assert prepared_query.original_query == "refund"
+        assert prepared_query.semantic_query == "refund"
+        assert prepared_query.lexical_queries
 
         assert not result.is_empty
         assert result.count >= 1
@@ -569,19 +621,38 @@ class TestGroundingContextPipeline:
             pipeline_session
         )
 
-        query = RetrievalQuery(
-            text="What is the refund eligibility?"
+        # query = RetrievalQuery(
+        #     text="What is the refund eligibility?"
+        # )
+
+        # context = (
+        #     components
+        #     .build_grounding_context
+        #     .build(query=query)
+        # )
+        
+        prepared_query = prepare_query(
+            components,
+            customer_message="What is the refund eligibility?",
+            intent_key="refund_request",
         )
 
         context = (
             components
             .build_grounding_context
-            .build(query=query)
+            .build(
+                prepared_query=prepared_query,
+            )
+        )
+        
+        expected_query = RetrievalQuery(
+            text=prepared_query.original_query,
+            filters=prepared_query.filters,
         )
 
         assert not context.is_empty
         assert context.block_count == 1
-        assert context.query == query
+        assert context.query == expected_query
 
         block = context.blocks[0]
 
@@ -642,14 +713,28 @@ class TestPipelineLifecycleSafety:
 
         pipeline_session.commit()
 
-        result = (
-            build_pipeline(pipeline_session)
-            .retrieve_knowledge
-            .retrieve(
-                query=RetrievalQuery(
-                    text="refund policy"
-                )
-            )
+        # result = (
+        #     build_pipeline(pipeline_session)
+        #     .retrieve_knowledge
+        #     .retrieve(
+        #         query=RetrievalQuery(
+        #             text="refund policy"
+        #         )
+        #     )
+        # )
+        
+        components = build_pipeline(
+            pipeline_session,
+        )
+
+        prepared_query = prepare_query(
+            components,
+            customer_message="refund policy",
+            intent_key="refund_request",
+        )
+
+        result = components.retrieve_knowledge.retrieve(
+            prepared_query=prepared_query,
         )
 
         returned_ids = {
@@ -678,14 +763,28 @@ class TestPipelineLifecycleSafety:
 
         pipeline_session.commit()
 
-        result = (
-            build_pipeline(pipeline_session)
-            .retrieve_knowledge
-            .retrieve(
-                query=RetrievalQuery(
-                    text="How long does my refund take?"
-                )
-            )
+        # result = (
+        #     build_pipeline(pipeline_session)
+        #     .retrieve_knowledge
+        #     .retrieve(
+        #         query=RetrievalQuery(
+        #             text="How long does my refund take?"
+        #         )
+        #     )
+        # )
+        
+        components = build_pipeline(
+            pipeline_session,
+        )
+
+        prepared_query = prepare_query(
+            components,
+            customer_message="How long does my refund take?",
+            intent_key="refund_request",
+        )
+
+        result = components.retrieve_knowledge.retrieve(
+            prepared_query=prepared_query,
         )
 
         assert not result.is_empty
@@ -695,6 +794,13 @@ class TestPipelineLifecycleSafety:
             for candidate in result.candidates
             if candidate.chunk_id == refund_chunk_id
         )
+        
+        assert (
+            prepared_query.semantic_query
+            == "How long does my refund take?"
+        )
+
+        assert prepared_query.lexical_queries
 
         assert RetrievalMethod.VECTOR in candidate.methods
 
@@ -745,28 +851,54 @@ class TestPipelineBusinessFilters:
 
         pipeline_session.commit()
 
-        query = RetrievalQuery(
-            text="refund processing",
-            filters=RetrievalFilters(
-                visibilities=("customer",),
-                content_types=("policy",),
-                metadata={
-                    "region": "india",
-                    "product": "payments",
-                },
-            ),
+        # query = RetrievalQuery(
+        #     text="refund processing",
+        #     filters=RetrievalFilters(
+        #         visibilities=("customer",),
+        #         content_types=("policy",),
+        #         metadata={
+        #             "region": "india",
+        #             "product": "payments",
+        #         },
+        #     ),
+        # )
+
+        # result = (
+        #     build_pipeline(pipeline_session)
+        #     .retrieve_knowledge
+        #     .retrieve(query=query)
+        # )
+        
+        components = build_pipeline(
+            pipeline_session,
+        )
+        
+        filters = RetrievalFilters(
+            visibilities=("customer",),
+            content_types=("policy",),
+            metadata={
+                "region": "india",
+                "product": "payments",
+            },
         )
 
-        result = (
-            build_pipeline(pipeline_session)
-            .retrieve_knowledge
-            .retrieve(query=query)
+        prepared_query = prepare_query(
+            components,
+            customer_message="refund processing",
+            intent_key="refund_request",
+            filters=filters,
+        )
+
+        result = components.retrieve_knowledge.retrieve(
+            prepared_query=prepared_query,
         )
 
         returned_ids = [
             candidate.chunk_id
             for candidate in result.candidates
         ]
+        
+        assert prepared_query.filters == filters
 
         assert returned_ids == [india_chunk_id]
         assert us_chunk_id not in returned_ids
@@ -807,14 +939,28 @@ class TestPipelineEmbeddingIsolation:
 
         pipeline_session.commit()
 
-        result = (
-            build_pipeline(pipeline_session)
-            .retrieve_knowledge
-            .retrieve(
-                query=RetrievalQuery(
-                    text="refund information"
-                )
-            )
+        # result = (
+        #     build_pipeline(pipeline_session)
+        #     .retrieve_knowledge
+        #     .retrieve(
+        #         query=RetrievalQuery(
+        #             text="refund information"
+        #         )
+        #     )
+        # )
+        
+        components = build_pipeline(
+            pipeline_session,
+        )
+        
+        prepared_query = prepare_query(
+            components,
+            customer_message="refund information",
+            intent_key="refund_request",
+        )
+
+        result = components.retrieve_knowledge.retrieve(
+            prepared_query=prepared_query,
         )
 
         candidate = next(
@@ -849,20 +995,29 @@ class TestEmptyPipelineResult:
             pipeline_session
         )
 
-        query = RetrievalQuery(
-            text="refund information"
+        prepared_query = prepare_query(
+            components,
+            customer_message="refund information",
+            intent_key="refund_request",
         )
 
         context = (
             components
             .build_grounding_context
-            .build(query=query)
+            .build(
+                prepared_query=prepared_query,
+            )
+        )
+
+        expected_query = RetrievalQuery(
+            text=prepared_query.original_query,
+            filters=prepared_query.filters,
         )
 
         assert context.is_empty
         assert context.block_count == 0
         assert context.blocks == ()
-        assert context.query == query
+        assert context.query == expected_query
         assert context.estimated_token_count == 0
         assert context.truncated is False
 
@@ -905,13 +1060,17 @@ class TestPipelineContextBudget:
             pipeline_session
         )
 
+        prepared_query = prepare_query(
+            components,
+            customer_message="refund policy",
+            intent_key="refund_request",
+        )
+
         context = (
             components
             .build_grounding_context
             .build(
-                query=RetrievalQuery(
-                    text="refund policy"
-                ),
+                prepared_query=prepared_query,
                 budget=GroundingContextBudget(
                     max_tokens=2_000,
                     max_blocks=1,
@@ -922,3 +1081,61 @@ class TestPipelineContextBudget:
         assert context.block_count == 1
         assert len(context.blocks) == 1
         assert context.truncated is True
+        
+    def test_grounding_context_preserves_original_customer_query(
+        self,
+        pipeline_session: Session,
+    ) -> None:
+        seed_retrievable_chunk(
+            pipeline_session,
+            vector=(1.0, 0.0, 0.0),
+            title="Refund Policy",
+            section_title="Refund Timing",
+            content=(
+                "Refund requests are processed within "
+                "five business days."
+            ),
+        )
+
+        pipeline_session.commit()
+
+        components = build_pipeline(
+            pipeline_session,
+        )
+
+        prepared_query = prepare_query(
+            components,
+            customer_message="How long does my refund take?",
+            intent_key="refund_request",
+            entities={
+                "issue_type": "refund delay",
+            },
+        )
+
+        # Retrieval representations may differ.
+        assert (
+            prepared_query.semantic_query
+            == "How long does my refund take?"
+        )
+        assert prepared_query.lexical_queries
+
+        context = (
+            components
+            .build_grounding_context
+            .build(
+                prepared_query=prepared_query,
+            )
+        )
+
+        expected_query = RetrievalQuery(
+            text="How long does my refund take?",
+            filters=prepared_query.filters,
+        )
+
+        # But public/canonical provenance must preserve
+        # the original customer query.
+        assert context.query == expected_query
+        assert (
+            context.query.text
+            == prepared_query.original_query
+        )

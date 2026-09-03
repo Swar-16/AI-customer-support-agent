@@ -25,8 +25,12 @@ from packages.knowledge.retrieval.errors import (
     VectorSearchError,
 )
 from packages.knowledge.retrieval.models import (
+    RetrievalFilters,
     RetrievalQuery,
     RetrievalResult,
+)
+from packages.knowledge.retrieval.query.models import (
+    PreparedRetrievalQuery,
 )
 
 
@@ -35,11 +39,27 @@ from packages.knowledge.retrieval.models import (
 # ---------------------------------------------------------------------------
 
 
-def make_query(
-    text: str = "What is the refund policy?",
+def make_prepared_query(
+    *,
+    original_query: str = "What is the refund policy?",
+    semantic_query: str = "What is the refund policy?",
+    lexical_query: str = "refund policy",
+    filters: RetrievalFilters | None = None,
+) -> PreparedRetrievalQuery:
+    return PreparedRetrievalQuery(
+        original_query=original_query,
+        semantic_query=semantic_query,
+        lexical_queries=(lexical_query,),
+        filters=filters if filters is not None else RetrievalFilters(),
+    )
+
+
+def make_canonical_query(
+    prepared_query: PreparedRetrievalQuery,
 ) -> RetrievalQuery:
     return RetrievalQuery(
-        text=text,
+        text=prepared_query.original_query,
+        filters=prepared_query.filters,
     )
 
 
@@ -66,9 +86,7 @@ def make_block(
         content=content,
         document_title="Refund Policy",
         section_title="Eligibility",
-        metadata={
-            "language": "en",
-        },
+        metadata={"language": "en"},
         retrieval_score=0.032,
     )
 
@@ -152,12 +170,7 @@ class TestBuildGroundingContextConstruction:
 
     @pytest.mark.parametrize(
         "retrieve_knowledge",
-        [
-            None,
-            object(),
-            "retriever",
-            123,
-        ],
+        [None, object(), "retriever", 123],
     )
     def test_rejects_invalid_retrieve_knowledge(
         self,
@@ -178,12 +191,7 @@ class TestBuildGroundingContextConstruction:
 
     @pytest.mark.parametrize(
         "context_builder",
-        [
-            None,
-            object(),
-            "builder",
-            123,
-        ],
+        [None, object(), "builder", 123],
     )
     def test_rejects_invalid_context_builder(
         self,
@@ -204,12 +212,7 @@ class TestBuildGroundingContextConstruction:
 
     @pytest.mark.parametrize(
         "default_budget",
-        [
-            None,
-            object(),
-            "budget",
-            123,
-        ],
+        [None, object(), "budget", 123],
     )
     def test_rejects_invalid_default_budget(
         self,
@@ -236,36 +239,37 @@ class TestBuildGroundingContextConstruction:
 
 class TestBuildGroundingContextInput:
     @pytest.mark.parametrize(
-        "query",
-        [
-            None,
-            object(),
-            "refund",
-            123,
-        ],
+        "prepared_query",
+        [None, object(), "refund", 123],
     )
-    def test_rejects_invalid_query(
+    def test_rejects_invalid_prepared_query(
         self,
-        query,
+        prepared_query,
     ):
-        service = make_service()
+        retrieve_knowledge = make_retrieve_knowledge()
+        context_builder = make_context_builder()
+        service = make_service(
+            retrieve_knowledge=retrieve_knowledge,
+            context_builder=context_builder,
+        )
 
         with pytest.raises(
             TypeError,
-            match="query must be a RetrievalQuery instance",
+            match=(
+                "prepared_query must be a "
+                "PreparedRetrievalQuery instance"
+            ),
         ):
             service.build(
-                query=query,  # type: ignore[arg-type]
+                prepared_query=prepared_query,  # type: ignore[arg-type]
             )
+
+        retrieve_knowledge.retrieve.assert_not_called()
+        context_builder.build.assert_not_called()
 
     @pytest.mark.parametrize(
         "budget",
-        [
-            object(),
-            "budget",
-            123,
-            True,
-        ],
+        [object(), "budget", 123, True],
     )
     def test_rejects_invalid_override_budget(
         self,
@@ -273,7 +277,6 @@ class TestBuildGroundingContextInput:
     ):
         retrieve_knowledge = make_retrieve_knowledge()
         context_builder = make_context_builder()
-
         service = make_service(
             retrieve_knowledge=retrieve_knowledge,
             context_builder=context_builder,
@@ -287,11 +290,10 @@ class TestBuildGroundingContextInput:
             ),
         ):
             service.build(
-                query=make_query(),
+                prepared_query=make_prepared_query(),
                 budget=budget,  # type: ignore[arg-type]
             )
 
-        # Invalid input must fail before doing any work.
         retrieve_knowledge.retrieve.assert_not_called()
         context_builder.build.assert_not_called()
 
@@ -302,33 +304,26 @@ class TestBuildGroundingContextInput:
 
 
 class TestBuildGroundingContextPipeline:
-    def test_retrieves_then_builds_context_using_default_budget(
-        self,
-    ):
-        query = make_query()
+    def test_retrieves_then_builds_context_using_default_budget(self):
+        prepared_query = make_prepared_query()
+        canonical_query = make_canonical_query(prepared_query)
         default_budget = make_budget(
             max_tokens=2_000,
             max_blocks=6,
         )
 
         retrieval_result = RetrievalResult(
-            query=query,
+            query=canonical_query,
             candidates=(),
         )
-
         expected_context = make_context(
-            query=query,
+            query=canonical_query,
         )
 
         retrieve_knowledge = make_retrieve_knowledge()
         context_builder = make_context_builder()
-
-        retrieve_knowledge.retrieve.return_value = (
-            retrieval_result
-        )
-        context_builder.build.return_value = (
-            expected_context
-        )
+        retrieve_knowledge.retrieve.return_value = retrieval_result
+        context_builder.build.return_value = expected_context
 
         service = make_service(
             retrieve_knowledge=retrieve_knowledge,
@@ -337,53 +332,42 @@ class TestBuildGroundingContextPipeline:
         )
 
         result = service.build(
-            query=query,
+            prepared_query=prepared_query,
         )
 
         retrieve_knowledge.retrieve.assert_called_once_with(
-            query=query,
+            prepared_query=prepared_query,
         )
-
         context_builder.build.assert_called_once_with(
             retrieval_result=retrieval_result,
             budget=default_budget,
         )
-
         assert result is expected_context
 
-    def test_uses_explicit_budget_override(
-        self,
-    ):
-        query = make_query()
-
+    def test_uses_explicit_budget_override(self):
+        prepared_query = make_prepared_query()
+        canonical_query = make_canonical_query(prepared_query)
         default_budget = make_budget(
             max_tokens=2_000,
             max_blocks=8,
         )
-
         override_budget = make_budget(
             max_tokens=500,
             max_blocks=3,
         )
 
         retrieval_result = RetrievalResult(
-            query=query,
+            query=canonical_query,
             candidates=(),
         )
-
         expected_context = make_context(
-            query=query,
+            query=canonical_query,
         )
 
         retrieve_knowledge = make_retrieve_knowledge()
         context_builder = make_context_builder()
-
-        retrieve_knowledge.retrieve.return_value = (
-            retrieval_result
-        )
-        context_builder.build.return_value = (
-            expected_context
-        )
+        retrieve_knowledge.retrieve.return_value = retrieval_result
+        context_builder.build.return_value = expected_context
 
         service = make_service(
             retrieve_knowledge=retrieve_knowledge,
@@ -392,45 +376,41 @@ class TestBuildGroundingContextPipeline:
         )
 
         result = service.build(
-            query=query,
+            prepared_query=prepared_query,
             budget=override_budget,
         )
 
+        retrieve_knowledge.retrieve.assert_called_once_with(
+            prepared_query=prepared_query,
+        )
         context_builder.build.assert_called_once_with(
             retrieval_result=retrieval_result,
             budget=override_budget,
         )
-
         assert result is expected_context
 
-    def test_explicit_budget_does_not_mutate_default_budget(
-        self,
-    ):
-        query = make_query()
-
+    def test_explicit_budget_does_not_mutate_default_budget(self):
+        prepared_query = make_prepared_query()
+        canonical_query = make_canonical_query(prepared_query)
         default_budget = make_budget(
             max_tokens=2_000,
             max_blocks=8,
         )
-
         override_budget = make_budget(
             max_tokens=500,
             max_blocks=2,
         )
 
         retrieval_result = RetrievalResult(
-            query=query,
+            query=canonical_query,
             candidates=(),
         )
 
         retrieve_knowledge = make_retrieve_knowledge()
         context_builder = make_context_builder()
-
-        retrieve_knowledge.retrieve.return_value = (
-            retrieval_result
-        )
-        context_builder.build.return_value = (
-            make_context(query=query)
+        retrieve_knowledge.retrieve.return_value = retrieval_result
+        context_builder.build.return_value = make_context(
+            query=canonical_query,
         )
 
         service = make_service(
@@ -440,13 +420,48 @@ class TestBuildGroundingContextPipeline:
         )
 
         service.build(
-            query=query,
+            prepared_query=prepared_query,
             budget=override_budget,
         )
 
         assert service.default_budget is default_budget
         assert service.default_budget.max_tokens == 2_000
         assert service.default_budget.max_blocks == 8
+
+    def test_prepared_query_is_not_replaced_by_canonical_query_for_retrieval(
+        self,
+    ):
+        prepared_query = make_prepared_query(
+            original_query="How long does my refund take?",
+            semantic_query="How long does my refund take?",
+            lexical_query="refund duration",
+        )
+        canonical_query = make_canonical_query(prepared_query)
+
+        retrieval_result = RetrievalResult(
+            query=canonical_query,
+            candidates=(),
+        )
+
+        retrieve_knowledge = make_retrieve_knowledge()
+        context_builder = make_context_builder()
+        retrieve_knowledge.retrieve.return_value = retrieval_result
+        context_builder.build.return_value = make_context(
+            query=canonical_query,
+        )
+
+        service = make_service(
+            retrieve_knowledge=retrieve_knowledge,
+            context_builder=context_builder,
+        )
+
+        service.build(
+            prepared_query=prepared_query,
+        )
+
+        retrieve_knowledge.retrieve.assert_called_once_with(
+            prepared_query=prepared_query,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -455,29 +470,21 @@ class TestBuildGroundingContextPipeline:
 
 
 class TestBuildGroundingContextEmpty:
-    def test_empty_retrieval_still_flows_through_context_builder(
-        self,
-    ):
-        query = make_query()
-
+    def test_empty_retrieval_still_flows_through_context_builder(self):
+        prepared_query = make_prepared_query()
+        canonical_query = make_canonical_query(prepared_query)
         retrieval_result = RetrievalResult(
-            query=query,
+            query=canonical_query,
             candidates=(),
         )
-
         empty_context = make_context(
-            query=query,
+            query=canonical_query,
         )
 
         retrieve_knowledge = make_retrieve_knowledge()
         context_builder = make_context_builder()
-
-        retrieve_knowledge.retrieve.return_value = (
-            retrieval_result
-        )
-        context_builder.build.return_value = (
-            empty_context
-        )
+        retrieve_knowledge.retrieve.return_value = retrieval_result
+        context_builder.build.return_value = empty_context
 
         service = make_service(
             retrieve_knowledge=retrieve_knowledge,
@@ -485,11 +492,16 @@ class TestBuildGroundingContextEmpty:
         )
 
         result = service.build(
-            query=query,
+            prepared_query=prepared_query,
         )
 
-        context_builder.build.assert_called_once()
-
+        retrieve_knowledge.retrieve.assert_called_once_with(
+            prepared_query=prepared_query,
+        )
+        context_builder.build.assert_called_once_with(
+            retrieval_result=retrieval_result,
+            budget=service.default_budget,
+        )
         assert result is empty_context
         assert result.is_empty
         assert result.blocks == ()
@@ -498,28 +510,18 @@ class TestBuildGroundingContextEmpty:
     def test_application_service_does_not_short_circuit_empty_retrieval(
         self,
     ):
-        """
-        Empty retrieval remains a normal pipeline result.
-
-        Context-building policy still owns conversion from RetrievalResult
-        to GroundingContext.
-        """
-
-        query = make_query()
-
+        prepared_query = make_prepared_query()
+        canonical_query = make_canonical_query(prepared_query)
         retrieval_result = RetrievalResult(
-            query=query,
+            query=canonical_query,
             candidates=(),
         )
 
         retrieve_knowledge = make_retrieve_knowledge()
         context_builder = make_context_builder()
-
-        retrieve_knowledge.retrieve.return_value = (
-            retrieval_result
-        )
-        context_builder.build.return_value = (
-            make_context(query=query)
+        retrieve_knowledge.retrieve.return_value = retrieval_result
+        context_builder.build.return_value = make_context(
+            query=canonical_query,
         )
 
         service = make_service(
@@ -528,7 +530,7 @@ class TestBuildGroundingContextEmpty:
         )
 
         service.build(
-            query=query,
+            prepared_query=prepared_query,
         )
 
         context_builder.build.assert_called_once_with(
@@ -543,20 +545,17 @@ class TestBuildGroundingContextEmpty:
 
 
 class TestBuildGroundingContextResult:
-    def test_returns_context_builder_result_unchanged(
-        self,
-    ):
-        query = make_query()
-
+    def test_returns_context_builder_result_unchanged(self):
+        prepared_query = make_prepared_query()
+        canonical_query = make_canonical_query(prepared_query)
         block = make_block()
 
         retrieval_result = RetrievalResult(
-            query=query,
+            query=canonical_query,
             candidates=(),
         )
-
         context = make_context(
-            query=query,
+            query=canonical_query,
             blocks=(block,),
             estimated_token_count=42,
             truncated=True,
@@ -564,10 +563,7 @@ class TestBuildGroundingContextResult:
 
         retrieve_knowledge = make_retrieve_knowledge()
         context_builder = make_context_builder()
-
-        retrieve_knowledge.retrieve.return_value = (
-            retrieval_result
-        )
+        retrieve_knowledge.retrieve.return_value = retrieval_result
         context_builder.build.return_value = context
 
         service = make_service(
@@ -576,7 +572,7 @@ class TestBuildGroundingContextResult:
         )
 
         result = service.build(
-            query=query,
+            prepared_query=prepared_query,
         )
 
         assert result is context
@@ -584,33 +580,26 @@ class TestBuildGroundingContextResult:
         assert result.estimated_token_count == 42
         assert result.truncated is True
 
-    def test_rejects_context_for_different_query(
-        self,
-    ):
-        query = make_query(
-            "What is the refund policy?"
+    def test_rejects_context_for_different_query(self):
+        prepared_query = make_prepared_query(
+            original_query="What is the refund policy?",
         )
-
-        different_query = make_query(
-            "Where is my order?"
+        canonical_query = make_canonical_query(prepared_query)
+        different_query = RetrievalQuery(
+            text="Where is my order?",
+            filters=prepared_query.filters,
         )
 
         retrieval_result = RetrievalResult(
-            query=query,
+            query=canonical_query,
             candidates=(),
         )
 
         retrieve_knowledge = make_retrieve_knowledge()
         context_builder = make_context_builder()
-
-        retrieve_knowledge.retrieve.return_value = (
-            retrieval_result
-        )
-
-        context_builder.build.return_value = (
-            make_context(
-                query=different_query
-            )
+        retrieve_knowledge.retrieve.return_value = retrieval_result
+        context_builder.build.return_value = make_context(
+            query=different_query,
         )
 
         service = make_service(
@@ -623,7 +612,7 @@ class TestBuildGroundingContextResult:
             match="different retrieval query",
         ):
             service.build(
-                query=query,
+                prepared_query=prepared_query,
             )
 
 
@@ -633,21 +622,14 @@ class TestBuildGroundingContextResult:
 
 
 class TestBuildGroundingContextFailures:
-    def test_retrieval_failure_propagates_unchanged(
-        self,
-    ):
-        query = make_query()
-
+    def test_retrieval_failure_propagates_unchanged(self):
+        prepared_query = make_prepared_query()
         retrieve_knowledge = make_retrieve_knowledge()
         context_builder = make_context_builder()
-
         error = VectorSearchError(
-            "vector retrieval failed"
+            "vector retrieval failed",
         )
-
-        retrieve_knowledge.retrieve.side_effect = (
-            error
-        )
+        retrieve_knowledge.retrieve.side_effect = error
 
         service = make_service(
             retrieve_knowledge=retrieve_knowledge,
@@ -659,37 +641,28 @@ class TestBuildGroundingContextFailures:
             match="vector retrieval failed",
         ) as exc_info:
             service.build(
-                query=query,
+                prepared_query=prepared_query,
             )
 
         assert exc_info.value is error
-
         context_builder.build.assert_not_called()
 
-    def test_context_builder_failure_propagates_unchanged(
-        self,
-    ):
-        query = make_query()
-
+    def test_context_builder_failure_propagates_unchanged(self):
+        prepared_query = make_prepared_query()
+        canonical_query = make_canonical_query(prepared_query)
         retrieval_result = RetrievalResult(
-            query=query,
+            query=canonical_query,
             candidates=(),
         )
 
         retrieve_knowledge = make_retrieve_knowledge()
         context_builder = make_context_builder()
-
-        retrieve_knowledge.retrieve.return_value = (
-            retrieval_result
-        )
+        retrieve_knowledge.retrieve.return_value = retrieval_result
 
         error = GroundingContextBudgetError(
-            "context budget failed"
+            "context budget failed",
         )
-
-        context_builder.build.side_effect = (
-            error
-        )
+        context_builder.build.side_effect = error
 
         service = make_service(
             retrieve_knowledge=retrieve_knowledge,
@@ -701,24 +674,19 @@ class TestBuildGroundingContextFailures:
             match="context budget failed",
         ) as exc_info:
             service.build(
-                query=query,
+                prepared_query=prepared_query,
             )
 
         assert exc_info.value is error
 
-    def test_unexpected_retrieval_exception_is_not_swallowed(
-        self,
-    ):
+    def test_unexpected_retrieval_exception_is_not_swallowed(self):
+        prepared_query = make_prepared_query()
         retrieve_knowledge = make_retrieve_knowledge()
         context_builder = make_context_builder()
-
         error = RuntimeError(
-            "programming defect"
+            "programming defect",
         )
-
-        retrieve_knowledge.retrieve.side_effect = (
-            error
-        )
+        retrieve_knowledge.retrieve.side_effect = error
 
         service = make_service(
             retrieve_knowledge=retrieve_knowledge,
@@ -730,36 +698,28 @@ class TestBuildGroundingContextFailures:
             match="programming defect",
         ) as exc_info:
             service.build(
-                query=make_query(),
+                prepared_query=prepared_query,
             )
 
         assert exc_info.value is error
         context_builder.build.assert_not_called()
 
-    def test_unexpected_context_builder_exception_is_not_swallowed(
-        self,
-    ):
-        query = make_query()
-
+    def test_unexpected_context_builder_exception_is_not_swallowed(self):
+        prepared_query = make_prepared_query()
+        canonical_query = make_canonical_query(prepared_query)
         retrieval_result = RetrievalResult(
-            query=query,
+            query=canonical_query,
             candidates=(),
         )
 
         retrieve_knowledge = make_retrieve_knowledge()
         context_builder = make_context_builder()
-
-        retrieve_knowledge.retrieve.return_value = (
-            retrieval_result
-        )
+        retrieve_knowledge.retrieve.return_value = retrieval_result
 
         error = RuntimeError(
-            "builder programming defect"
+            "builder programming defect",
         )
-
-        context_builder.build.side_effect = (
-            error
-        )
+        context_builder.build.side_effect = error
 
         service = make_service(
             retrieve_knowledge=retrieve_knowledge,
@@ -771,37 +731,31 @@ class TestBuildGroundingContextFailures:
             match="builder programming defect",
         ) as exc_info:
             service.build(
-                query=query,
+                prepared_query=prepared_query,
             )
 
         assert exc_info.value is error
 
 
 # ---------------------------------------------------------------------------
-# Call ordering
+# Call ordering / object identity
 # ---------------------------------------------------------------------------
 
 
 class TestBuildGroundingContextCallOrdering:
-    def test_context_builder_receives_exact_retrieval_result(
-        self,
-    ):
-        query = make_query()
-
+    def test_context_builder_receives_exact_retrieval_result(self):
+        prepared_query = make_prepared_query()
+        canonical_query = make_canonical_query(prepared_query)
         retrieval_result = RetrievalResult(
-            query=query,
+            query=canonical_query,
             candidates=(),
         )
 
         retrieve_knowledge = make_retrieve_knowledge()
         context_builder = make_context_builder()
-
-        retrieve_knowledge.retrieve.return_value = (
-            retrieval_result
-        )
-
-        context_builder.build.return_value = (
-            make_context(query=query)
+        retrieve_knowledge.retrieve.return_value = retrieval_result
+        context_builder.build.return_value = make_context(
+            query=canonical_query,
         )
 
         service = make_service(
@@ -810,7 +764,7 @@ class TestBuildGroundingContextCallOrdering:
         )
 
         service.build(
-            query=query,
+            prepared_query=prepared_query,
         )
 
         passed_result = (

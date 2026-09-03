@@ -1,18 +1,17 @@
 """
-Unit tests for packages.ai.intent.taxonomy
+Unit tests for packages.ai.intent.taxonomy.
 
-Covers:
-- Structural integrity of the taxonomy (completeness, consistency)
-- Public accessor functions (get_intent_definition, get_all_intents,
-  get_actionable_intents, get_retrieval_intents)
-- validate_taxonomy() failure modes (via monkeypatching module state)
-- Immutability guarantees (frozen dataclass, MappingProxyType)
-- Domain-specific invariants (priorities, non-overlapping examples)
+The taxonomy layer defines semantic customer intent only.
+
+Routing, retrieval strategy, actionability, workflow priority,
+authorization, and operational requirements belong to downstream
+decision/workflow layers and must not be tested here.
 """
 
 from __future__ import annotations
 
 import dataclasses
+from types import MappingProxyType
 
 import pytest
 
@@ -21,285 +20,453 @@ from packages.ai.intent.taxonomy import (
     INTENT_DEFINITIONS,
     IntentDefinition,
     IntentType,
-    get_actionable_intents,
-    get_all_intents,
     get_intent_definition,
-    get_retrieval_intents,
-    validate_taxonomy,
+    validate_intent_definitions,
 )
 
 
 # ---------------------------------------------------------------------------
-# Structural completeness / consistency
+# Structural completeness
 # ---------------------------------------------------------------------------
 
+
 def test_taxonomy_is_complete() -> None:
-    validate_taxonomy()
+    validate_intent_definitions()
+
     assert set(INTENT_DEFINITIONS) == set(IntentType)
 
 
-def test_every_definition_key_matches_its_own_intent_field() -> None:
-    for key, definition in INTENT_DEFINITIONS.items():
-        assert key is definition.intent
+def test_every_definition_key_matches_its_intent() -> None:
+    for intent, definition in INTENT_DEFINITIONS.items():
+        assert definition.intent is intent
 
 
-@pytest.mark.parametrize("intent", list(IntentType))
-def test_every_intent_has_required_metadata(intent: IntentType) -> None:
+def test_every_registry_value_is_intent_definition() -> None:
+    assert all(
+        isinstance(definition, IntentDefinition)
+        for definition in INTENT_DEFINITIONS.values()
+    )
+
+
+@pytest.mark.parametrize("intent", tuple(IntentType))
+def test_every_intent_has_semantic_definition(
+    intent: IntentType,
+) -> None:
     definition = INTENT_DEFINITIONS[intent]
-    assert definition.display_name.strip()
+
     assert definition.description.strip()
-    assert len(definition.positive_examples) > 0
-    assert all(example.strip() for example in definition.positive_examples)
+    assert definition.examples
+    assert all(
+        example.strip()
+        for example in definition.examples
+    )
 
 
-def test_no_duplicate_display_names() -> None:
-    names = [d.display_name for d in INTENT_DEFINITIONS.values()]
-    assert len(names) == len(set(names))
+def test_intent_type_values_are_unique() -> None:
+    values = [intent.value for intent in IntentType]
+
+    assert len(values) == len(set(values))
 
 
 def test_intent_type_values_are_lowercase_snake_case() -> None:
     for intent in IntentType:
-        assert intent.value == intent.value.lower()
-        assert " " not in intent.value
+        value = intent.value
+
+        assert value == value.lower()
+        assert value
+        assert " " not in value
+        assert "-" not in value
+
+        parts = value.split("_")
+
+        assert all(part.isalnum() for part in parts)
+        assert all(part for part in parts)
 
 
 # ---------------------------------------------------------------------------
-# get_all_intents
+# IntentDefinition construction
 # ---------------------------------------------------------------------------
 
-def test_get_all_intents_returns_every_member_in_declaration_order() -> None:
-    assert get_all_intents() == tuple(IntentType)
+
+def test_intent_definition_normalizes_description() -> None:
+    definition = IntentDefinition(
+        intent=IntentType.GENERAL_QUESTION,
+        description="  General   supported \n question. ",
+        examples=("Example question",),
+    )
+
+    assert (
+        definition.description
+        == "General supported question."
+    )
 
 
-def test_get_all_intents_returns_a_tuple() -> None:
-    assert isinstance(get_all_intents(), tuple)
+def test_intent_definition_normalizes_examples() -> None:
+    definition = IntentDefinition(
+        intent=IntentType.GENERAL_QUESTION,
+        description="General question.",
+        examples=(
+            "  First   example ",
+            "Second\nexample",
+        ),
+    )
+
+    assert definition.examples == (
+        "First example",
+        "Second example",
+    )
+
+
+def test_intent_definition_deduplicates_examples() -> None:
+    definition = IntentDefinition(
+        intent=IntentType.GENERAL_QUESTION,
+        description="General question.",
+        examples=(
+            "Same example",
+            " Same   example ",
+            "Another example",
+        ),
+    )
+
+    assert definition.examples == (
+        "Same example",
+        "Another example",
+    )
+
+
+def test_intent_definition_rejects_non_intent() -> None:
+    with pytest.raises(
+        TypeError,
+        match="intent must be an IntentType instance",
+    ):
+        IntentDefinition(
+            intent="general_question",  # type: ignore[arg-type]
+            description="General question.",
+            examples=("Example",),
+        )
+
+
+def test_intent_definition_rejects_non_string_description() -> None:
+    with pytest.raises(
+        TypeError,
+        match="description must be a string",
+    ):
+        IntentDefinition(
+            intent=IntentType.GENERAL_QUESTION,
+            description=123,  # type: ignore[arg-type]
+            examples=("Example",),
+        )
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "",
+        " ",
+        "\n\t",
+    ],
+)
+def test_intent_definition_rejects_blank_description(
+    description: str,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="description cannot be empty",
+    ):
+        IntentDefinition(
+            intent=IntentType.GENERAL_QUESTION,
+            description=description,
+            examples=("Example",),
+        )
+
+
+def test_intent_definition_requires_tuple_examples() -> None:
+    with pytest.raises(
+        TypeError,
+        match="examples must be a tuple",
+    ):
+        IntentDefinition(
+            intent=IntentType.GENERAL_QUESTION,
+            description="General question.",
+            examples=["Example"],  # type: ignore[arg-type]
+        )
+
+
+def test_intent_definition_requires_at_least_one_example() -> None:
+    with pytest.raises(
+        ValueError,
+        match="requires at least one example",
+    ):
+        IntentDefinition(
+            intent=IntentType.GENERAL_QUESTION,
+            description="General question.",
+            examples=(),
+        )
+
+
+@pytest.mark.parametrize(
+    "examples",
+    [
+        ("",),
+        ("   ",),
+        ("\n\t",),
+    ],
+)
+def test_intent_definition_rejects_blank_examples(
+    examples: tuple[str, ...],
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="examples cannot contain empty values",
+    ):
+        IntentDefinition(
+            intent=IntentType.GENERAL_QUESTION,
+            description="General question.",
+            examples=examples,
+        )
+
+
+def test_intent_definition_rejects_non_string_example() -> None:
+    with pytest.raises(
+        TypeError,
+        match="examples must contain only strings",
+    ):
+        IntentDefinition(
+            intent=IntentType.GENERAL_QUESTION,
+            description="General question.",
+            examples=(
+                "Valid",
+                123,  # type: ignore[arg-type]
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
-# get_intent_definition
+# Public lookup
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("intent", list(IntentType))
-def test_get_intent_definition_returns_matching_definition(intent: IntentType) -> None:
+
+@pytest.mark.parametrize("intent", tuple(IntentType))
+def test_get_intent_definition_returns_registered_definition(
+    intent: IntentType,
+) -> None:
     definition = get_intent_definition(intent)
+
     assert definition is INTENT_DEFINITIONS[intent]
     assert definition.intent is intent
 
 
-@pytest.mark.parametrize("bad_value", ["refund_request", 42, None, object()])
-def test_get_intent_definition_rejects_non_intent_type(bad_value: object) -> None:
-    with pytest.raises(TypeError):
-        get_intent_definition(bad_value)  # type: ignore[arg-type]
-
-
-def test_get_intent_definition_raises_key_error_when_metadata_missing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    incomplete = {
-        intent: definition
-        for intent, definition in INTENT_DEFINITIONS.items()
-        if intent is not IntentType.UNKNOWN
-    }
-    monkeypatch.setattr(taxonomy, "INTENT_DEFINITIONS", incomplete)
-    with pytest.raises(KeyError):
-        get_intent_definition(IntentType.UNKNOWN)
-
-
-# ---------------------------------------------------------------------------
-# get_actionable_intents / get_retrieval_intents
-# ---------------------------------------------------------------------------
-
-def test_actionable_intents_matches_flags_on_definitions() -> None:
-    expected = frozenset(
-        intent for intent, d in INTENT_DEFINITIONS.items() if d.potentially_actionable
-    )
-    assert get_actionable_intents() == expected
-
-
-def test_retrieval_intents_matches_flags_on_definitions() -> None:
-    expected = frozenset(
-        intent for intent, d in INTENT_DEFINITIONS.items() if d.requires_policy_retrieval
-    )
-    assert get_retrieval_intents() == expected
-
-
-def test_actionable_and_retrieval_return_frozensets() -> None:
-    assert isinstance(get_actionable_intents(), frozenset)
-    assert isinstance(get_retrieval_intents(), frozenset)
-
-
-def test_unknown_is_not_actionable() -> None:
-    assert IntentType.UNKNOWN not in get_actionable_intents()
-
-
-def test_unknown_does_not_require_retrieval() -> None:
-    assert IntentType.UNKNOWN not in get_retrieval_intents()
-
-
-def test_general_question_requires_retrieval_but_is_not_actionable() -> None:
-    assert IntentType.GENERAL_QUESTION in get_retrieval_intents()
-    assert IntentType.GENERAL_QUESTION not in get_actionable_intents()
-
-
-def test_refund_requires_retrieval() -> None:
-    assert IntentType.REFUND_REQUEST in get_retrieval_intents()
-
-
-def test_order_status_does_not_require_policy_retrieval_by_default() -> None:
-    assert IntentType.ORDER_STATUS not in get_retrieval_intents()
-
-
-def test_order_status_is_actionable() -> None:
-    assert IntentType.ORDER_STATUS in get_actionable_intents()
-
-
-# ---------------------------------------------------------------------------
-# Priority defaults
-# ---------------------------------------------------------------------------
-
-def test_account_issue_has_high_priority() -> None:
-    assert INTENT_DEFINITIONS[IntentType.ACCOUNT_ISSUE].default_priority == "high"
-
-
 @pytest.mark.parametrize(
-    "intent",
-    [i for i in IntentType if i is not IntentType.ACCOUNT_ISSUE],
+    "bad_value",
+    [
+        "refund_request",
+        42,
+        None,
+        object(),
+    ],
 )
-def test_other_intents_default_to_normal_priority(intent: IntentType) -> None:
-    assert INTENT_DEFINITIONS[intent].default_priority == "normal"
+def test_get_intent_definition_rejects_non_intent_type(
+    bad_value: object,
+) -> None:
+    with pytest.raises(
+        TypeError,
+        match="intent must be IntentType",
+    ):
+        get_intent_definition(
+            bad_value  # type: ignore[arg-type]
+        )
+
+
+def test_get_intent_definition_raises_when_definition_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    incomplete = dict(INTENT_DEFINITIONS)
+    incomplete.pop(IntentType.UNKNOWN)
+
+    monkeypatch.setattr(
+        taxonomy,
+        "INTENT_DEFINITIONS",
+        incomplete,
+    )
+
+    with pytest.raises(KeyError):
+        taxonomy.get_intent_definition(
+            IntentType.UNKNOWN
+        )
 
 
 # ---------------------------------------------------------------------------
-# validate_taxonomy failure modes
+# Registry validation
 # ---------------------------------------------------------------------------
 
-def _definition_for(intent: IntentType, **overrides: object) -> IntentDefinition:
-    base = INTENT_DEFINITIONS[intent]
-    return dataclasses.replace(base, **overrides)  # type: ignore[arg-type]
+
+def test_validate_intent_definitions_passes_for_real_taxonomy() -> None:
+    assert validate_intent_definitions() is None
 
 
-def test_validate_taxonomy_raises_when_definition_missing(
+def test_validate_intent_definitions_detects_missing_definition(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    incomplete = {
-        intent: definition
-        for intent, definition in INTENT_DEFINITIONS.items()
-        if intent is not IntentType.UNKNOWN
-    }
-    monkeypatch.setattr(taxonomy, "INTENT_DEFINITIONS", incomplete)
-    with pytest.raises(RuntimeError, match="Missing definitions"):
-        validate_taxonomy()
+    incomplete = dict(INTENT_DEFINITIONS)
+    incomplete.pop(IntentType.UNKNOWN)
 
-
-def test_validate_taxonomy_detects_unexpected_key_present(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    bogus_key = "not_a_real_intent"
-
-    bloated = dict(INTENT_DEFINITIONS)
-    bloated[bogus_key] = INTENT_DEFINITIONS[IntentType.UNKNOWN]  # type: ignore[index]
-
-    monkeypatch.setattr(taxonomy, "INTENT_DEFINITIONS", bloated)
+    monkeypatch.setattr(
+        taxonomy,
+        "INTENT_DEFINITIONS",
+        incomplete,
+    )
 
     with pytest.raises(
         RuntimeError,
-        match="Unexpected definitions.*not_a_real_intent",
+        match="Missing definitions",
     ):
-        validate_taxonomy()
+        taxonomy.validate_intent_definitions()
 
 
-def test_validate_taxonomy_raises_when_intent_field_mismatched(
+def test_validate_intent_definitions_detects_unexpected_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    mismatched = dict(INTENT_DEFINITIONS)
-    mismatched[IntentType.REFUND_REQUEST] = _definition_for(
-        IntentType.PAYMENT_ISSUE  # intent field points elsewhere than the dict key
+    invalid = dict(INTENT_DEFINITIONS)
+
+    invalid["not_a_real_intent"] = (
+        INTENT_DEFINITIONS[IntentType.UNKNOWN]
+    )  # type: ignore[index]
+
+    monkeypatch.setattr(
+        taxonomy,
+        "INTENT_DEFINITIONS",
+        invalid,
     )
-    monkeypatch.setattr(taxonomy, "INTENT_DEFINITIONS", mismatched)
-    with pytest.raises(RuntimeError, match="mismatch"):
-        validate_taxonomy()
+
+    with pytest.raises(
+        RuntimeError,
+        match="Unexpected definitions",
+    ):
+        taxonomy.validate_intent_definitions()
 
 
-def test_validate_taxonomy_raises_when_display_name_blank(
+def test_validate_intent_definitions_detects_wrong_value_type(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    broken = dict(INTENT_DEFINITIONS)
-    broken[IntentType.REFUND_REQUEST] = _definition_for(
-        IntentType.REFUND_REQUEST, display_name="   "
+    invalid = dict(INTENT_DEFINITIONS)
+
+    invalid[IntentType.REFUND_REQUEST] = object()
+
+    monkeypatch.setattr(
+        taxonomy,
+        "INTENT_DEFINITIONS",
+        invalid,
     )
-    monkeypatch.setattr(taxonomy, "INTENT_DEFINITIONS", broken)
-    with pytest.raises(RuntimeError, match="display name"):
-        validate_taxonomy()
+
+    with pytest.raises(
+        RuntimeError,
+        match="is not an IntentDefinition",
+    ):
+        taxonomy.validate_intent_definitions()
 
 
-def test_validate_taxonomy_raises_when_description_blank(
+def test_validate_intent_definitions_detects_key_definition_mismatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    broken = dict(INTENT_DEFINITIONS)
-    broken[IntentType.REFUND_REQUEST] = _definition_for(
-        IntentType.REFUND_REQUEST, description=""
+    invalid = dict(INTENT_DEFINITIONS)
+
+    mismatched = dataclasses.replace(
+        INTENT_DEFINITIONS[IntentType.PAYMENT_ISSUE],
+        intent=IntentType.REFUND_REQUEST,
     )
-    monkeypatch.setattr(taxonomy, "INTENT_DEFINITIONS", broken)
-    with pytest.raises(RuntimeError, match="description"):
-        validate_taxonomy()
 
+    invalid[IntentType.PAYMENT_ISSUE] = mismatched
 
-def test_validate_taxonomy_raises_when_no_positive_examples(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    broken = dict(INTENT_DEFINITIONS)
-    broken[IntentType.REFUND_REQUEST] = _definition_for(
-        IntentType.REFUND_REQUEST, positive_examples=()
+    monkeypatch.setattr(
+        taxonomy,
+        "INTENT_DEFINITIONS",
+        invalid,
     )
-    monkeypatch.setattr(taxonomy, "INTENT_DEFINITIONS", broken)
-    with pytest.raises(RuntimeError, match="positive examples"):
-        validate_taxonomy()
 
-
-def test_validate_taxonomy_passes_on_unmodified_taxonomy() -> None:
-    # Sanity check that validate_taxonomy() is a no-op / returns None on
-    # the real, shipped taxonomy (also covered at import time).
-    assert validate_taxonomy() is None
+    with pytest.raises(
+        RuntimeError,
+        match="definition/key mismatch",
+    ):
+        taxonomy.validate_intent_definitions()
 
 
 # ---------------------------------------------------------------------------
-# Immutability guarantees
+# Immutability
 # ---------------------------------------------------------------------------
+
 
 def test_intent_definition_is_frozen() -> None:
-    definition = INTENT_DEFINITIONS[IntentType.REFUND_REQUEST]
+    definition = INTENT_DEFINITIONS[
+        IntentType.REFUND_REQUEST
+    ]
+
     with pytest.raises(dataclasses.FrozenInstanceError):
-        definition.display_name = "Something Else"  # type: ignore[misc]
+        definition.description = (  # type: ignore[misc]
+            "Modified description"
+        )
 
 
-def test_intent_definition_has_no_dict_due_to_slots() -> None:
-    definition = INTENT_DEFINITIONS[IntentType.REFUND_REQUEST]
+def test_intent_definition_uses_slots() -> None:
+    definition = INTENT_DEFINITIONS[
+        IntentType.REFUND_REQUEST
+    ]
+
     assert not hasattr(definition, "__dict__")
 
 
 def test_intent_definitions_mapping_is_read_only() -> None:
+    assert isinstance(
+        INTENT_DEFINITIONS,
+        MappingProxyType,
+    )
+
     with pytest.raises(TypeError):
-        INTENT_DEFINITIONS[IntentType.UNKNOWN] = INTENT_DEFINITIONS[IntentType.REFUND_REQUEST]  # type: ignore[index]
+        INTENT_DEFINITIONS[
+            IntentType.UNKNOWN
+        ] = INTENT_DEFINITIONS[
+            IntentType.REFUND_REQUEST
+        ]  # type: ignore[index]
 
 
 # ---------------------------------------------------------------------------
-# Domain design invariants (documented as "no overlapping intents")
+# Semantic-quality invariants
 # ---------------------------------------------------------------------------
 
-def test_no_positive_example_is_reused_verbatim_across_different_intents() -> None:
+
+def test_examples_are_not_reused_across_intents() -> None:
     seen: dict[str, IntentType] = {}
+
     for intent, definition in INTENT_DEFINITIONS.items():
-        for example in definition.positive_examples:
-            assert example not in seen, (
-                f"Example {example!r} appears as a positive example for both "
-                f"{seen.get(example)} and {intent}"
+        for example in definition.examples:
+            normalized = example.casefold()
+
+            assert normalized not in seen, (
+                f"Example {example!r} is shared by "
+                f"{seen.get(normalized)} and {intent}"
             )
-            seen[example] = intent
+
+            seen[normalized] = intent
 
 
-@pytest.mark.parametrize("intent", list(IntentType))
-def test_negative_examples_do_not_appear_in_the_same_intents_positive_examples(
-    intent: IntentType,
-) -> None:
-    definition = INTENT_DEFINITIONS[intent]
-    assert set(definition.negative_examples).isdisjoint(definition.positive_examples)
+def test_return_exchange_has_its_own_semantic_definition() -> None:
+    definition = get_intent_definition(
+        IntentType.RETURN_EXCHANGE
+    )
+
+    assert definition.intent is IntentType.RETURN_EXCHANGE
+
+
+def test_privacy_security_has_its_own_semantic_definition() -> None:
+    definition = get_intent_definition(
+        IntentType.PRIVACY_SECURITY
+    )
+
+    assert definition.intent is IntentType.PRIVACY_SECURITY
+
+
+def test_unknown_remains_explicitly_defined() -> None:
+    definition = get_intent_definition(
+        IntentType.UNKNOWN
+    )
+
+    assert definition.intent is IntentType.UNKNOWN

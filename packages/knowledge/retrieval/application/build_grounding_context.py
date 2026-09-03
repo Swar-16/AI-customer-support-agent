@@ -3,7 +3,7 @@ from __future__ import annotations
 from packages.knowledge.retrieval.application.retrieve_knowledge import RetrieveKnowledge
 from packages.knowledge.retrieval.context.builder import GroundingContextBuilder
 from packages.knowledge.retrieval.context.models import GroundingContext, GroundingContextBudget
-from packages.knowledge.retrieval.models import RetrievalQuery
+from packages.knowledge.retrieval.query.models import PreparedRetrievalQuery
 from packages.knowledge.retrieval.errors import RetrievalPipelineError
 
 class BuildGroundingContext:
@@ -50,7 +50,7 @@ class BuildGroundingContext:
     def default_budget(self) -> GroundingContextBudget:
         return self._default_budget
 
-    def build(self, *, query: RetrievalQuery, budget: GroundingContextBudget | None = None) -> GroundingContext:
+    def build(self, *, prepared_query: PreparedRetrievalQuery, budget: GroundingContextBudget | None = None) -> GroundingContext:
         """
         Retrieve relevant knowledge and construct bounded grounding context.
 
@@ -59,13 +59,13 @@ class BuildGroundingContext:
 
         Known typed retrieval/context failures intentionally propagate.
         """
-        if not isinstance(query, RetrievalQuery):
-            raise TypeError("query must be a RetrievalQuery instance.")
+        if not isinstance(prepared_query, PreparedRetrievalQuery):
+            raise TypeError("prepared_query must be a PreparedRetrievalQuery instance.")
 
         effective_budget = self._resolve_budget(budget)
-        retrieval_result = self._retrieve_knowledge.retrieve(query=query)
+        retrieval_result = self._retrieve_knowledge.retrieve(prepared_query=prepared_query)
         context = self._context_builder.build(retrieval_result=retrieval_result, budget=effective_budget)
-        if context.query != query:
+        if context.query != retrieval_result.query:
             raise RetrievalPipelineError("Grounding context was produced for a different retrieval query.")
 
         return context

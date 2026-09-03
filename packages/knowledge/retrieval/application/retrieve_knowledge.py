@@ -4,6 +4,7 @@ from packages.knowledge.retrieval.errors import RetrievalPipelineError
 from packages.knowledge.retrieval.fusion.base import FusionInput, RetrievalFusionStrategy
 from packages.knowledge.retrieval.lexical.service import LexicalRetrievalService
 from packages.knowledge.retrieval.models import RetrievalCandidate, RetrievalQuery, RetrievalResult
+from packages.knowledge.retrieval.query.models import PreparedRetrievalQuery
 from packages.knowledge.retrieval.profiles import RetrievalProfile
 from packages.knowledge.retrieval.reranking.service import RerankingService
 from packages.knowledge.retrieval.vector.service import VectorRetrievalService
@@ -15,9 +16,10 @@ class RetrieveKnowledge:
 
     Pipeline:
         
-                 +--> vector retrieval  --+ 
-        query ---|                        |--> fusion --> reranking --> reranking RetrievalResult
-                 +--> lexical retrieval --+
+                                  +--> semantic query --> vector retrieval  --+ 
+        PreparedRetrievalQuery ---|                                           |--> fusion --> reranking 
+                                  +--> lexical query  --> lexical retrieval --+                   ↓
+                                                                                           RetrievalResult
 
     Responsibilities:
       - execute retrieval branches enabled by the configured profile;
@@ -70,43 +72,53 @@ class RetrieveKnowledge:
     def fusion_strategy(self) -> RetrievalFusionStrategy:
         return self._fusion_strategy
 
-    def retrieve(self, *, query: RetrievalQuery) -> RetrievalResult:
+    def retrieve(self, *, prepared_query: PreparedRetrievalQuery) -> RetrievalResult:
         """
         Execute the configured retrieval pipeline.
+
+        The prepared query contains branch-specific query representations:
+
+            semantic_query
+                Used only by vector retrieval.
+
+            lexical_queries[0]
+                Used only by lexical retrieval.
+
+            original_query
+                Used as the canonical user query for fusion, reranking, provenance, and the returned RetrievalResult.
 
         Known typed failures from lower layers intentionally propagate.
 
         This service does not silently degrade from hybrid retrieval to a partial strategy when one branch fails.
-        Such degradation is a product/application policy and should be implemented explicitly above or through a dedicated resilience policy.
         """
-        if not isinstance(query, RetrievalQuery):
-            raise TypeError("query must be a RetrievalQuery instance.")
+        if not isinstance(prepared_query, PreparedRetrievalQuery):
+            raise TypeError("prepared_query must be a PreparedRetrievalQuery instance.")
 
-        rankings = self._retrieve_rankings(query=query)
+        canonical_query = RetrievalQuery(text=prepared_query.original_query, filters=prepared_query.filters)
+        rankings = self._retrieve_rankings(prepared_query=prepared_query)
         if not rankings:
-            return RetrievalResult(query=query, candidates=())
+            return RetrievalResult(query=canonical_query, candidates=())
 
-        candidates = self._combine_rankings(query=query, rankings=rankings)
-
+        candidates = self._combine_rankings(query=canonical_query, rankings=rankings)
         if self._profile.reranking_enabled and candidates:
-            candidates = self._rerank(query=query, candidates=candidates)
+            candidates = self._rerank(query=canonical_query, candidates=candidates)
 
         candidates = candidates[: self._profile.final_candidate_limit]
+        return RetrievalResult(query=canonical_query, candidates=candidates)
 
-        return RetrievalResult(query=query, candidates=candidates)
-
-    def _retrieve_rankings(self, *, query: RetrievalQuery) -> tuple[tuple[RetrievalCandidate, ...], ...,]:
+    def _retrieve_rankings(self, *, prepared_query: PreparedRetrievalQuery) -> tuple[tuple[RetrievalCandidate, ...], ...]:
         rankings: list[tuple[RetrievalCandidate, ...]] = []
-
         if self._profile.vector_enabled:
             vector_service = self._require_vector_service()
-            vector_candidates = vector_service.search(query=query, limit=self._profile.vector_candidate_limit)
+            vector_query = RetrievalQuery(text=prepared_query.semantic_query, filters=prepared_query.filters,)
+            vector_candidates = vector_service.search(query=vector_query, limit=self._profile.vector_candidate_limit)
             if vector_candidates:
                 rankings.append(vector_candidates)
 
         if self._profile.lexical_enabled:
             lexical_service = self._require_lexical_service()
-            lexical_candidates = lexical_service.search(query=query, limit=self._profile.lexical_candidate_limit)
+            lexical_query = RetrievalQuery(text=prepared_query.lexical_queries[0], filters=prepared_query.filters)
+            lexical_candidates = lexical_service.search(query=lexical_query, limit=self._profile.lexical_candidate_limit)
             if lexical_candidates:
                 rankings.append(lexical_candidates)
 

@@ -286,24 +286,14 @@ class IntentClassifier:
         for intent in IntentType:
             definition = INTENT_DEFINITIONS[intent]
 
-            section_parts = [
-                f"- {intent.value}",
-                f"  Description: {definition.description}",
-            ]
+            section_parts = [f"- {intent.value}", f"  Description: {definition.description}"]
 
             if self._config.include_examples_in_prompt:
-                examples = definition.positive_examples[
-                    : self._config.max_examples_per_intent
-                ]
+                examples = definition.examples[: self._config.max_examples_per_intent]
 
                 if examples:
-                    formatted_examples = "; ".join(
-                        repr(example) for example in examples
-                    )
-
-                    section_parts.append(
-                        f"  Examples: {formatted_examples}"
-                    )
+                    formatted_examples = "; ".join(repr(example) for example in examples)
+                    section_parts.append(f"  Examples: {formatted_examples}")
 
             sections.append("\n".join(section_parts))
 
