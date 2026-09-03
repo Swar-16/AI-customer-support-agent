@@ -15,6 +15,7 @@ from packages.database.models.support.user import UserModel
 from packages.database.models.knowledge.chunk import KnowledgeChunkModel
 from packages.database.models.knowledge.document_version import KnowledgeDocumentVersionModel
 from packages.database.models.knowledge.document import KnowledgeDocumentModel
+from packages.database.models.knowledge.chunk_embedding import KnowledgeChunkEmbeddingModel
 
 
 @pytest.fixture(scope="session")
@@ -51,8 +52,9 @@ def _clear_database(session_factory: sessionmaker) -> None:
         session.execute(delete(ConversationModel))
         session.execute(delete(UserModel))
         
+        session.execute(delete(KnowledgeChunkEmbeddingModel))
         session.execute(delete(KnowledgeChunkModel))
-        session.execute(delete(KnowledgeDocumentModel))
         session.execute(delete(KnowledgeDocumentVersionModel))
+        session.execute(delete(KnowledgeDocumentModel))
 
         session.commit()
