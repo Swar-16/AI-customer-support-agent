@@ -77,41 +77,81 @@ class PipelineError(BaseModel):
         return value.strip().upper()
 
 
-class RetrievalContext(BaseModel):
+class EvidenceSourceType(StrEnum):
     """
-    Placeholder contract for retrieval output.
+    Broad origin of evidence used by the AI workflow.
 
-    We deliberately keep this minimal for now.
-    Later this can evolve into richer retrieval objects with:
-    - chunk IDs
-    - document IDs
-    - vector scores
-    - lexical scores
-    - reranker scores
-    - policy versions
+    The orchestration layer deliberately models evidence by source category
+    rather than by concrete infrastructure.
+
+    KNOWLEDGE:
+        Versioned support knowledge such as policies, FAQs, procedures,
+        guides, and other published reference material.
+
+    OPERATIONAL:
+        Runtime business facts such as order state, payment state,
+        subscription state, or account information.
+
+    SYSTEM:
+        Trusted system-produced evidence that does not belong to either
+        customer-facing knowledge or an operational business system.
     """
-    model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-    )
 
-    chunk_id: uuid.UUID | None = None
+    KNOWLEDGE = "knowledge"
+    OPERATIONAL = "operational"
+    SYSTEM = "system"
 
-    document_id: uuid.UUID | None = None
 
-    content: str = Field(
-        min_length=1,
-    )
+class RetrievedEvidence(BaseModel):
+    """
+    Provider-neutral evidence made available to downstream AI stages.
 
-    score: float | None = Field(
-        default=None,
-        ge=0.0,
-    )
+    This is the orchestration boundary for retrieved information.
 
-    metadata: dict[str, Any] = Field(
-        default_factory=dict,
-    )
+    It deliberately does NOT expose knowledge-specific implementation concepts such as:
+        - vector distance
+        - lexical rank
+        - RRF score
+        - embedding model
+        - pgvector
+        - reranker implementation
 
+    Those remain inside the knowledge/retrieval subsystem.
+
+    Likewise, operational tools may later produce this same contract without pretending their results are knowledge-base chunks.
+
+    `source_id` is represented as a string because different evidence sources may use different identifier formats:
+        - UUID knowledge chunk IDs
+        - order IDs
+        - transaction IDs
+        - external system identifiers
+    """
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+    source_type: EvidenceSourceType
+    content: str = Field(min_length=1, max_length=50_000)
+    source_id: str | None = Field(default=None, max_length=255)
+    title: str | None = Field(default=None, max_length=500)
+    section: str | None = Field(default=None, max_length=500)
+    relevance_score: float | None = Field(default=None, ge=0.0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("content")
+    @classmethod
+    def normalize_content(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("content cannot be empty")
+
+        return normalized
+
+    @field_validator("source_id", "title", "section")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+
+        normalized = value.strip()
+        return normalized or None
 
 class AIState(BaseModel):
     """
@@ -142,22 +182,14 @@ class AIState(BaseModel):
     trigger_message_id: uuid.UUID
 
     # Input
-    customer_message: str = Field(
-        min_length=1,
-        max_length=20_000,
-    )
-    conversation_context: str | None = Field(
-        default=None,
-        max_length=50_000,
-    )
+    customer_message: str = Field(min_length=1, max_length=20_000)
+    conversation_context: str | None = Field(default=None, max_length=50_000)
 
     # Pipeline state
     stage: PipelineStage = PipelineStage.RECEIVED
     intent_result: IntentResult | None = None
     decision_result: DecisionResult | None = None
-    retrieval_context: tuple[RetrievalContext, ...] = Field(
-        default_factory=tuple,
-    )
+    retrieved_evidence: tuple[RetrievedEvidence, ...] = Field(default_factory=tuple)
     generated_response: str | None = None
 
     # Future orchestration outputs
@@ -166,20 +198,14 @@ class AIState(BaseModel):
     response_message_id: uuid.UUID | None = None
 
     # Failure / diagnostic state
-    errors: tuple[PipelineError, ...] = Field(
-        default_factory=tuple,
-    )
+    errors: tuple[PipelineError, ...] = Field(default_factory=tuple)
 
     # Execution timestamps
-    started_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
-    )
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
 
     # Free-form non-authoritative orchestration metadata
-    metadata: dict[str, Any] = Field(
-        default_factory=dict,
-    )
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("customer_message")
     @classmethod
@@ -293,48 +319,50 @@ class AIState(BaseModel):
             }
         )
 
-    def with_retrieval_context(self, context: tuple[RetrievalContext, ...]) -> AIState:
+    def with_retrieved_evidence(self, evidence: tuple[RetrievedEvidence, ...]) -> AIState:
         """
-        Return a copy containing retrieved grounding context.
+        Return a copy containing evidence produced by a completed retrieval stage.
+
+        An empty tuple is valid: retrieval may complete successfully without finding sufficiently relevant evidence.
+        Downstream policy/guardrails decide how that situation should be handled.
         """
         if self.decision_result is None:
-            raise ValueError("Cannot attach retrieval context before a decision")
+            raise ValueError("Cannot attach retrieved evidence before a decision")
 
-        return self.model_copy(
-            update={
-                "retrieval_context": context,
-                "stage": PipelineStage.RETRIEVAL_COMPLETED,
-            }
-        )
+        if not isinstance(evidence, tuple):
+            raise TypeError("with_retrieved_evidence() expects tuple[RetrievedEvidence, ...]")
+
+        for index, item in enumerate(evidence):
+            if not isinstance(item, RetrievedEvidence):
+                raise TypeError(f"with_retrieved_evidence() expects every item to be RetrievedEvidence; item {index} is {type(item).__name__}")
+
+        return self.model_copy(update={"retrieved_evidence": evidence, "stage": PipelineStage.RETRIEVAL_COMPLETED,})
 
     def with_generated_response(self, response: str) -> AIState:
         """
-        Return a copy containing generated assistant response.
+        Return a copy containing the generated assistant response.
         """
         if self.decision_result is None:
             raise ValueError("Cannot generate response before decision")
-        
+
+        if not isinstance(response, str):
+            raise TypeError("response must be a string")
+
         normalized = response.strip()
         if not normalized:
             raise ValueError("Generated response cannot be empty")
 
-        return self.model_copy(
-            update={
-                "generated_response": normalized,
-                "stage": PipelineStage.RESPONSE_GENERATED,
-            }
-        )
+        return self.model_copy(update={"generated_response": normalized, "stage": PipelineStage.RESPONSE_GENERATED,})
 
     def with_error(self, error: PipelineError) -> AIState:
         """
         Return a failed-state copy with the new error appended.
         """
+        if not isinstance(error, PipelineError):
+            raise TypeError(f"with_error() expects a PipelineError, got {type(error).__name__}")
+
         return self.model_copy(
-            update={
-                "errors": (*self.errors, error),
-                "stage": PipelineStage.FAILED,
-                "completed_at": datetime.now(timezone.utc),
-            }
+            update={"errors": (*self.errors, error), "stage": PipelineStage.FAILED, "completed_at": datetime.now(timezone.utc),}
         )
 
     def complete(self) -> AIState:

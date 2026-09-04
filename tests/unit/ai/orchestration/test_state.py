@@ -5,10 +5,8 @@ Scope
 -----
 This module covers:
     - PipelineError:      normalization + immutability
-    - RetrievalContext:   field validation + immutability
-    - AIState:            construction, field normalization, stage
-                           invariants, and every `with_*` / `complete`
-                           transition helper.
+    - RetrievedEvidence:  source-neutral evidence validation + immutability
+    - AIState:            construction, field normalization, stage invariants, and every `with_*` / `complete` transition helper.
 
 Notes on test doubles
 ----------------------
@@ -24,7 +22,7 @@ changes to IntentResult/DecisionResult.
 A second, important implementation detail this suite locks in with
 explicit tests: `BaseModel.model_copy()` does **not** re-run field or
 model validators in pydantic v2. That means the `with_intent`,
-`with_decision`, `with_retrieval_context`, `with_generated_response`,
+`with_decision`, `with_retrieved_evidence`, `with_generated_response`,
 `with_error`, and `complete` helpers only get invariant protection
 from their own explicit `if ... raise ValueError(...)` guards, *not*
 from `validate_stage_invariants`. The invariant validator only fires
@@ -41,10 +39,10 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from pydantic import ValidationError
 
-from packages.ai.decision.schemas import DecisionResult
+from packages.ai.decision.schemas import DecisionReasonCode, DecisionResult, DecisionType
 from packages.ai.intent.schemas import IntentResult
 from packages.ai.intent.taxonomy import IntentType
-from packages.ai.orchestration.state import AIState, PipelineError, PipelineStage, RetrievalContext
+from packages.ai.orchestration.state import AIState, EvidenceSourceType, PipelineError, PipelineStage, RetrievedEvidence
 from packages.ai.decision.schemas import DecisionReasonCode, DecisionResult, DecisionType
 
 # ---------------------------------------------------------------------------
@@ -155,33 +153,148 @@ class TestPipelineError:
 
 
 # ---------------------------------------------------------------------------
-# RetrievalContext
+# RetrievedEvidence
 # ---------------------------------------------------------------------------
 
 
-class TestRetrievalContext:
-    def test_valid_minimal_context(self) -> None:
-        ctx = RetrievalContext(content="relevant chunk text")
-        assert ctx.chunk_id is None
-        assert ctx.score is None
-        assert ctx.metadata == {}
+class TestRetrievedEvidence:
+    def test_valid_minimal_knowledge_evidence(self) -> None:
+        evidence = RetrievedEvidence(
+            source_type=EvidenceSourceType.KNOWLEDGE,
+            content="Relevant policy text.",
+        )
 
-    def test_empty_content_rejected(self) -> None:
+        assert evidence.source_type is EvidenceSourceType.KNOWLEDGE
+        assert evidence.content == "Relevant policy text."
+        assert evidence.source_id is None
+        assert evidence.title is None
+        assert evidence.section is None
+        assert evidence.relevance_score is None
+        assert evidence.metadata == {}
+
+    @pytest.mark.parametrize(
+        "source_type",
+        [
+            EvidenceSourceType.KNOWLEDGE,
+            EvidenceSourceType.OPERATIONAL,
+            EvidenceSourceType.SYSTEM,
+        ],
+    )
+    def test_all_supported_source_types_are_valid(
+        self,
+        source_type: EvidenceSourceType,
+    ) -> None:
+        evidence = RetrievedEvidence(
+            source_type=source_type,
+            content="Trusted evidence.",
+        )
+
+        assert evidence.source_type is source_type
+
+    def test_content_is_stripped(self) -> None:
+        evidence = RetrievedEvidence(
+            source_type=EvidenceSourceType.KNOWLEDGE,
+            content="  Refunds may take several business days.  ",
+        )
+
+        assert evidence.content == "Refunds may take several business days."
+
+    @pytest.mark.parametrize("blank", ["", "   ", "\n\t"])
+    def test_blank_content_rejected(self, blank: str) -> None:
         with pytest.raises(ValidationError):
-            RetrievalContext(content="")
+            RetrievedEvidence(
+                source_type=EvidenceSourceType.KNOWLEDGE,
+                content=blank,
+            )
 
-    def test_negative_score_rejected(self) -> None:
+    def test_optional_text_fields_are_stripped(self) -> None:
+        evidence = RetrievedEvidence(
+            source_type=EvidenceSourceType.KNOWLEDGE,
+            content="Policy text.",
+            source_id="  chunk-123  ",
+            title="  Refund Policy  ",
+            section="  Processing Time  ",
+        )
+
+        assert evidence.source_id == "chunk-123"
+        assert evidence.title == "Refund Policy"
+        assert evidence.section == "Processing Time"
+
+    @pytest.mark.parametrize(
+        "field_name",
+        [
+            "source_id",
+            "title",
+            "section",
+        ],
+    )
+    def test_blank_optional_text_normalized_to_none(
+        self,
+        field_name: str,
+    ) -> None:
+        evidence = RetrievedEvidence(
+            source_type=EvidenceSourceType.KNOWLEDGE,
+            content="Policy text.",
+            **{field_name: "   "},
+        )
+
+        assert getattr(evidence, field_name) is None
+
+    def test_zero_relevance_score_allowed(self) -> None:
+        evidence = RetrievedEvidence(
+            source_type=EvidenceSourceType.KNOWLEDGE,
+            content="Policy text.",
+            relevance_score=0.0,
+        )
+
+        assert evidence.relevance_score == 0.0
+
+    def test_positive_relevance_score_allowed(self) -> None:
+        evidence = RetrievedEvidence(
+            source_type=EvidenceSourceType.KNOWLEDGE,
+            content="Policy text.",
+            relevance_score=0.87,
+        )
+
+        assert evidence.relevance_score == pytest.approx(0.87)
+
+    def test_negative_relevance_score_rejected(self) -> None:
         with pytest.raises(ValidationError):
-            RetrievalContext(content="text", score=-0.01)
+            RetrievedEvidence(
+                source_type=EvidenceSourceType.KNOWLEDGE,
+                content="Policy text.",
+                relevance_score=-0.01,
+            )
 
-    def test_zero_score_allowed(self) -> None:
-        ctx = RetrievalContext(content="text", score=0.0)
-        assert ctx.score == 0.0
+    def test_metadata_is_preserved(self) -> None:
+        evidence = RetrievedEvidence(
+            source_type=EvidenceSourceType.KNOWLEDGE,
+            content="Policy text.",
+            metadata={
+                "document_id": "doc-123",
+                "version_id": "version-456",
+            },
+        )
+
+        assert evidence.metadata["document_id"] == "doc-123"
+        assert evidence.metadata["version_id"] == "version-456"
 
     def test_is_frozen(self) -> None:
-        ctx = RetrievalContext(content="text")
+        evidence = RetrievedEvidence(
+            source_type=EvidenceSourceType.KNOWLEDGE,
+            content="Policy text.",
+        )
+
         with pytest.raises(ValidationError):
-            ctx.content = "other"  # type: ignore[misc]
+            evidence.content = "Changed."  # type: ignore[misc]
+
+    def test_rejects_unknown_fields(self) -> None:
+        with pytest.raises(ValidationError):
+            RetrievedEvidence(
+                source_type=EvidenceSourceType.KNOWLEDGE,
+                content="Policy text.",
+                unknown_field="nope",  # type: ignore[call-arg]
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +310,7 @@ class TestAIStateConstruction:
         assert state.customer_message == "My order hasn't arrived yet."
         assert state.intent_result is None
         assert state.decision_result is None
-        assert state.retrieval_context == ()
+        assert state.retrieved_evidence == ()
         assert state.errors == ()
         assert state.generated_response is None
         assert state.completed_at is None
@@ -376,6 +489,18 @@ class TestAIStateInvariantsOnDirectConstruction:
         """`validate_assignment=True` means invariants are re-checked on mutation too."""
         with pytest.raises(ValidationError, match="requires intent_result"):
             received_state.stage = PipelineStage.INTENT_CLASSIFIED
+            
+    def test_retrieval_completed_allows_empty_evidence(self, base_kwargs: dict, intent_result: IntentResult, decision_result: DecisionResult) -> None:
+        state = AIState(
+            **base_kwargs,
+            stage=PipelineStage.RETRIEVAL_COMPLETED,
+            intent_result=intent_result,
+            decision_result=decision_result,
+            retrieved_evidence=(),
+        )
+
+        assert state.stage is PipelineStage.RETRIEVAL_COMPLETED
+        assert state.retrieved_evidence == ()
 
 
 # ---------------------------------------------------------------------------
@@ -456,27 +581,157 @@ class TestWithDecision:
 
 
 # ---------------------------------------------------------------------------
-# AIState — with_retrieval_context
+# AIState — with_retrieved_evidence
 # ---------------------------------------------------------------------------
 
 
 class TestWithRetrievalContext:
-    def test_retrieval_before_decision_rejected(self, intent_classified_state: AIState) -> None:
-        ctx = (RetrievalContext(content="some chunk"),)
-        with pytest.raises(ValueError, match="Cannot attach retrieval context before a decision"):
-            intent_classified_state.with_retrieval_context(ctx)
+    class TestWithRetrievedEvidence:
+        def test_retrieval_before_decision_rejected(
+            self,
+            intent_classified_state: AIState,
+        ) -> None:
+            evidence = (
+                RetrievedEvidence(
+                    source_type=EvidenceSourceType.KNOWLEDGE,
+                    content="Some policy text.",
+                ),
+            )
 
-    def test_transitions_to_retrieval_completed(self, decision_made_state: AIState) -> None:
-        ctx = (RetrievalContext(content="chunk one"), RetrievalContext(content="chunk two"))
-        new_state = decision_made_state.with_retrieval_context(ctx)
+            with pytest.raises(
+                ValueError,
+                match="Cannot attach retrieved evidence before a decision",
+            ):
+                intent_classified_state.with_retrieved_evidence(evidence)
 
-        assert new_state.stage is PipelineStage.RETRIEVAL_COMPLETED
-        assert new_state.retrieval_context == ctx
+        def test_transitions_to_retrieval_completed(
+            self,
+            decision_made_state: AIState,
+        ) -> None:
+            evidence = (
+                RetrievedEvidence(
+                    source_type=EvidenceSourceType.KNOWLEDGE,
+                    content="Chunk one.",
+                    source_id="chunk-1",
+                ),
+                RetrievedEvidence(
+                    source_type=EvidenceSourceType.KNOWLEDGE,
+                    content="Chunk two.",
+                    source_id="chunk-2",
+                ),
+            )
 
-    def test_empty_retrieval_context_allowed(self, decision_made_state: AIState) -> None:
-        new_state = decision_made_state.with_retrieval_context(())
-        assert new_state.retrieval_context == ()
-        assert new_state.stage is PipelineStage.RETRIEVAL_COMPLETED
+            new_state = decision_made_state.with_retrieved_evidence(evidence)
+
+            assert new_state.stage is PipelineStage.RETRIEVAL_COMPLETED
+            assert new_state.retrieved_evidence == evidence
+
+        def test_empty_evidence_allowed(
+            self,
+            decision_made_state: AIState,
+        ) -> None:
+            new_state = decision_made_state.with_retrieved_evidence(())
+
+            assert new_state.retrieved_evidence == ()
+            assert new_state.stage is PipelineStage.RETRIEVAL_COMPLETED
+
+        def test_does_not_mutate_original(
+            self,
+            decision_made_state: AIState,
+        ) -> None:
+            evidence = (
+                RetrievedEvidence(
+                    source_type=EvidenceSourceType.KNOWLEDGE,
+                    content="Policy text.",
+                ),
+            )
+
+            decision_made_state.with_retrieved_evidence(evidence)
+
+            assert decision_made_state.stage is PipelineStage.DECISION_MADE
+            assert decision_made_state.retrieved_evidence == ()
+
+        def test_returns_new_instance(
+            self,
+            decision_made_state: AIState,
+        ) -> None:
+            evidence = (
+                RetrievedEvidence(
+                    source_type=EvidenceSourceType.KNOWLEDGE,
+                    content="Policy text.",
+                ),
+            )
+
+            new_state = decision_made_state.with_retrieved_evidence(evidence)
+
+            assert new_state is not decision_made_state
+
+        def test_non_tuple_rejected(
+            self,
+            decision_made_state: AIState,
+        ) -> None:
+            evidence = [
+                RetrievedEvidence(
+                    source_type=EvidenceSourceType.KNOWLEDGE,
+                    content="Policy text.",
+                )
+            ]
+
+            with pytest.raises(
+                TypeError,
+                match=r"tuple\[RetrievedEvidence",
+            ):
+                decision_made_state.with_retrieved_evidence(  # type: ignore[arg-type]
+                    evidence
+                )
+
+        def test_tuple_with_wrong_item_type_rejected(
+            self,
+            decision_made_state: AIState,
+        ) -> None:
+            evidence = (
+                RetrievedEvidence(
+                    source_type=EvidenceSourceType.KNOWLEDGE,
+                    content="Valid evidence.",
+                ),
+                "not-evidence",
+            )
+
+            with pytest.raises(
+                TypeError,
+                match="every item",
+            ):
+                decision_made_state.with_retrieved_evidence(  # type: ignore[arg-type]
+                    evidence
+                )
+
+        def test_mixed_evidence_sources_allowed(
+            self,
+            decision_made_state: AIState,
+        ) -> None:
+            evidence = (
+                RetrievedEvidence(
+                    source_type=EvidenceSourceType.KNOWLEDGE,
+                    content="Refund processing normally takes several days.",
+                ),
+                RetrievedEvidence(
+                    source_type=EvidenceSourceType.OPERATIONAL,
+                    content="Refund transaction is currently processing.",
+                    source_id="txn-123",
+                ),
+            )
+
+            new_state = decision_made_state.with_retrieved_evidence(evidence)
+
+            assert len(new_state.retrieved_evidence) == 2
+            assert (
+                new_state.retrieved_evidence[0].source_type
+                is EvidenceSourceType.KNOWLEDGE
+            )
+            assert (
+                new_state.retrieved_evidence[1].source_type
+                is EvidenceSourceType.OPERATIONAL
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -499,6 +754,16 @@ class TestWithGeneratedResponse:
     def test_generated_response_before_decision_rejected(self, received_state: AIState) -> None:
         with pytest.raises(ValueError, match="Cannot generate response before decision"):
             received_state.with_generated_response("early response")
+            
+    def test_wrong_response_type_rejected(self, decision_made_state: AIState) -> None:
+        with pytest.raises(TypeError, match="response must be a string"):
+            decision_made_state.with_generated_response(123)  # type: ignore[arg-type]
+            
+    def test_does_not_mutate_original(self, decision_made_state: AIState) -> None:
+        decision_made_state.with_generated_response("Generated answer.")
+
+        assert decision_made_state.stage is PipelineStage.DECISION_MADE
+        assert decision_made_state.generated_response is None
 
 
 # ---------------------------------------------------------------------------
@@ -541,6 +806,10 @@ class TestWithError:
     def test_can_fail_from_any_stage(self, decision_made_state: AIState) -> None:
         new_state = decision_made_state.with_error(make_error(PipelineStage.DECISION_MADE))
         assert new_state.stage is PipelineStage.FAILED
+        
+    def test_wrong_error_type_rejected(self, received_state: AIState) -> None:
+        with pytest.raises(TypeError, match="expects a PipelineError"):
+            received_state.with_error("boom")  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -586,24 +855,38 @@ class TestComplete:
 
 
 class TestFullPipelineFlow:
-    def test_full_happy_path_produces_completed_state(
-        self,
-        received_state: AIState,
-        intent_result: IntentResult,
-        decision_result: DecisionResult,
-    ) -> None:
+    def test_full_happy_path_produces_completed_state(self, received_state: AIState, intent_result: IntentResult, decision_result: DecisionResult) -> None:
         state = received_state
         state = state.with_intent(intent_result)
         state = state.with_decision(decision_result)
-        state = state.with_retrieval_context((RetrievalContext(content="kb article"),))
-        state = state.with_generated_response("Your refund has been issued.")
+        state = state.with_retrieved_evidence(
+            (
+                RetrievedEvidence(
+                    source_type=EvidenceSourceType.KNOWLEDGE,
+                    source_id="chunk-123",
+                    title="Refund Policy",
+                    section="Processing Time",
+                    content="Approved refunds are generally processed within several business days.",
+                    relevance_score=0.91,
+                ),
+            )
+        )
+
+        state = state.with_generated_response(
+            "Approved refunds are generally processed within several business days."
+        )
+
         state = state.complete()
 
         assert state.stage is PipelineStage.COMPLETED
         assert state.intent_result is intent_result
         assert state.decision_result is decision_result
-        assert len(state.retrieval_context) == 1
-        assert state.generated_response == "Your refund has been issued."
+        assert len(state.retrieved_evidence) == 1
+        evidence = state.retrieved_evidence[0]
+        assert evidence.source_type is EvidenceSourceType.KNOWLEDGE
+        assert evidence.source_id == "chunk-123"
+        assert evidence.title == "Refund Policy"
+        assert state.generated_response == "Approved refunds are generally processed within several business days."
         assert state.completed_at is not None
         assert state.errors == ()
 
@@ -614,6 +897,7 @@ class TestFullPipelineFlow:
         decision_result: DecisionResult,
     ) -> None:
         original_stage = received_state.stage
+
         state = received_state.with_intent(intent_result)
         state = state.with_decision(decision_result)
         state.complete()
@@ -621,3 +905,4 @@ class TestFullPipelineFlow:
         assert received_state.stage == original_stage
         assert received_state.intent_result is None
         assert received_state.decision_result is None
+        assert received_state.retrieved_evidence == ()
