@@ -1,3 +1,4 @@
+# AI-customer-support-agent\packages\database\repositories\knowledge\chunk_repository.py
 from __future__ import annotations
 from uuid import UUID
 from sqlalchemy import delete, select

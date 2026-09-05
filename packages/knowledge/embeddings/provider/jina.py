@@ -1,3 +1,4 @@
+# AI-customer-support-agent\packages\knowledge\embeddings\provider\jina.py
 from __future__ import annotations
 import math
 from collections.abc import Sequence

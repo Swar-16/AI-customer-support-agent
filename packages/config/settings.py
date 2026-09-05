@@ -1,3 +1,4 @@
+# AI-customer-support-agent\packages\config\settings.py
 from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
@@ -36,6 +37,10 @@ class Settings(BaseSettings):
     jina_embedding_model: str = "jina-embeddings-v4"
     jina_embedding_timeout_seconds: float = 30.0
     
+    ## RAG / Grounding
+    rag_context_max_tokens: int = 6000
+    rag_context_max_blocks: int = 8
+    
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
         case_sensitive=False,
@@ -69,6 +74,12 @@ class Settings(BaseSettings):
             raise ValueError("jina_embedding_model must not be blank.")
 
         self.jina_embedding_model = self.jina_embedding_model.strip()
+        
+        if self.rag_context_max_tokens <= 0:
+            raise ValueError("rag_context_max_tokens must be greater than zero.")
+
+        if self.rag_context_max_blocks <= 0:
+            raise ValueError("rag_context_max_blocks must be greater than zero.")
         
         return self
     

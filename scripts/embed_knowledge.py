@@ -1,3 +1,4 @@
+# AI-customer-support-agent\scripts\embed_knowledge.py
 from __future__ import annotations
 import argparse
 import sys

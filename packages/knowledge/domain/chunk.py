@@ -1,3 +1,4 @@
+# AI-customer-support-agent\packages\knowledge\domain\chunk.py
 from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone

@@ -1,3 +1,4 @@
+# AI-customer-support-agent\packages\knowledge\ingestion\chunking\models.py
 from __future__ import annotations
 from collections.abc import Iterable
 from types import MappingProxyType

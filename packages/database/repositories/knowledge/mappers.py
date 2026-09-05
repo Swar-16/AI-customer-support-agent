@@ -1,3 +1,4 @@
+# AI-customer-support-agent\packages\database\repositories\knowledge\mappers.py
 from __future__ import annotations
 
 from packages.database.models.knowledge.chunk import KnowledgeChunkModel

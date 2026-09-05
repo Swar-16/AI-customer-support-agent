@@ -413,7 +413,7 @@ class TestAIStateInvariantsOnDirectConstruction:
         intent_result: IntentResult,
         decision_result: DecisionResult,
     ) -> None:
-        with pytest.raises(ValidationError, match="RESPONSE_GENERATED requires generated_response"):
+        with pytest.raises(ValidationError, match="response_generated requires generated_response",):
             AIState(
                 **base_kwargs,
                 stage=PipelineStage.RESPONSE_GENERATED,
@@ -436,6 +436,44 @@ class TestAIStateInvariantsOnDirectConstruction:
             generated_response="We're looking into it.",
         )
         assert state.generated_response == "We're looking into it."
+        
+    def test_guardrails_completed_requires_generated_response(
+        self,
+        base_kwargs: dict,
+        intent_result: IntentResult,
+        decision_result: DecisionResult,
+    ) -> None:
+        with pytest.raises(
+            ValidationError,
+            match="guardrails_completed requires generated_response",
+        ):
+            AIState(
+                **base_kwargs,
+                stage=PipelineStage.GUARDRAILS_COMPLETED,
+                intent_result=intent_result,
+                decision_result=decision_result,
+                generated_response=None,
+            )
+
+
+    def test_guardrails_completed_with_response_is_valid(
+        self,
+        base_kwargs: dict,
+        intent_result: IntentResult,
+        decision_result: DecisionResult,
+    ) -> None:
+        state = AIState(
+            **base_kwargs,
+            stage=PipelineStage.GUARDRAILS_COMPLETED,
+            intent_result=intent_result,
+            decision_result=decision_result,
+            generated_response="This response passed guardrails.",
+        )
+
+        assert state.stage is PipelineStage.GUARDRAILS_COMPLETED
+        assert state.generated_response == (
+            "This response passed guardrails."
+        )
 
     def test_completed_requires_completed_at(
         self,
@@ -767,6 +805,159 @@ class TestWithGeneratedResponse:
 
 
 # ---------------------------------------------------------------------------
+# AIState — with_guardrails_completed
+# ---------------------------------------------------------------------------
+
+
+class TestWithGuardrailsCompleted:
+    @pytest.fixture
+    def response_generated_state(
+        self,
+        decision_made_state: AIState,
+    ) -> AIState:
+        return decision_made_state.with_generated_response(
+            "This is the grounded customer response."
+        )
+
+    def test_transitions_to_guardrails_completed(
+        self,
+        response_generated_state: AIState,
+    ) -> None:
+        new_state = (
+            response_generated_state.with_guardrails_completed()
+        )
+
+        assert (
+            new_state.stage
+            is PipelineStage.GUARDRAILS_COMPLETED
+        )
+
+    def test_preserves_generated_response(
+        self,
+        response_generated_state: AIState,
+    ) -> None:
+        new_state = (
+            response_generated_state.with_guardrails_completed()
+        )
+
+        assert (
+            new_state.generated_response
+            == response_generated_state.generated_response
+        )
+
+    def test_preserves_prior_pipeline_outputs(
+        self,
+        response_generated_state: AIState,
+    ) -> None:
+        new_state = (
+            response_generated_state.with_guardrails_completed()
+        )
+
+        assert (
+            new_state.intent_result
+            is response_generated_state.intent_result
+        )
+
+        assert (
+            new_state.decision_result
+            is response_generated_state.decision_result
+        )
+
+        assert (
+            new_state.retrieved_evidence
+            == response_generated_state.retrieved_evidence
+        )
+
+        assert (
+            new_state.customer_message
+            == response_generated_state.customer_message
+        )
+
+    def test_returns_new_instance(
+        self,
+        response_generated_state: AIState,
+    ) -> None:
+        new_state = (
+            response_generated_state.with_guardrails_completed()
+        )
+
+        assert new_state is not response_generated_state
+
+    def test_does_not_mutate_original(
+        self,
+        response_generated_state: AIState,
+    ) -> None:
+        response_generated_state.with_guardrails_completed()
+
+        assert (
+            response_generated_state.stage
+            is PipelineStage.RESPONSE_GENERATED
+        )
+
+    @pytest.mark.parametrize(
+        "source_stage",
+        [
+            PipelineStage.RECEIVED,
+            PipelineStage.INTENT_CLASSIFIED,
+            PipelineStage.DECISION_MADE,
+            PipelineStage.RETRIEVAL_COMPLETED,
+        ],
+    )
+    def test_rejects_transition_before_response_generated(
+        self,
+        base_kwargs: dict,
+        intent_result: IntentResult,
+        decision_result: DecisionResult,
+        source_stage: PipelineStage,
+    ) -> None:
+        kwargs = dict(base_kwargs)
+
+        if source_stage in {
+            PipelineStage.INTENT_CLASSIFIED,
+            PipelineStage.DECISION_MADE,
+            PipelineStage.RETRIEVAL_COMPLETED,
+        }:
+            kwargs["intent_result"] = intent_result
+
+        if source_stage in {
+            PipelineStage.DECISION_MADE,
+            PipelineStage.RETRIEVAL_COMPLETED,
+        }:
+            kwargs["decision_result"] = decision_result
+
+        state = AIState(
+            **kwargs,
+            stage=source_stage,
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=(
+                "Guardrails can only complete "
+                "after response generation"
+            ),
+        ):
+            state.with_guardrails_completed()
+
+    def test_rejects_repeated_guardrail_completion(
+        self,
+        response_generated_state: AIState,
+    ) -> None:
+        completed = (
+            response_generated_state.with_guardrails_completed()
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=(
+                "Guardrails can only complete "
+                "after response generation"
+            ),
+        ):
+            completed.with_guardrails_completed()
+
+
+# ---------------------------------------------------------------------------
 # AIState — with_error / FAILED
 # ---------------------------------------------------------------------------
 
@@ -876,6 +1067,9 @@ class TestFullPipelineFlow:
             "Approved refunds are generally processed within several business days."
         )
 
+        assert state.stage is PipelineStage.RESPONSE_GENERATED
+        state = state.with_guardrails_completed()
+        assert state.stage is PipelineStage.GUARDRAILS_COMPLETED
         state = state.complete()
 
         assert state.stage is PipelineStage.COMPLETED

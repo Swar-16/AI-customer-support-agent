@@ -1,3 +1,4 @@
+# AI-customer-support-agent\packages\application\knowledge\models.py
 from __future__ import annotations
 from dataclasses import dataclass, field
 from types import MappingProxyType

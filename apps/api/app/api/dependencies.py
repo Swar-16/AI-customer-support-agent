@@ -1,3 +1,4 @@
+# AI-customer-support-agent\apps\api\app\api\dependencies.py
 from __future__ import annotations
 import uuid
 from uuid6 import uuid7

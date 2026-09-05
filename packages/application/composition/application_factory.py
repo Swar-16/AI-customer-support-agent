@@ -1,3 +1,4 @@
+# AI-customer-support-agent\packages\application\composition\application_factory.py
 from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -12,6 +13,10 @@ from packages.application.conversations.process_customer_message import ProcessC
 from packages.config.settings import Settings
 from packages.database.session import SessionLocal
 from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
+from packages.application.composition.knowledge_embedding_factory import create_knowledge_embedding_services
+from packages.knowledge.retrieval.context.models import GroundingContextBudget
+from packages.knowledge.retrieval.profiles import create_default_customer_support_profile
+from packages.knowledge.embeddings.input.contextual import ContextualEmbeddingInputBuilder
 
 SessionFactory = sessionmaker[Session]
 ProviderFactory = Callable[..., LLMProvider]
@@ -84,6 +89,13 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
     resolved_provider = _resolve_provider(settings=settings, base_provider=base_provider)
     resolved_observer = _resolve_observer(observer=observer)
     pipeline_factory = AIPipelineFactory(base_provider=resolved_provider, observer=resolved_observer)
+    embedding_services = create_knowledge_embedding_services(settings)
+    retrieval_profile = create_default_customer_support_profile()
+    embedding_input_builder = ContextualEmbeddingInputBuilder()
+    grounding_budget = GroundingContextBudget(
+        max_tokens=settings.rag_context_max_tokens,
+        max_blocks=settings.rag_context_max_blocks,
+    )
 
     def uow_factory() -> SqlAlchemyUnitOfWork:
         """
@@ -93,11 +105,13 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         """
         return SqlAlchemyUnitOfWork(session_factory=session_factory)
 
-    process_customer_message = (
-        ProcessCustomerMessage(
-            uow_factory=uow_factory,
-            pipeline_factory=pipeline_factory,
-        )
+    process_customer_message = ProcessCustomerMessage(
+        uow_factory=uow_factory,
+        pipeline_factory=pipeline_factory,
+        embedding_provider=embedding_services.provider,
+        embedding_input_descriptor=embedding_input_builder.descriptor,
+        retrieval_profile=retrieval_profile,
+        grounding_context_budget=grounding_budget,
     )
 
     return ApplicationServices(

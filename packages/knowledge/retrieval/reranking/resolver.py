@@ -1,3 +1,4 @@
+# AI-customer-support-agent\packages\knowledge\retrieval\reranking\resolver.py
 from __future__ import annotations
 from collections.abc import Mapping
 from types import MappingProxyType

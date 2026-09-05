@@ -1,3 +1,4 @@
+# AI-customer-support-agent\packages\knowledge\domain\errors.py
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any

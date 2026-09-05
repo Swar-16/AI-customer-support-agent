@@ -1,3 +1,4 @@
+# AI-customer-support-agent\packages\knowledge\embeddings\resolver.py
 from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from types import MappingProxyType

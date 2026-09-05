@@ -1,3 +1,4 @@
+# AI-customer-support-agent\packages\database\repositories\support\conversation_repository.py
 from __future__ import annotations
 import uuid
 from collections.abc import Sequence

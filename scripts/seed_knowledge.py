@@ -1,3 +1,4 @@
+# AI-customer-support-agent\scripts\seed_knowledge.py
 from __future__ import annotations
 import hashlib
 import sys

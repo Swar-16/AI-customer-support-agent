@@ -1,3 +1,4 @@
+# AI-customer-support-agent\apps\api\app\api\v1\schemas\conversations.py
 from __future__ import annotations
 import uuid
 from pydantic import BaseModel, ConfigDict, Field, field_validator

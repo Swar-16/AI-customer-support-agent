@@ -1,3 +1,4 @@
+# AI-customer-support-agent\packages\knowledge\embeddings\provider\base.py
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Sequence

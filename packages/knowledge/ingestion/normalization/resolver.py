@@ -1,3 +1,4 @@
+# AI-customer-support-agent\packages\knowledge\ingestion\normalization\resolver.py
 from __future__ import annotations
 from collections.abc import Iterable
 from packages.knowledge.domain.enums import KnowledgeSourceType
