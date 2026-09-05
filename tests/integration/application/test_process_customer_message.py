@@ -1,34 +1,128 @@
+# tests/integration/application/test_process_customer_message.py
+
 from __future__ import annotations
+
 import uuid
-from uuid6 import uuid7
 from decimal import Decimal
+
 import pytest
 from sqlalchemy import create_engine, delete, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import sessionmaker
+from uuid6 import uuid7
 
-from packages.ai.intent.schemas import IntentEntities
+from packages.ai.generation.models import GroundedGenerationResult
+from packages.ai.intent.schemas import IntentResult
+from packages.ai.orchestration.state import PipelineStage
 from packages.ai.providers.mock import MockLLMProvider, MockProviderConfig
-from packages.application.composition.ai_pipeline_factory import AIPipelineFactory
-from packages.application.conversations.process_customer_message import ProcessCustomerMessage, ProcessCustomerMessageCommand
+
+from packages.application.composition.ai_pipeline_factory import (
+    AIPipelineFactory,
+)
+from packages.application.conversations.process_customer_message import (
+    ProcessCustomerMessage,
+    ProcessCustomerMessageCommand,
+)
+
+from packages.config.settings import get_settings
+
 from packages.database.models.ai.decision import AIDecisionModel
-from packages.database.models.ai.intent_prediction import IntentPredictionModel
+from packages.database.models.ai.intent_prediction import (
+    IntentPredictionModel,
+)
 from packages.database.models.ai.llm_call import LLMCallModel
 from packages.database.models.ai.run import AIRunModel
-from packages.database.models.support.conversation import ConversationModel
+
+from packages.database.models.support.conversation import (
+    ConversationModel,
+)
 from packages.database.models.support.message import MessageModel
 from packages.database.models.support.user import UserModel
-from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
-from packages.config.settings import get_settings
-from packages.ai.orchestration.state import PipelineStage
 
-# Test DB
+from packages.database.unit_of_work.sqlalchemy_uow import (
+    SqlAlchemyUnitOfWork,
+)
+
+from packages.knowledge.embeddings.models import (
+    EmbeddingInputDescriptor,
+)
+from packages.knowledge.embeddings.provider.base import (
+    EmbeddingProvider,
+    EmbeddingProviderDescriptor,
+)
+from packages.knowledge.retrieval.context.models import (
+    GroundingContextBudget,
+)
+from packages.knowledge.retrieval.profiles import RetrievalProfile
+
+
+# ---------------------------------------------------------------------------
+# Test database
+# ---------------------------------------------------------------------------
+
+
 test_settings = get_settings("test")
-TEST_DATABASE_URL = test_settings.database_url.render_as_string(hide_password=False)
+
+TEST_DATABASE_URL = (
+    test_settings.database_url.render_as_string(
+        hide_password=False
+    )
+)
+
 
 pytestmark = pytest.mark.skipif(
     not TEST_DATABASE_URL,
-    reason="TEST_DATABASE_URL is required for PostgreSQL integration tests",
+    reason=(
+        "TEST_DATABASE_URL is required for "
+        "PostgreSQL integration tests"
+    ),
 )
+
+
+# ---------------------------------------------------------------------------
+# Deterministic embedding provider
+# ---------------------------------------------------------------------------
+
+
+class DeterministicEmbeddingProvider(EmbeddingProvider):
+    """
+    Deterministic embedding provider used only at the external embedding
+    boundary.
+
+    The application/retrieval stack above this provider remains real.
+
+    This provider deliberately performs no network I/O.
+    """
+
+    _DESCRIPTOR = EmbeddingProviderDescriptor(
+        provider="integration-test",
+        model="deterministic-v1",
+        revision="1",
+        dimensions=3,
+    )
+
+    @property
+    def descriptor(self) -> EmbeddingProviderDescriptor:
+        return self._DESCRIPTOR
+
+    def embed_documents(
+        self,
+        texts: list[str],
+    ) -> list[list[float]]:
+        return [
+            [1.0, 0.0, 0.0]
+            for _ in texts
+        ]
+
+    def embed_query(
+        self,
+        text: str,
+    ) -> list[float]:
+        return [1.0, 0.0, 0.0]
+
+
+# ---------------------------------------------------------------------------
+# Database fixtures
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="session")
@@ -39,8 +133,11 @@ def test_engine():
         TEST_DATABASE_URL,
         pool_pre_ping=True,
     )
+
     yield engine
+
     engine.dispose()
+
 
 @pytest.fixture(scope="session")
 def test_session_factory(test_engine):
@@ -51,14 +148,18 @@ def test_session_factory(test_engine):
     )
 
 
-# Seed data
 @pytest.fixture
 def seeded_conversation(test_session_factory):
     """
-    Create an isolated customer + conversation for one test.
-    Cleanup happens explicitly because ProcessCustomerMessage itself commits.
+    Create one isolated customer + conversation.
+
+    ProcessCustomerMessage commits its own transaction, therefore cleanup is
+    explicit rather than transaction-rollback based.
     """
-    external_id = f"integration-user-{uuid7()}"
+
+    external_id = (
+        f"integration-user-{uuid7()}"
+    )
 
     with test_session_factory() as session:
         user = UserModel(
@@ -90,211 +191,684 @@ def seeded_conversation(test_session_factory):
         "conversation_id": conversation_id,
     }
 
-    # Cleanup
-    with test_session_factory() as session:
-        # Most children should cascade appropriately, but explicit cleanup
-        # keeps this test independent of cascade implementation details.
+    # ------------------------------------------------------------------
+    # Explicit cleanup
+    # ------------------------------------------------------------------
 
-        run_ids = tuple(session.scalars(
-                            select(AIRunModel.id)
-                            .where(AIRunModel.conversation_id == conversation_id))
-                        )
+    with test_session_factory() as session:
+        run_ids = tuple(
+            session.scalars(
+                select(AIRunModel.id)
+                .where(
+                    AIRunModel.conversation_id
+                    == conversation_id
+                )
+            )
+        )
 
         if run_ids:
             session.execute(
                 delete(AIDecisionModel)
-                .where(AIDecisionModel.ai_run_id.in_(run_ids))
+                .where(
+                    AIDecisionModel.ai_run_id.in_(
+                        run_ids
+                    )
+                )
             )
 
             session.execute(
                 delete(IntentPredictionModel)
-                .where(IntentPredictionModel.ai_run_id.in_(run_ids))
+                .where(
+                    IntentPredictionModel.ai_run_id.in_(
+                        run_ids
+                    )
+                )
             )
 
             session.execute(
                 delete(LLMCallModel)
-                .where(LLMCallModel.ai_run_id.in_(run_ids))
+                .where(
+                    LLMCallModel.ai_run_id.in_(
+                        run_ids
+                    )
+                )
             )
 
             session.execute(
                 delete(AIRunModel)
-                .where(AIRunModel.id.in_(run_ids))
+                .where(
+                    AIRunModel.id.in_(
+                        run_ids
+                    )
+                )
             )
 
         session.execute(
             delete(MessageModel)
-            .where(MessageModel.conversation_id == conversation_id)
+            .where(
+                MessageModel.conversation_id
+                == conversation_id
+            )
         )
 
         session.execute(
             delete(ConversationModel)
-            .where(ConversationModel.id == conversation_id)
+            .where(
+                ConversationModel.id
+                == conversation_id
+            )
         )
 
         session.execute(
             delete(UserModel)
-            .where(UserModel.id == user_id)
+            .where(
+                UserModel.id == user_id
+            )
         )
 
         session.commit()
 
 
-# Mock external provider
+# ---------------------------------------------------------------------------
+# Deterministic AI dependencies
+# ---------------------------------------------------------------------------
+
+
 @pytest.fixture
 def mock_llm_provider():
     """
-    Mock only the external model.
-    Everything above the provider boundary remains real.
+    Mock only the external LLM provider.
+
+    Intent classification and grounded generation therefore still execute
+    through the real classifier/generator/instrumentation stack.
     """
 
-    def structured_resolver(system_prompt: str, user_prompt: str, response_model):
-        return {
-            "intent": "payment_issue",
-            "confidence": 0.97,
-            "entities": {
-                "order_id": "ORD-123",
-                "transaction_id": None,
-                "subscription_id": None,
-                "account_id": None,
-                "issue_type": "duplicate_charge",
-            },
-            "needs_clarification": False,
-            "reason_summary": "Customer reports a duplicate charge for order ORD-123.",
-        }
+    def structured_resolver(
+        system_prompt: str,
+        user_prompt: str,
+        response_model,
+    ):
+        if response_model is IntentResult:
+            return {
+                "intent": "payment_issue",
+                "confidence": 0.97,
+                "entities": {
+                    "order_id": "ORD-123",
+                    "transaction_id": None,
+                    "subscription_id": None,
+                    "account_id": None,
+                    "issue_type": "duplicate_charge",
+                    "attributes": {},
+                },
+                "needs_clarification": False,
+                "reason_summary": (
+                    "Customer reports a duplicate charge "
+                    "for order ORD-123."
+                ),
+            }
+
+        if response_model is GroundedGenerationResult:
+            return {
+                "answer": (
+                    "I don't have enough verified information "
+                    "in the available knowledge to answer "
+                    "this reliably."
+                ),
+                "grounding_status": "insufficient_evidence",
+                "citations": [],
+            }
+
+        raise AssertionError(
+            "Unexpected structured response model: "
+            f"{response_model!r}"
+        )
 
     return MockLLMProvider(
         config=MockProviderConfig(
             input_tokens=180,
             output_tokens=42,
             cached_input_tokens=20,
-            estimated_cost_usd=Decimal("0.00001234"),
-            provider_request_id="mock-integration-request-001",
+            estimated_cost_usd=Decimal(
+                "0.00001234"
+            ),
+            provider_request_id=(
+                "mock-integration-request-001"
+            ),
         ),
         structured_resolver=structured_resolver,
     )
 
-# Application service
+
 @pytest.fixture
-def service(test_session_factory, mock_llm_provider):
-    pipeline_factory = AIPipelineFactory(base_provider=mock_llm_provider)
+def embedding_provider():
+    return DeterministicEmbeddingProvider()
+
+
+@pytest.fixture
+def embedding_input_descriptor():
+    return EmbeddingInputDescriptor(
+        strategy_id="integration-contextual",
+        version="1",
+        config_fingerprint=(
+            "a" * 64
+        ),
+    )
+
+
+@pytest.fixture
+def retrieval_profile():
+    """
+    Lexical-only integration profile.
+
+    The ProcessCustomerMessage -> AnswerService -> retrieval composition
+    remains real, while the test does not depend on seeded vector artifacts.
+
+    Empty retrieval is a valid semantic result and exercises grounded
+    generation's insufficient-evidence path.
+    """
+
+    return RetrievalProfile(
+        profile_id="process-message-integration",
+        vector_enabled=False,
+        lexical_enabled=True,
+        reranking_enabled=False,
+        lexical_candidate_limit=20,
+        fused_candidate_limit=20,
+        final_candidate_limit=8,
+        rrf_k=60,
+    )
+
+
+@pytest.fixture
+def grounding_context_budget():
+    return GroundingContextBudget(
+        max_tokens=2_000,
+        max_blocks=8,
+    )
+
+
+@pytest.fixture
+def service(
+    test_session_factory,
+    mock_llm_provider,
+    embedding_provider,
+    embedding_input_descriptor,
+    retrieval_profile,
+    grounding_context_budget,
+):
+    pipeline_factory = AIPipelineFactory(
+        base_provider=mock_llm_provider
+    )
 
     def uow_factory():
-        return SqlAlchemyUnitOfWork(session_factory=test_session_factory)
+        return SqlAlchemyUnitOfWork(
+            session_factory=test_session_factory
+        )
 
-    return ProcessCustomerMessage(uow_factory=uow_factory, pipeline_factory=pipeline_factory)
+    return ProcessCustomerMessage(
+        uow_factory=uow_factory,
+        pipeline_factory=pipeline_factory,
+        embedding_provider=embedding_provider,
+        embedding_input_descriptor=(
+            embedding_input_descriptor
+        ),
+        retrieval_profile=retrieval_profile,
+        grounding_context_budget=(
+            grounding_context_budget
+        ),
+    )
 
 
-# Full happy-path integration
-def test_customer_message_persists_complete_ai_trace(service, test_session_factory, seeded_conversation):
-    conversation_id = seeded_conversation["conversation_id"]
+# ---------------------------------------------------------------------------
+# Happy path
+# ---------------------------------------------------------------------------
+
+
+def test_customer_message_persists_complete_ai_trace_and_assistant_response(
+    service,
+    test_session_factory,
+    seeded_conversation,
+):
+    conversation_id = (
+        seeded_conversation["conversation_id"]
+    )
+
     trace_id = uuid7()
+
+    customer_text = (
+        "I was charged twice for order ORD-123. "
+        "Can you help?"
+    )
+
     result = service.execute(
         ProcessCustomerMessageCommand(
             conversation_id=conversation_id,
-            customer_message="I was charged twice for order ORD-123. Can you help?",
+            customer_message=customer_text,
             trace_id=trace_id,
         )
     )
 
+    # ------------------------------------------------------------------
     # Application result
+    # ------------------------------------------------------------------
+
     assert result.succeeded is True
     assert result.conversation_id == conversation_id
     assert result.trace_id == trace_id
+
+    assert (
+        result.pipeline_stage
+        is PipelineStage.RESPONSE_GENERATED
+    )
+
     assert result.intent == "payment_issue"
-    assert result.decision is not None
+    assert result.decision == "retrieve_information"
 
-    # Verify database state
+    assert result.customer_message_id is not None
+    assert result.assistant_message_id is not None
+
+    assert result.response == (
+        "I don't have enough verified information "
+        "in the available knowledge to answer "
+        "this reliably."
+    )
+
+    assert (
+        result.assistant_message_id
+        != result.customer_message_id
+    )
+
+    # ------------------------------------------------------------------
+    # Verify persisted database state
+    # ------------------------------------------------------------------
+
     with test_session_factory() as session:
+        messages = tuple(
+            session.scalars(
+                select(MessageModel)
+                .where(
+                    MessageModel.conversation_id
+                    == conversation_id
+                )
+                .order_by(
+                    MessageModel.sequence_number
+                )
+            )
+        )
 
-        # support.messages
-        customer_message = session.get(MessageModel, result.customer_message_id)
+        # --------------------------------------------------------------
+        # Conversation message ordering
+        # --------------------------------------------------------------
 
-        assert customer_message is not None
-        assert customer_message.conversation_id == conversation_id
+        assert len(messages) == 2
+
+        customer_message = messages[0]
+        assistant_message = messages[1]
+
+        assert (
+            customer_message.id
+            == result.customer_message_id
+        )
+
         assert customer_message.role == "customer"
-        assert customer_message.content == "I was charged twice for order ORD-123. Can you help?"
+        assert customer_message.content == customer_text
         assert customer_message.sequence_number == 1
 
-        # ai.runs
-        ai_run = session.get(AIRunModel, result.ai_run_id)
+        assert (
+            assistant_message.id
+            == result.assistant_message_id
+        )
+
+        assert assistant_message.role == "assistant"
+        assert (
+            assistant_message.content
+            == result.response
+        )
+        assert assistant_message.sequence_number == 2
+
+        assert (
+            assistant_message.conversation_id
+            == conversation_id
+        )
+
+        # --------------------------------------------------------------
+        # AI run
+        # --------------------------------------------------------------
+
+        ai_run = session.get(
+            AIRunModel,
+            result.ai_run_id,
+        )
 
         assert ai_run is not None
+
         assert ai_run.trace_id == trace_id
-        assert ai_run.trigger_message_id == customer_message.id
-        assert ai_run.conversation_id == conversation_id
+        assert (
+            ai_run.trigger_message_id
+            == customer_message.id
+        )
+        assert (
+            ai_run.response_message_id
+            == assistant_message.id
+        )
+
+        assert (
+            ai_run.conversation_id
+            == conversation_id
+        )
+
         assert ai_run.status == "completed"
         assert ai_run.completed_at is not None
         assert ai_run.total_latency_ms is not None
         assert ai_run.total_latency_ms >= 0
 
-        # ai.llm_calls
-        llm_calls = tuple(session.scalars(
+        # --------------------------------------------------------------
+        # LLM calls
+        #
+        # One call belongs to intent classification and one to grounded
+        # response generation.
+        # --------------------------------------------------------------
+
+        llm_calls = tuple(
+            session.scalars(
                 select(LLMCallModel)
-                .where(LLMCallModel.ai_run_id == ai_run.id)
-                .order_by(LLMCallModel.started_at)
+                .where(
+                    LLMCallModel.ai_run_id
+                    == ai_run.id
+                )
+                .order_by(
+                    LLMCallModel.started_at
+                )
             )
         )
 
-        assert len(llm_calls) == 1
-        llm_call = llm_calls[0]
-        assert llm_call.status == "success"
-        assert llm_call.provider == "mock"
-        assert llm_call.model == "mock-llm-v1"
-        assert llm_call.purpose == "intent_classification"
-        assert llm_call.input_tokens == 180
-        assert llm_call.output_tokens == 42
-        assert llm_call.cached_input_tokens == 20
-        assert llm_call.total_tokens == 222
-        assert llm_call.provider_request_id == "mock-integration-request-001"
-        assert llm_call.estimated_cost_usd == Decimal("0.00001234")
-        assert llm_call.completed_at is not None
-        assert llm_call.latency_ms is not None
-        assert llm_call.latency_ms >= 0
+        assert len(llm_calls) == 2
 
-        # ai.intent_predictions
-        predictions = tuple(session.scalars(
+        purposes = {
+            call.purpose
+            for call in llm_calls
+        }
+
+        assert purposes == {
+            "intent_classification",
+            "answer_generation",
+        }
+
+        for llm_call in llm_calls:
+            assert llm_call.status == "success"
+            assert llm_call.provider == "mock"
+            assert llm_call.model == "mock-llm-v1"
+
+            assert llm_call.input_tokens == 180
+            assert llm_call.output_tokens == 42
+            assert llm_call.cached_input_tokens == 20
+            assert llm_call.total_tokens == 222
+
+            assert (
+                llm_call.provider_request_id
+                == "mock-integration-request-001"
+            )
+
+            assert (
+                llm_call.estimated_cost_usd
+                == Decimal("0.00001234")
+            )
+
+            assert llm_call.completed_at is not None
+            assert llm_call.latency_ms is not None
+            assert llm_call.latency_ms >= 0
+
+        intent_call = next(
+            call
+            for call in llm_calls
+            if call.purpose
+            == "intent_classification"
+        )
+
+        # --------------------------------------------------------------
+        # Intent prediction
+        # --------------------------------------------------------------
+
+        predictions = tuple(
+            session.scalars(
                 select(IntentPredictionModel)
-                .where(IntentPredictionModel.ai_run_id == ai_run.id)
+                .where(
+                    IntentPredictionModel.ai_run_id
+                    == ai_run.id
+                )
             )
         )
 
         assert len(predictions) == 1
+
         prediction = predictions[0]
+
         assert prediction.intent == "payment_issue"
-        assert float(prediction.confidence) == pytest.approx(0.97)
-        assert prediction.needs_clarification is False
 
-        # Critical FK assertion:
-        assert prediction.llm_call_id == llm_call.id
-        assert prediction.entities["order_id"] == "ORD-123"
-        assert prediction.entities["issue_type"] == "duplicate_charge"
+        assert (
+            float(prediction.confidence)
+            == pytest.approx(0.97)
+        )
 
-        # ai.decisions
-        decisions = tuple(session.scalars(
+        assert (
+            prediction.needs_clarification
+            is False
+        )
+
+        # Intent provenance must point specifically to the
+        # intent-classification provider call, not generation.
+        assert (
+            prediction.llm_call_id
+            == intent_call.id
+        )
+
+        assert (
+            prediction.entities["order_id"]
+            == "ORD-123"
+        )
+
+        assert (
+            prediction.entities["issue_type"]
+            == "duplicate_charge"
+        )
+
+        # --------------------------------------------------------------
+        # Deterministic decision
+        # --------------------------------------------------------------
+
+        decisions = tuple(
+            session.scalars(
                 select(AIDecisionModel)
-                .where(AIDecisionModel.ai_run_id == ai_run.id)
+                .where(
+                    AIDecisionModel.ai_run_id
+                    == ai_run.id
+                )
             )
         )
 
         assert len(decisions) == 1
+
         decision = decisions[0]
-        assert decision.decision_type is not None
+
+        assert (
+            decision.decision_type
+            == "retrieve_information"
+        )
+
         assert decision.reason_code is not None
 
-        # DecisionEngine is deterministic.
+        # DecisionEngine is deterministic and therefore has no LLM call.
         assert decision.llm_call_id is None
-        
-## timeout-path test
-def test_provider_timeout_persists_failed_run_and_timeout_call(test_session_factory, seeded_conversation) -> None:
-    provider = MockLLMProvider()
-    provider.queue_timeout()
-    pipeline_factory = AIPipelineFactory(base_provider=provider)
+
+
+# ---------------------------------------------------------------------------
+# No-generated-response path
+# ---------------------------------------------------------------------------
+
+
+def test_clarification_decision_completes_without_assistant_message(
+    test_session_factory,
+    seeded_conversation,
+    embedding_provider,
+    embedding_input_descriptor,
+    retrieval_profile,
+    grounding_context_budget,
+):
+    """
+    A successful workflow decision does not imply that an assistant message
+    exists.
+
+    The current pipeline can stop at DECISION_MADE for clarification because
+    dedicated clarification-response generation has not yet been added.
+    """
+
+    def structured_resolver(
+        system_prompt: str,
+        user_prompt: str,
+        response_model,
+    ):
+        if response_model is IntentResult:
+            return {
+                "intent": "unknown",
+                "confidence": 0.95,
+                "entities": {
+                    "order_id": None,
+                    "transaction_id": None,
+                    "subscription_id": None,
+                    "account_id": None,
+                    "issue_type": None,
+                    "attributes": {},
+                },
+                "needs_clarification": True,
+                "reason_summary": (
+                    "The request is too ambiguous "
+                    "to determine the customer's intent."
+                ),
+            }
+
+        raise AssertionError(
+            "Generation must not be invoked "
+            "for this clarification path."
+        )
+
+    provider = MockLLMProvider(
+        structured_resolver=structured_resolver
+    )
+
+    pipeline_factory = AIPipelineFactory(
+        base_provider=provider
+    )
 
     def uow_factory():
-        return SqlAlchemyUnitOfWork(session_factory=test_session_factory)
+        return SqlAlchemyUnitOfWork(
+            session_factory=test_session_factory
+        )
 
-    service = ProcessCustomerMessage(uow_factory=uow_factory, pipeline_factory=pipeline_factory)
-    conversation_id = seeded_conversation["conversation_id"]
+    service = ProcessCustomerMessage(
+        uow_factory=uow_factory,
+        pipeline_factory=pipeline_factory,
+        embedding_provider=embedding_provider,
+        embedding_input_descriptor=(
+            embedding_input_descriptor
+        ),
+        retrieval_profile=retrieval_profile,
+        grounding_context_budget=(
+            grounding_context_budget
+        ),
+    )
+
+    conversation_id = (
+        seeded_conversation["conversation_id"]
+    )
+
+    result = service.execute(
+        ProcessCustomerMessageCommand(
+            conversation_id=conversation_id,
+            customer_message="Can you help me with this?",
+        )
+    )
+
+    assert result.succeeded is True
+
+    assert (
+        result.pipeline_stage
+        is PipelineStage.DECISION_MADE
+    )
+
+    assert result.decision == "ask_clarification"
+
+    assert result.assistant_message_id is None
+    assert result.response is None
+
+    with test_session_factory() as session:
+        messages = tuple(
+            session.scalars(
+                select(MessageModel)
+                .where(
+                    MessageModel.conversation_id
+                    == conversation_id
+                )
+            )
+        )
+
+        # Only the triggering customer message exists.
+        assert len(messages) == 1
+        assert messages[0].role == "customer"
+
+        ai_run = session.get(
+            AIRunModel,
+            result.ai_run_id,
+        )
+
+        assert ai_run is not None
+        assert ai_run.status == "completed"
+
+        assert ai_run.response_message_id is None
+
+
+# ---------------------------------------------------------------------------
+# Provider timeout path
+# ---------------------------------------------------------------------------
+
+
+def test_provider_timeout_persists_failed_run_without_assistant_message(
+    test_session_factory,
+    seeded_conversation,
+    embedding_provider,
+    embedding_input_descriptor,
+    retrieval_profile,
+    grounding_context_budget,
+):
+    provider = MockLLMProvider()
+
+    provider.queue_timeout()
+
+    pipeline_factory = AIPipelineFactory(
+        base_provider=provider
+    )
+
+    def uow_factory():
+        return SqlAlchemyUnitOfWork(
+            session_factory=test_session_factory
+        )
+
+    service = ProcessCustomerMessage(
+        uow_factory=uow_factory,
+        pipeline_factory=pipeline_factory,
+        embedding_provider=embedding_provider,
+        embedding_input_descriptor=(
+            embedding_input_descriptor
+        ),
+        retrieval_profile=retrieval_profile,
+        grounding_context_budget=(
+            grounding_context_budget
+        ),
+    )
+
+    conversation_id = (
+        seeded_conversation["conversation_id"]
+    )
+
     result = service.execute(
         ProcessCustomerMessageCommand(
             conversation_id=conversation_id,
@@ -302,58 +876,118 @@ def test_provider_timeout_persists_failed_run_and_timeout_call(test_session_fact
         )
     )
 
-    # Application-level result
+    # ------------------------------------------------------------------
+    # Application result
+    # ------------------------------------------------------------------
+
     assert result.succeeded is False
     assert result.intent is None
     assert result.decision is None
-    assert result.pipeline_stage is PipelineStage.FAILED
+
+    assert (
+        result.pipeline_stage
+        is PipelineStage.FAILED
+    )
+
+    assert result.assistant_message_id is None
+    assert result.response is None
 
     with test_session_factory() as session:
-        # AI run must be persisted as FAILED
-        ai_run = session.get(AIRunModel, result.ai_run_id)
+        # --------------------------------------------------------------
+        # Failed AI run remains auditable
+        # --------------------------------------------------------------
+
+        ai_run = session.get(
+            AIRunModel,
+            result.ai_run_id,
+        )
 
         assert ai_run is not None
         assert ai_run.status == "failed"
+
+        assert ai_run.response_message_id is None
+
         assert ai_run.completed_at is not None
         assert ai_run.total_latency_ms is not None
         assert ai_run.total_latency_ms >= 0
-        assert ai_run.error_code == "INTENT_PROVIDER_TIMEOUT"
+
+        assert (
+            ai_run.error_code
+            == "INTENT_PROVIDER_TIMEOUT"
+        )
+
         assert ai_run.error_message is not None
 
-        # The failed provider invocation must still exist
-        llm_calls = tuple(session.scalars(
-                        select(LLMCallModel)
-                        .where(LLMCallModel.ai_run_id == result.ai_run_id)
-                    )
+        # --------------------------------------------------------------
+        # Customer message remains persisted
+        # --------------------------------------------------------------
+
+        messages = tuple(
+            session.scalars(
+                select(MessageModel)
+                .where(
+                    MessageModel.conversation_id
+                    == conversation_id
+                )
+            )
+        )
+
+        assert len(messages) == 1
+        assert messages[0].role == "customer"
+
+        # --------------------------------------------------------------
+        # Failed provider call remains persisted
+        # --------------------------------------------------------------
+
+        llm_calls = tuple(
+            session.scalars(
+                select(LLMCallModel)
+                .where(
+                    LLMCallModel.ai_run_id
+                    == result.ai_run_id
+                )
+            )
         )
 
         assert len(llm_calls) == 1
+
         llm_call = llm_calls[0]
+
         assert llm_call.status == "timeout"
         assert llm_call.error_code == "TIMEOUT"
+
         assert llm_call.completed_at is not None
         assert llm_call.latency_ms is not None
         assert llm_call.latency_ms >= 0
 
-        # Provider failed before producing valid usage.
         assert llm_call.input_tokens == 0
         assert llm_call.output_tokens == 0
         assert llm_call.total_tokens == 0
 
-        # No semantic prediction should exist
-        predictions = tuple(session.scalars(
-                        select(IntentPredictionModel)
-                        .where(IntentPredictionModel.ai_run_id == result.ai_run_id)
-                    )
+        # --------------------------------------------------------------
+        # No semantic output exists because intent classification failed
+        # --------------------------------------------------------------
+
+        predictions = tuple(
+            session.scalars(
+                select(IntentPredictionModel)
+                .where(
+                    IntentPredictionModel.ai_run_id
+                    == result.ai_run_id
+                )
+            )
         )
 
         assert predictions == ()
 
-        # DecisionEngine must never have produced a decision
-        decisions = tuple(session.scalars(
-                        select(AIDecisionModel)
-                        .where(AIDecisionModel.ai_run_id == result.ai_run_id)
-                    )
+        decisions = tuple(
+            session.scalars(
+                select(AIDecisionModel)
+                .where(
+                    AIDecisionModel.ai_run_id
+                    == result.ai_run_id
+                )
+            )
         )
 
         assert decisions == ()

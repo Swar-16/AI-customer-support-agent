@@ -20,6 +20,7 @@ pythonpath = ["."]
 markers = [
     "integration: tests requiring external infrastructure or services",
     "live_provider: tests making real external LLM API calls",
+    "live_embedding: tests making real external embedding API calls",
     "live_smoke: full real application smoke tests"
 ]
 asyncio_mode = "auto"

@@ -1,3 +1,4 @@
+-- AI-customer-support-agent\infra\database\bootstrap.sql
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 

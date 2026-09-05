@@ -1,3 +1,4 @@
+# AI-customer-support-agent\packages\database\models\__init__.py
 from packages.database.models.support.user import UserModel
 from packages.database.models.support.conversation import ConversationModel
 from packages.database.models.support.message import MessageModel
@@ -9,6 +10,11 @@ from packages.database.models.ai.llm_call import LLMCallModel
 from packages.database.models.ai.intent_prediction import IntentPredictionModel
 from packages.database.models.ai.decision import AIDecisionModel
 
+from packages.database.models.knowledge import KnowledgeChunkModel
+from packages.database.models.knowledge import KnowledgeDocumentModel
+from packages.database.models.knowledge import KnowledgeDocumentVersionModel
+from packages.database.models.knowledge import KnowledgeChunkEmbeddingModel
+
 __all__ = [
     "UserModel",
     "ConversationModel",
@@ -18,4 +24,8 @@ __all__ = [
     "LLMCallModel",
     "IntentPredictionModel",
     "AIDecisionModel",
+    "KnowledgeChunkModel",
+    "KnowledgeDocumentModel",
+    "KnowledgeDocumentVersionModel",
+    "KnowledgeChunkEmbeddingModel",
 ]

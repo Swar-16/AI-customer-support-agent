@@ -1,3 +1,4 @@
+# AI-customer-support-agent\packages\database\repositories\support\errors.py
 class RepositoryError(RuntimeError):
     pass
 

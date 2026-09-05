@@ -1,3 +1,4 @@
+# AI-customer-support-agent\packages\database\repositories\ai\ai_run_repository.py
 # small, transaction-aware, query-focused, and free of business logic.
 from __future__ import annotations
 import uuid
@@ -18,13 +19,6 @@ class AIRunRepository:
     - retrieve runs by stable identifiers
     - query runs by conversation/status
     - update run lifecycle fields
-
-    Explicitly NOT responsible for:
-    - committing transactions
-    - deciding pipeline behavior
-    - constructing telemetry
-    - interpreting failures
-    - retry logic
     """
 
     def __init__(self, session: Session) -> None:

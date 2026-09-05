@@ -3,24 +3,17 @@ Unit tests for IntentClassifier.
 
 Design notes
 ------------
-- The LLM provider is fully mocked (`create_autospec(LLMProvider)`), so these
-  tests never hit a real model/network call.
-- Provider responses are represented as `Mock(spec=IntentResult, **fields)`.
-  Because the mock is spec'd against the real `IntentResult` class, the
-  classifier's `isinstance(result, IntentResult)` guard passes without us
-  needing to know how to legally construct a real `IntentResult` instance.
-- Tests assert against the PUBLIC contract wherever possible (exceptions
-  raised, what gets passed to `provider.generate_structured`, call counts)
-  rather than reaching into private methods, so refactors of the classifier's
-  internals won't break the suite. `_build_system_prompt`/`_build_user_prompt`
-  are only ever exercised indirectly, via the mocked provider's call_args.
-
-Adjust as needed
------------------
-The exact `IntentType` member names used below (`PAYMENT_ISSUE`,
-`ORDER_STATUS`, `UNKNOWN`) are assumed based on the classifier module and the
-test scenarios requested. Rename them to match your actual
-`packages.ai.intent.taxonomy.IntentType` enum if it differs.
+- The LLM provider is fully mocked, so these tests never hit a real
+  model or network call.
+- Provider responses use real IntentResult instances wrapped in
+  StructuredLLMResponse so the tests exercise the real response contract.
+- Tests assert against public behavior wherever possible:
+    - validation
+    - provider invocation
+    - exception translation
+    - prompt taxonomy coverage
+    - returned structured results
+- Prompt internals are tested indirectly through provider call arguments.
 """
 
 from __future__ import annotations
@@ -37,6 +30,10 @@ from packages.ai.intent.classifier import (
     IntentClassifierConfig,
     InvalidIntentInputError,
     InvalidIntentResponseError,
+)
+from packages.ai.intent.taxonomy import (
+    INTENT_DEFINITIONS,
+    IntentType,
 )
 from packages.ai.intent.schemas import IntentResult
 from packages.ai.intent.taxonomy import IntentType
@@ -126,6 +123,61 @@ def test_valid_unknown_classification(classifier, mock_provider):
 
     assert result.intent == IntentType.UNKNOWN
     assert result.needs_clarification is True
+    
+def test_valid_return_exchange_classification(
+    classifier,
+    mock_provider,
+):
+    expected = make_intent_result(
+        intent=IntentType.RETURN_EXCHANGE,
+        confidence=0.96,
+        reason_summary=(
+            "Customer wants to exchange an item for another size."
+        ),
+        needs_clarification=False,
+    )
+
+    mock_provider.generate_structured.return_value = (
+        make_provider_response(expected)
+    )
+
+    result = classifier.classify(
+        customer_message=(
+            "These shoes are too small. "
+            "Can I exchange them for a bigger size?"
+        )
+    )
+
+    assert result is expected
+    assert result.intent is IntentType.RETURN_EXCHANGE
+    assert result.needs_clarification is False
+
+
+def test_valid_privacy_security_classification(
+    classifier,
+    mock_provider,
+):
+    expected = make_intent_result(
+        intent=IntentType.PRIVACY_SECURITY,
+        confidence=0.97,
+        reason_summary=(
+            "Customer reports possible unauthorized account access."
+        ),
+        needs_clarification=False,
+    )
+
+    mock_provider.generate_structured.return_value = (
+        make_provider_response(expected)
+    )
+
+    result = classifier.classify(
+        customer_message=(
+            "I think someone else logged into my account."
+        )
+    )
+
+    assert result is expected
+    assert result.intent is IntentType.PRIVACY_SECURITY
 
 
 def test_missing_order_id_still_allows_order_status(classifier, mock_provider):
@@ -367,6 +419,72 @@ def test_customer_message_is_delimited_in_user_prompt(classifier, mock_provider)
     assert "<customer_message>" in user_prompt
     assert "Refund my last order please" in user_prompt
     assert "</customer_message>" in user_prompt
+    
+def test_prompt_contains_semantic_description_for_every_intent(
+    classifier,
+    mock_provider,
+):
+    mock_provider.generate_structured.return_value = (
+        make_provider_response()
+    )
+
+    classifier.classify(
+        customer_message="Test taxonomy rendering"
+    )
+
+    system_prompt = get_call_kwargs(
+        mock_provider
+    )["system_prompt"]
+
+    for definition in INTENT_DEFINITIONS.values():
+        assert definition.description in system_prompt
+        
+def test_prompt_respects_max_examples_per_intent(
+    mock_provider,
+):
+    classifier = IntentClassifier(
+        provider=mock_provider,
+        config=IntentClassifierConfig(
+            max_examples_per_intent=1,
+        ),
+    )
+
+    mock_provider.generate_structured.return_value = (
+        make_provider_response()
+    )
+
+    classifier.classify(
+        customer_message="Test example limiting"
+    )
+
+    system_prompt = get_call_kwargs(
+        mock_provider
+    )["system_prompt"]
+
+    for definition in INTENT_DEFINITIONS.values():
+        assert definition.examples[0] in system_prompt
+
+        for excluded_example in definition.examples[1:]:
+            assert excluded_example not in system_prompt
+            
+def test_classifier_taxonomy_rendering_is_data_driven(
+    classifier,
+    mock_provider,
+):
+    mock_provider.generate_structured.return_value = (
+        make_provider_response()
+    )
+
+    classifier.classify(
+        customer_message="hello"
+    )
+
+    system_prompt = get_call_kwargs(
+        mock_provider
+    )["system_prompt"]
+
+    assert IntentType.RETURN_EXCHANGE.value in system_prompt
+    assert IntentType.PRIVACY_SECURITY.value in system_prompt
 
 
 # ---------------------------------------------------------------------------

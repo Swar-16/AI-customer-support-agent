@@ -1,3 +1,4 @@
+# AI-customer-support-agent\packages\database\repositories\support\message_repository.py
 ## The API should not perform SQLAlchemy queries everywhere.
 ## API -> Application Service -> Repository -> SQLAlchemy -> PostgreSQL
 

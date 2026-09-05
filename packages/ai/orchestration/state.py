@@ -1,3 +1,4 @@
+# AI-customer-support-agent\packages\ai\orchestration\state.py
 from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
@@ -25,16 +26,12 @@ class PipelineStage(StrEnum):
     CONTEXT_BUILT = "context_built"
     INTENT_CLASSIFIED = "intent_classified"
     DECISION_MADE = "decision_made"
-
     RETRIEVAL_COMPLETED = "retrieval_completed"
     RESPONSE_GENERATED = "response_generated"
     GUARDRAILS_COMPLETED = "guardrails_completed"
-
     ACTION_PROPOSED = "action_proposed"
     ACTION_COMPLETED = "action_completed"
-
     ESCALATED = "escalated"
-
     COMPLETED = "completed"
     FAILED = "failed"
 
@@ -47,29 +44,12 @@ class PipelineError(BaseModel):
     The orchestrator should convert exceptions into structured errors
     for observability and persistence.
     """
-    model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-        str_strip_whitespace=True,
-    )
-
-    code: str = Field(
-        min_length=1,
-        max_length=100,
-    )
-
-    message: str = Field(
-        min_length=1,
-        max_length=1000,
-    )
-
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+    code: str = Field(min_length=1, max_length=100)
+    message: str = Field(min_length=1, max_length=1000)
     stage: PipelineStage
-
     retryable: bool = False
-
-    metadata: dict[str, Any] = Field(
-        default_factory=dict,
-    )
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("code")
     @classmethod
@@ -77,41 +57,90 @@ class PipelineError(BaseModel):
         return value.strip().upper()
 
 
-class RetrievalContext(BaseModel):
+class EvidenceSourceType(StrEnum):
     """
-    Placeholder contract for retrieval output.
+    Broad origin of evidence used by the AI workflow.
 
-    We deliberately keep this minimal for now.
-    Later this can evolve into richer retrieval objects with:
-    - chunk IDs
-    - document IDs
-    - vector scores
-    - lexical scores
-    - reranker scores
-    - policy versions
+    The orchestration layer deliberately models evidence by source category
+    rather than by concrete infrastructure.
+
+    KNOWLEDGE:
+        Versioned support knowledge such as policies, FAQs, procedures,
+        guides, and other published reference material.
+
+    OPERATIONAL:
+        Runtime business facts such as order state, payment state,
+        subscription state, or account information.
+
+    SYSTEM:
+        Trusted system-produced evidence that does not belong to either
+        customer-facing knowledge or an operational business system.
     """
-    model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-    )
 
-    chunk_id: uuid.UUID | None = None
+    KNOWLEDGE = "knowledge"
+    OPERATIONAL = "operational"
+    SYSTEM = "system"
 
-    document_id: uuid.UUID | None = None
+class EscalationSource(StrEnum):
+    """
+    Stage/subsystem that caused the workflow to require human review.
 
-    content: str = Field(
-        min_length=1,
-    )
+    This identifies the origin of the escalation decision without coupling orchestration state to a concrete escalation persistence model.
+    """
+    DECISION = "decision"
+    GUARDRAIL = "guardrail"
+    SYSTEM = "system"
 
-    score: float | None = Field(
-        default=None,
-        ge=0.0,
-    )
+class RetrievedEvidence(BaseModel):
+    """
+    Provider-neutral evidence made available to downstream AI stages.
 
-    metadata: dict[str, Any] = Field(
-        default_factory=dict,
-    )
+    This is the orchestration boundary for retrieved information.
 
+    It deliberately does NOT expose knowledge-specific implementation concepts such as:
+        - vector distance
+        - lexical rank
+        - RRF score
+        - embedding model
+        - pgvector
+        - reranker implementation
+
+    Those remain inside the knowledge/retrieval subsystem.
+
+    Likewise, operational tools may later produce this same contract without pretending their results are knowledge-base chunks.
+
+    `source_id` is represented as a string because different evidence sources may use different identifier formats:
+        - UUID knowledge chunk IDs
+        - order IDs
+        - transaction IDs
+        - external system identifiers
+    """
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+    source_type: EvidenceSourceType
+    content: str = Field(min_length=1, max_length=50_000)
+    source_id: str | None = Field(default=None, max_length=255)
+    title: str | None = Field(default=None, max_length=500)
+    section: str | None = Field(default=None, max_length=500)
+    relevance_score: float | None = Field(default=None, ge=0.0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("content")
+    @classmethod
+    def normalize_content(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("content cannot be empty")
+
+        return normalized
+
+    @field_validator("source_id", "title", "section")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+
+        normalized = value.strip()
+        return normalized or None
 
 class AIState(BaseModel):
     """
@@ -128,12 +157,7 @@ class AIState(BaseModel):
     The state stores outputs of completed stages but does not itself
     execute business logic.
     """
-    model_config = ConfigDict(
-        extra="forbid",
-        validate_assignment=True,
-        str_strip_whitespace=True,
-    )
-
+    model_config = ConfigDict(extra="forbid", validate_assignment=True, str_strip_whitespace=True)
 
     # Correlation / persistence identity
     ai_run_id: uuid.UUID
@@ -142,44 +166,34 @@ class AIState(BaseModel):
     trigger_message_id: uuid.UUID
 
     # Input
-    customer_message: str = Field(
-        min_length=1,
-        max_length=20_000,
-    )
-    conversation_context: str | None = Field(
-        default=None,
-        max_length=50_000,
-    )
+    customer_message: str = Field(min_length=1, max_length=20_000)
+    conversation_context: str | None = Field(default=None, max_length=50_000)
 
     # Pipeline state
     stage: PipelineStage = PipelineStage.RECEIVED
     intent_result: IntentResult | None = None
     decision_result: DecisionResult | None = None
-    retrieval_context: tuple[RetrievalContext, ...] = Field(
-        default_factory=tuple,
-    )
+    retrieved_evidence: tuple[RetrievedEvidence, ...] = Field(default_factory=tuple)
     generated_response: str | None = None
 
-    # Future orchestration outputs
+    # Future/persisted orchestration outputs
     proposed_action_id: uuid.UUID | None = None
     escalation_id: uuid.UUID | None = None
     response_message_id: uuid.UUID | None = None
 
+    # Escalation disposition
+    escalation_source: EscalationSource | None = None
+    escalation_reason_code: str | None = Field(default=None, max_length=100)
+
     # Failure / diagnostic state
-    errors: tuple[PipelineError, ...] = Field(
-        default_factory=tuple,
-    )
+    errors: tuple[PipelineError, ...] = Field(default_factory=tuple)
 
     # Execution timestamps
-    started_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
-    )
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
 
     # Free-form non-authoritative orchestration metadata
-    metadata: dict[str, Any] = Field(
-        default_factory=dict,
-    )
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("customer_message")
     @classmethod
@@ -208,6 +222,16 @@ class AIState(BaseModel):
             return None
 
         normalized = value.strip()
+
+        return normalized or None
+    
+    @field_validator("escalation_reason_code")
+    @classmethod
+    def normalize_escalation_reason_code(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+
+        normalized = value.strip().upper()
 
         return normalized or None
 
@@ -249,9 +273,16 @@ class AIState(BaseModel):
             # Once we've reached DECISION_MADE or anything after it, decision_result must exist.
                 raise ValueError(f"{self.stage.value} requires decision_result")
 
-        if self.stage is PipelineStage.RESPONSE_GENERATED:
+        if self.stage in {PipelineStage.RESPONSE_GENERATED, PipelineStage.GUARDRAILS_COMPLETED,}:
             if self.generated_response is None:
-                raise ValueError("RESPONSE_GENERATED requires generated_response")
+                raise ValueError(f"{self.stage.value} requires generated_response")
+            
+        if self.stage is PipelineStage.ESCALATED:
+            if self.escalation_source is None:
+                raise ValueError("ESCALATED requires escalation_source")
+
+            if self.escalation_reason_code is None:
+                raise ValueError("ESCALATED requires escalation_reason_code")
 
         if self.stage is PipelineStage.COMPLETED:
             if self.completed_at is None:
@@ -293,35 +324,99 @@ class AIState(BaseModel):
             }
         )
 
-    def with_retrieval_context(self, context: tuple[RetrievalContext, ...]) -> AIState:
+    def with_retrieved_evidence(self, evidence: tuple[RetrievedEvidence, ...]) -> AIState:
         """
-        Return a copy containing retrieved grounding context.
+        Return a copy containing evidence produced by a completed retrieval stage.
+
+        An empty tuple is valid: retrieval may complete successfully without finding sufficiently relevant evidence.
+        Downstream policy/guardrails decide how that situation should be handled.
         """
         if self.decision_result is None:
-            raise ValueError("Cannot attach retrieval context before a decision")
+            raise ValueError("Cannot attach retrieved evidence before a decision")
 
-        return self.model_copy(
-            update={
-                "retrieval_context": context,
-                "stage": PipelineStage.RETRIEVAL_COMPLETED,
-            }
-        )
+        if not isinstance(evidence, tuple):
+            raise TypeError("with_retrieved_evidence() expects tuple[RetrievedEvidence, ...]")
+
+        for index, item in enumerate(evidence):
+            if not isinstance(item, RetrievedEvidence):
+                raise TypeError(f"with_retrieved_evidence() expects every item to be RetrievedEvidence; item {index} is {type(item).__name__}")
+
+        return self.model_copy(update={"retrieved_evidence": evidence, "stage": PipelineStage.RETRIEVAL_COMPLETED,})
 
     def with_generated_response(self, response: str) -> AIState:
         """
-        Return a copy containing generated assistant response.
+        Return a copy containing the generated assistant response.
         """
         if self.decision_result is None:
             raise ValueError("Cannot generate response before decision")
-        
+
+        if not isinstance(response, str):
+            raise TypeError("response must be a string")
+
         normalized = response.strip()
         if not normalized:
             raise ValueError("Generated response cannot be empty")
 
+        return self.model_copy(update={"generated_response": normalized, "stage": PipelineStage.RESPONSE_GENERATED,})
+    
+    def with_guardrails_completed(self) -> AIState:
+        """
+        Return a copy representing successful completion of response guardrails.
+
+        This transition means:
+
+            - response generation completed successfully;
+            - the generated response exists;
+            - deterministic guardrail evaluation completed;
+            - no guardrail disposition redirected the workflow to refusal, escalation, or failure.
+
+        The actual GuardrailResult is deliberately not stored directly in AIState. The orchestration state remains independent of
+        the concrete guardrail subsystem and avoids a circular dependency between packages.ai.orchestration and packages.guardrail.
+
+        Guardrail audit information can be persisted independently by the application/telemetry layer.
+        """
+        if self.stage is not PipelineStage.RESPONSE_GENERATED:
+            raise ValueError("Guardrails can only complete after response generation")
+
+        if self.generated_response is None:
+            raise ValueError("Cannot complete guardrails without a generated response")
+
+        return self.model_copy(update={"stage": PipelineStage.GUARDRAILS_COMPLETED,})
+    
+    def with_escalation(self, *, source: EscalationSource, reason_code: str) -> AIState:
+        """
+        Return a copy representing a workflow that requires human review.
+
+        Escalation is a normal workflow disposition, not a pipeline failure.
+
+        This transition records *why* orchestration requested escalation. Creation of the persistent 
+        escalation record belongs to the application/persistence layer and may later populate ``escalation_id``.
+
+        A generated response, if one exists, remains an internal candidate. Reaching ESCALATED does not authorize that candidate for customer persistence.
+        """
+        if self.intent_result is None:
+            raise ValueError("Cannot escalate before intent classification")
+
+        if self.decision_result is None:
+            raise ValueError("Cannot escalate before decision")
+
+        if not isinstance(source, EscalationSource):
+            raise TypeError("source must be an EscalationSource")
+
+        if not isinstance(reason_code, str):
+            raise TypeError("reason_code must be a string")
+
+        normalized_reason_code = reason_code.strip().upper()
+
+        if not normalized_reason_code:
+            raise ValueError("reason_code cannot be empty")
+
         return self.model_copy(
             update={
-                "generated_response": normalized,
-                "stage": PipelineStage.RESPONSE_GENERATED,
+                "stage": PipelineStage.ESCALATED,
+                "escalation_source": source,
+                "escalation_reason_code": normalized_reason_code,
+                "completed_at": datetime.now(timezone.utc),
             }
         )
 
@@ -329,12 +424,11 @@ class AIState(BaseModel):
         """
         Return a failed-state copy with the new error appended.
         """
+        if not isinstance(error, PipelineError):
+            raise TypeError(f"with_error() expects a PipelineError, got {type(error).__name__}")
+
         return self.model_copy(
-            update={
-                "errors": (*self.errors, error),
-                "stage": PipelineStage.FAILED,
-                "completed_at": datetime.now(timezone.utc),
-            }
+            update={"errors": (*self.errors, error), "stage": PipelineStage.FAILED, "completed_at": datetime.now(timezone.utc),}
         )
 
     def complete(self) -> AIState:

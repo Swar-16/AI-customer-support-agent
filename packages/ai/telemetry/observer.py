@@ -1,3 +1,4 @@
+# AI-customer-support-agent\packages\ai\telemetry\observer.py
 ## Responsible for tasks like:
 ## stage lifecycle events, duration measurement, structured logging
 ## future fan-out to: OpenTelemetry, metrics, tracing, dashboards
