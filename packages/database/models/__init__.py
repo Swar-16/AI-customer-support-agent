@@ -2,6 +2,7 @@
 from packages.database.models.support.user import UserModel
 from packages.database.models.support.conversation import ConversationModel
 from packages.database.models.support.message import MessageModel
+from packages.database.models.support.escalation import EscalationModel
 
 from packages.database.models.config.prompt_version import PromptVersionModel
 
@@ -19,6 +20,7 @@ __all__ = [
     "UserModel",
     "ConversationModel",
     "MessageModel",
+    "EscalationModel",
     "PromptVersionModel",
     "AIRunModel",
     "LLMCallModel",

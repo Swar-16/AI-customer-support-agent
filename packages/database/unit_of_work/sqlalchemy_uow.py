@@ -11,6 +11,7 @@ from packages.database.repositories.ai.llm_call_repository import LLMCallReposit
 from packages.database.repositories.support.conversation_repository import ConversationRepository
 from packages.database.repositories.support.message_repository import MessageRepository
 from packages.database.repositories.support.user_repository import UserRepository
+from packages.database.repositories.support.escalation_repository import EscalationRepository
 from packages.database.session import SessionLocal
 
 
@@ -43,6 +44,7 @@ class SqlAlchemyUnitOfWork:
         self.users: UserRepository | None = None
         self.conversations: ConversationRepository | None = None
         self.messages: MessageRepository | None = None
+        self.escalations: EscalationRepository | None = None
         
         self.ai_runs: AIRunRepository | None = None
         self.llm_calls: LLMCallRepository | None = None
@@ -62,6 +64,7 @@ class SqlAlchemyUnitOfWork:
         self.users = UserRepository(self.session)
         self.conversations = ConversationRepository(self.session)
         self.messages = MessageRepository(self.session)
+        self.escalations = EscalationRepository(self.session)
 
         self.ai_runs = AIRunRepository(self.session)
         self.llm_calls = LLMCallRepository(self.session)
@@ -134,6 +137,7 @@ class SqlAlchemyUnitOfWork:
         self.users = None
         self.conversations = None
         self.messages = None
+        self.escalations = None
 
         self.ai_runs = None
         self.llm_calls = None

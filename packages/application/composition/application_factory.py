@@ -17,6 +17,8 @@ from packages.application.composition.knowledge_embedding_factory import create_
 from packages.knowledge.retrieval.context.models import GroundingContextBudget
 from packages.knowledge.retrieval.profiles import create_default_customer_support_profile
 from packages.knowledge.embeddings.input.contextual import ContextualEmbeddingInputBuilder
+from packages.application.escalations.query_escalations import GetEscalation, ListConversationEscalations, ListEscalations
+from packages.application.escalations.update_escalation import UpdateEscalation
 
 SessionFactory = sessionmaker[Session]
 ProviderFactory = Callable[..., LLMProvider]
@@ -37,20 +39,20 @@ class ApplicationServices:
 
     Those are created per request / per application transaction.
     """
-
     process_customer_message: ProcessCustomerMessage
+    get_escalation: GetEscalation
+    list_escalations: ListEscalations
+    list_conversation_escalations: ListConversationEscalations
+    update_escalation: UpdateEscalation
     ai_pipeline_factory: AIPipelineFactory
     base_llm_provider: LLMProvider
     orchestration_observer: OrchestrationObserver
 
-
 class ApplicationConfigurationError(RuntimeError):
     """
-    Raised when the application cannot be composed from the supplied
-    configuration.
+    Raised when the application cannot be composed from the supplied configuration.
 
-    This represents a startup/configuration failure rather than a normal
-    request failure.
+    This represents a startup/configuration failure rather than a normal request failure.
     """
 
 def create_application(*, settings: Settings, session_factory: SessionFactory = SessionLocal,
@@ -113,9 +115,18 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         retrieval_profile=retrieval_profile,
         grounding_context_budget=grounding_budget,
     )
+    
+    get_escalation = GetEscalation(uow_factory=uow_factory)
+    list_escalations = ListEscalations(uow_factory=uow_factory)
+    list_conversation_escalations = ListConversationEscalations(uow_factory=uow_factory)
+    update_escalation = UpdateEscalation(uow_factory=uow_factory)
 
     return ApplicationServices(
         process_customer_message=process_customer_message,
+        get_escalation=get_escalation,
+        list_escalations=list_escalations,
+        list_conversation_escalations=list_conversation_escalations,
+        update_escalation=update_escalation,
         ai_pipeline_factory=pipeline_factory,
         base_llm_provider=resolved_provider,
         orchestration_observer=resolved_observer,

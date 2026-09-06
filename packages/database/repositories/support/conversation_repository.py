@@ -102,6 +102,17 @@ class ConversationRepository:
         conversation.status = "resolved"
         conversation.resolved_at = resolved_at
         conversation.closed_at = None
+        
+    def mark_escalated(self, conversation: ConversationModel) -> None:
+        """
+        Mark a conversation as awaiting human support.
+
+        The escalation record itself is persisted separately through EscalationRepository within the same Unit of Work.
+        """
+        self._validate_conversation_instance(conversation)
+        conversation.status = "escalated"
+        conversation.resolved_at = None
+        conversation.closed_at = None
 
     def mark_closed(self, conversation: ConversationModel, *, closed_at: datetime) -> None:
         self._validate_conversation_instance(conversation)

@@ -28,6 +28,9 @@ from packages.knowledge.embeddings.provider.base import EmbeddingProvider
 from packages.knowledge.retrieval.context.models import GroundingContextBudget
 from packages.knowledge.retrieval.profiles import RetrievalProfile
 from packages.knowledge.embeddings.models import EmbeddingInputDescriptor
+from packages.application.escalations.create_escalation import CreateEscalation, CreateEscalationCommand
+from packages.database.repositories.support.escalation_repository import EscalationRepository
+from packages.database.models.support.conversation import ConversationModel
 
 
 # Internal repository bundle
@@ -35,6 +38,7 @@ from packages.knowledge.embeddings.models import EmbeddingInputDescriptor
 class _Repositories:
     conversations: ConversationRepository
     messages: MessageRepository
+    escalations: EscalationRepository
     ai_runs: AIRunRepository
     llm_calls: LLMCallRepository
     intent_predictions: IntentPredictionRepository
@@ -89,6 +93,8 @@ class ProcessCustomerMessageResult:
     IDs are returned instead of live ORM objects so callers do not receive entities bound to a Session that has already been closed.
 
     ``assistant_message_id`` and ``response`` are populated only when the pipeline produced a customer-visible assistant response.
+    
+    ``escalation_id`` is populated when the pipeline requests human review.
     """
     conversation_id: uuid.UUID
     customer_message_id: uuid.UUID
@@ -98,6 +104,7 @@ class ProcessCustomerMessageResult:
     intent: str | None
     decision: str | None
     assistant_message_id: uuid.UUID | None
+    escalation_id: uuid.UUID | None
     response: str | None
     succeeded: bool
 
@@ -293,6 +300,17 @@ class ProcessCustomerMessage:
                 ai_run_id=ai_run.id,
                 intent_llm_call_id=pipeline.intent_provider.last_call_id,
             )
+            
+            # Persist human-review escalation when requested by orchestration.
+            escalation_id: uuid.UUID | None = None
+
+            if state.stage is PipelineStage.ESCALATED:
+                escalation_id = self._persist_escalation(
+                    repositories=repositories,
+                    conversation=conversation,
+                    state=state,
+                    trace_id=trace_id,
+                )
 
             # Persist customer-visible assistant response
             assistant_message: MessageModel | None = None
@@ -331,6 +349,7 @@ class ProcessCustomerMessage:
                 intent=state.intent_result.intent.value if state.intent_result is not None else None,
                 decision=state.decision_result.decision.value if state.decision_result is not None else None,
                 assistant_message_id=assistant_message_id,
+                escalation_id=escalation_id,
                 response=response,
                 succeeded=state.stage is not PipelineStage.FAILED,
             )
@@ -432,6 +451,49 @@ class ProcessCustomerMessage:
             raise PersistenceContractError("Assistant message ID was not generated after flush")
 
         return assistant_message
+    
+    @staticmethod
+    def _persist_escalation(*, repositories: _Repositories, conversation: ConversationModel, state: AIState, trace_id: uuid.UUID) -> uuid.UUID:
+        """
+        Persist an orchestration-requested escalation and move the conversation into the escalated state.
+
+        Both mutations occur through repositories sharing the current Unit of Work, so they are committed or rolled back 
+        together with the customer message, AI run, and telemetry.
+        """
+        if state.stage is not PipelineStage.ESCALATED:
+            raise PersistenceContractError("Escalation may only be persisted from an ESCALATED AIState")
+
+        if state.escalation_source is None:
+            raise PersistenceContractError("ESCALATED state must contain escalation_source")
+
+        if state.escalation_reason_code is None:
+            raise PersistenceContractError("ESCALATED state must contain escalation_reason_code")
+
+        if state.decision_result is None:
+            raise PersistenceContractError("ESCALATED state must contain decision_result")
+
+        create_escalation = CreateEscalation(repository=repositories.escalations        )
+        result = create_escalation.execute(
+            CreateEscalationCommand(
+                conversation_id=state.conversation_id,
+                ai_run_id=state.ai_run_id,
+                trigger_message_id=state.trigger_message_id,
+                source=state.escalation_source.value,
+                reason_code=state.escalation_reason_code,
+                reason_summary=state.decision_result.reason_summary),
+                priority=ProcessCustomerMessage._resolve_escalation_priority(state),
+                handoff_summary=ProcessCustomerMessage._build_handoff_summary(state),
+                metadata={
+                    "trace_id": str(trace_id),
+                    "pipeline_stage": state.stage.value,
+                    "intent": state.intent_result.intent.value if state.intent_result is not None else None,
+                    "decision": state.decision_result.decision.value,
+                },
+            )
+
+        repositories.conversations.mark_escalated(conversation)
+
+        return result.escalation_id
 
     # Validation
     @staticmethod
@@ -473,6 +535,9 @@ class ProcessCustomerMessage:
 
         if uow.messages is None:
             raise PersistenceContractError("MessageRepository unavailable")
+        
+        if uow.escalations is None:
+            raise PersistenceContractError("EscalationRepository unavailable")
 
         if uow.ai_runs is None:
             raise PersistenceContractError("AIRunRepository unavailable")
@@ -489,8 +554,52 @@ class ProcessCustomerMessage:
         return _Repositories(
             conversations=uow.conversations,
             messages=uow.messages,
+            escalations=uow.escalations,
             ai_runs=uow.ai_runs,
             llm_calls=uow.llm_calls,
             intent_predictions=uow.intent_predictions,
             ai_decisions=uow.ai_decisions,
         )
+        
+    @staticmethod
+    def _resolve_escalation_priority(state: AIState) -> str:
+        """
+        Assign a deterministic initial escalation priority.
+
+        Priority is derived only from trusted reason codes. Arbitrary LLM metadata must never control support priority.
+        """
+        reason_code = state.escalation_reason_code
+
+        if reason_code is None:
+            raise PersistenceContractError("Cannot resolve escalation priority without a reason code")
+
+        urgent_reasons = {"SECURITY_SENSITIVE_REQUEST", "SENSITIVE_ACTION_CLAIM", "SAFETY_RESTRICTION",}
+        high_reasons = {"HUMAN_APPROVAL_REQUIRED", "POLICY_CONFLICT", "UNSUPPORTED_OPERATIONAL_CLAIM",}
+        if reason_code in urgent_reasons:
+            return "urgent"
+
+        if reason_code in high_reasons:
+            return "high"
+
+        return "normal"
+
+
+    @staticmethod
+    def _build_handoff_summary(state: AIState) -> str:
+        """
+        Build a deterministic, bounded summary for a support agent.
+
+        This is not generated by an additional LLM call. It contains only already-available structured pipeline information.
+        """
+        if state.escalation_source is None:
+            raise PersistenceContractError("Cannot build handoff summary without escalation_source")
+
+        if state.escalation_reason_code is None:
+            raise PersistenceContractError("Cannot build handoff summary without escalation_reason_code")
+
+        if state.decision_result is None:
+            raise PersistenceContractError("Cannot build handoff summary without decision_result")
+
+        intent = state.intent_result.intent.value if state.intent_result is not None else "unknown"
+
+        return f"Human review requested by {state.escalation_source.value}. Intent: {intent}. Reason: {state.escalation_reason_code}. {state.decision_result.reason_summary}"

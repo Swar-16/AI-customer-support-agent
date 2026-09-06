@@ -67,7 +67,9 @@ def send_message(
         ai_run_id=result.ai_run_id,
         trace_id=result.trace_id,
         pipeline_stage=result.pipeline_stage.value,
-        intent=(result.intent.value if hasattr(result.intent, "value") else result.intent),
-        decision=(result.decision.value if hasattr(result.decision, "value") else result.decision),
+        intent=result.intent,
+        decision=result.decision,
+        assistant_message_id=result.assistant_message_id,
+        escalation_id=result.escalation_id,
         succeeded=result.succeeded,
     )
