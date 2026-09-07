@@ -14,11 +14,10 @@ from packages.database.repositories.support.user_repository import UserRepositor
 from packages.database.repositories.support.escalation_repository import EscalationRepository
 from packages.database.repositories.support.ticket_repository import TicketRepository
 from packages.database.repositories.support.ticket_comment_repository import TicketCommentRepository
+from packages.database.repositories.support.feedback_repository import FeedbackRepository
 from packages.database.session import SessionLocal
 
-
 SessionFactory: TypeAlias = sessionmaker[Session]
-
 
 class SqlAlchemyUnitOfWork:
     """
@@ -49,6 +48,7 @@ class SqlAlchemyUnitOfWork:
         self.escalations: EscalationRepository | None = None
         self.tickets: TicketRepository | None = None
         self.ticket_comments: TicketCommentRepository | None = None
+        self.feedback: FeedbackRepository | None = None
         
         self.ai_runs: AIRunRepository | None = None
         self.llm_calls: LLMCallRepository | None = None
@@ -71,6 +71,7 @@ class SqlAlchemyUnitOfWork:
         self.escalations = EscalationRepository(self.session)
         self.tickets = TicketRepository(self.session)
         self.ticket_comments = TicketCommentRepository(self.session)
+        self.feedback = FeedbackRepository(self.session)
 
         self.ai_runs = AIRunRepository(self.session)
         self.llm_calls = LLMCallRepository(self.session)
@@ -145,6 +146,7 @@ class SqlAlchemyUnitOfWork:
         self.escalations = None
         self.tickets = None
         self.ticket_comments = None
+        self.feedback = None
 
         self.ai_runs = None
         self.llm_calls = None

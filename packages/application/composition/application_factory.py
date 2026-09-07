@@ -23,6 +23,9 @@ from packages.application.tickets.add_ticket_comment import AddTicketComment
 from packages.application.tickets.create_ticket import CreateTicket
 from packages.application.tickets.query_tickets import GetTicket, ListTickets
 from packages.application.tickets.update_ticket import UpdateTicket
+from packages.application.feedback.query_feedback import GetFeedback, ListFeedback
+from packages.application.feedback.review_feedback import ReviewFeedback
+from packages.application.feedback.submit_feedback import SubmitFeedback
 
 SessionFactory = sessionmaker[Session]
 ProviderFactory = Callable[..., LLMProvider]
@@ -53,6 +56,10 @@ class ApplicationServices:
     get_ticket: GetTicket
     list_tickets: ListTickets
     update_ticket: UpdateTicket
+    submit_feedback: SubmitFeedback
+    get_feedback: GetFeedback
+    list_feedback: ListFeedback
+    review_feedback: ReviewFeedback
     ai_pipeline_factory: AIPipelineFactory
     base_llm_provider: LLMProvider
     orchestration_observer: OrchestrationObserver
@@ -134,6 +141,10 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
     get_ticket = GetTicket(uow_factory=uow_factory)
     list_tickets = ListTickets(uow_factory=uow_factory)
     update_ticket = UpdateTicket(uow_factory=uow_factory)
+    submit_feedback = SubmitFeedback(uow_factory=uow_factory)
+    get_feedback = GetFeedback(uow_factory=uow_factory)
+    list_feedback = ListFeedback(uow_factory=uow_factory)
+    review_feedback = ReviewFeedback(uow_factory=uow_factory)
 
     return ApplicationServices(
         process_customer_message=process_customer_message,
@@ -146,6 +157,10 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         get_ticket=get_ticket,
         list_tickets=list_tickets,
         update_ticket=update_ticket,
+        submit_feedback=submit_feedback,
+        get_feedback=get_feedback,
+        list_feedback=list_feedback,
+        review_feedback=review_feedback,
         ai_pipeline_factory=pipeline_factory,
         base_llm_provider=resolved_provider,
         orchestration_observer=resolved_observer,

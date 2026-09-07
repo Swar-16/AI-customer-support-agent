@@ -7,10 +7,10 @@ from fastapi import APIRouter, HTTPException, Path, Query, status
 from apps.api.app.api.dependencies import ApplicationServicesDependency
 from apps.api.app.api.v1.schemas.escalations import EscalationListResponse, EscalationPriority, EscalationResponse
 from apps.api.app.api.v1.schemas.escalations import EscalationStatus, UpdateEscalationRequest, UpdateEscalationResponse
-from packages.application.escalations.query_escalations import EscalationDoesNotExistError as QueryEscalationDoesNotExistError
+# from packages.application.escalations.query_escalations import EscalationDoesNotExistError as QueryEscalationDoesNotExistError
 from packages.application.escalations.query_escalations import EscalationView, GetEscalationQuery, ListConversationEscalationsQuery, ListEscalationsQuery
-from packages.application.escalations.update_escalation import EscalationDoesNotExistError as UpdateEscalationDoesNotExistError
-from packages.application.escalations.update_escalation import InvalidEscalationTransitionError, UpdateEscalationCommand
+# from packages.application.escalations.update_escalation import EscalationDoesNotExistError as UpdateEscalationDoesNotExistError
+from packages.application.escalations.update_escalation import UpdateEscalationCommand#, InvalidEscalationTransitionError
 
 router = APIRouter(prefix="/escalations", tags=["escalations"])
 EscalationIdPath = Annotated[uuid.UUID, Path(description="Persistent escalation identifier.")]
@@ -84,11 +84,7 @@ def list_escalations(
     summary="Get a support escalation")
 def get_escalation(escalation_id: EscalationIdPath, services: ApplicationServicesDependency) -> EscalationResponse:
     """Return one escalation with its AI and conversation provenance."""
-    try:
-        escalation = services.get_escalation.execute(GetEscalationQuery(escalation_id=escalation_id))
-    except QueryEscalationDoesNotExistError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-
+    escalation = services.get_escalation.execute(GetEscalationQuery(escalation_id=escalation_id))
     return _to_escalation_response(escalation)
 
 
@@ -101,14 +97,7 @@ def get_escalation(escalation_id: EscalationIdPath, services: ApplicationService
 )
 def update_escalation(escalation_id: EscalationIdPath, payload: UpdateEscalationRequest, services: ApplicationServicesDependency) -> UpdateEscalationResponse:
     """Transition an escalation using a row-level database lock."""
-    try:
-        result = services.update_escalation.execute(UpdateEscalationCommand(escalation_id=escalation_id, target_status=payload.status))
-    except UpdateEscalationDoesNotExistError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-
-    except InvalidEscalationTransitionError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-
+    result = services.update_escalation.execute(UpdateEscalationCommand(escalation_id=escalation_id, target_status=payload.status))
     return UpdateEscalationResponse(
         escalation_id=result.escalation_id,
         conversation_id=result.conversation_id,

@@ -5,6 +5,7 @@ from packages.database.models.support.message import MessageModel
 from packages.database.models.support.escalation import EscalationModel
 from packages.database.models.support.ticket import TicketModel
 from packages.database.models.support.ticket_comment import TicketCommentModel
+from packages.database.models.support.feedback import FeedbackModel
 
 from packages.database.models.config.prompt_version import PromptVersionModel
 
@@ -25,6 +26,7 @@ __all__ = [
     "EscalationModel",
     "TicketModel",
     "TicketCommentModel",
+    "FeedbackModel",
     "PromptVersionModel",
     "AIRunModel",
     "LLMCallModel",
