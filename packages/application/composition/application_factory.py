@@ -26,6 +26,7 @@ from packages.application.tickets.update_ticket import UpdateTicket
 from packages.application.feedback.query_feedback import GetFeedback, ListFeedback
 from packages.application.feedback.review_feedback import ReviewFeedback
 from packages.application.feedback.submit_feedback import SubmitFeedback
+from packages.application.observability.record_api_request import RecordAPIRequest
 
 SessionFactory = sessionmaker[Session]
 ProviderFactory = Callable[..., LLMProvider]
@@ -47,6 +48,7 @@ class ApplicationServices:
     Those are created per request / per application transaction.
     """
     process_customer_message: ProcessCustomerMessage
+    record_api_request: RecordAPIRequest
     get_escalation: GetEscalation
     list_escalations: ListEscalations
     list_conversation_escalations: ListConversationEscalations
@@ -132,6 +134,7 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         grounding_context_budget=grounding_budget,
     )
     
+    record_api_request = RecordAPIRequest(uow_factory=uow_factory)
     get_escalation = GetEscalation(uow_factory=uow_factory)
     list_escalations = ListEscalations(uow_factory=uow_factory)
     list_conversation_escalations = ListConversationEscalations(uow_factory=uow_factory)
@@ -148,6 +151,7 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
 
     return ApplicationServices(
         process_customer_message=process_customer_message,
+        record_api_request=record_api_request,
         get_escalation=get_escalation,
         list_escalations=list_escalations,
         list_conversation_escalations=list_conversation_escalations,

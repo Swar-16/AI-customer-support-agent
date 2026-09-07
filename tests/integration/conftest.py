@@ -20,6 +20,7 @@ from packages.database.models.support.escalation import EscalationModel
 from packages.database.models.support.feedback import FeedbackModel
 from packages.database.models.support.ticket import TicketModel
 from packages.database.models.support.ticket_comment import TicketCommentModel
+from packages.database.models.audit.api_request import APIRequestModel
 
 
 @pytest.fixture(scope="session")
@@ -51,6 +52,8 @@ def _clear_database(session_factory: sessionmaker) -> None:
         session.execute(delete(TicketCommentModel))
         session.execute(delete(TicketModel))
         session.execute(delete(EscalationModel))
+        
+        session.execute(delete(APIRequestModel))
         
         session.execute(delete(AIDecisionModel))
         session.execute(delete(IntentPredictionModel))

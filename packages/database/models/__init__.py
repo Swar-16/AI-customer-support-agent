@@ -7,6 +7,8 @@ from packages.database.models.support.ticket import TicketModel
 from packages.database.models.support.ticket_comment import TicketCommentModel
 from packages.database.models.support.feedback import FeedbackModel
 
+from packages.database.models.audit.api_request import APIRequestModel
+
 from packages.database.models.config.prompt_version import PromptVersionModel
 
 from packages.database.models.ai.run import AIRunModel
@@ -27,6 +29,7 @@ __all__ = [
     "TicketModel",
     "TicketCommentModel",
     "FeedbackModel",
+    "APIRequestModel",
     "PromptVersionModel",
     "AIRunModel",
     "LLMCallModel",
