@@ -12,6 +12,8 @@ from packages.database.repositories.support.conversation_repository import Conve
 from packages.database.repositories.support.message_repository import MessageRepository
 from packages.database.repositories.support.user_repository import UserRepository
 from packages.database.repositories.support.escalation_repository import EscalationRepository
+from packages.database.repositories.support.ticket_repository import TicketRepository
+from packages.database.repositories.support.ticket_comment_repository import TicketCommentRepository
 from packages.database.session import SessionLocal
 
 
@@ -45,6 +47,8 @@ class SqlAlchemyUnitOfWork:
         self.conversations: ConversationRepository | None = None
         self.messages: MessageRepository | None = None
         self.escalations: EscalationRepository | None = None
+        self.tickets: TicketRepository | None = None
+        self.ticket_comments: TicketCommentRepository | None = None
         
         self.ai_runs: AIRunRepository | None = None
         self.llm_calls: LLMCallRepository | None = None
@@ -65,6 +69,8 @@ class SqlAlchemyUnitOfWork:
         self.conversations = ConversationRepository(self.session)
         self.messages = MessageRepository(self.session)
         self.escalations = EscalationRepository(self.session)
+        self.tickets = TicketRepository(self.session)
+        self.ticket_comments = TicketCommentRepository(self.session)
 
         self.ai_runs = AIRunRepository(self.session)
         self.llm_calls = LLMCallRepository(self.session)
@@ -119,7 +125,6 @@ class SqlAlchemyUnitOfWork:
         session.flush()
 
     # Internal helpers
-
     def _require_session(self) -> Session:
         if not self._entered or self.session is None:
             raise RuntimeError("Unit of work has not been started. Use it inside a 'with' block.")
@@ -138,6 +143,8 @@ class SqlAlchemyUnitOfWork:
         self.conversations = None
         self.messages = None
         self.escalations = None
+        self.tickets = None
+        self.ticket_comments = None
 
         self.ai_runs = None
         self.llm_calls = None

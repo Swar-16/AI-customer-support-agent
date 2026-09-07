@@ -11,7 +11,26 @@ from fastapi.responses import JSONResponse
 
 from apps.api.app.api.dependencies import TRACE_HEADER_NAME
 from packages.application.conversations.process_customer_message import ConversationDoesNotExistError, ConversationNotProcessableError, CustomerMessageValidationError
-
+from packages.application.escalations.create_escalation import CreateEscalationContractError, CreateEscalationError, EscalationIdempotencyConflictError
+from packages.application.escalations.query_escalations import EscalationDoesNotExistError as QueriedEscalationDoesNotExistError
+from packages.application.escalations.query_escalations import EscalationQueryContractError, EscalationQueryError
+from packages.application.escalations.update_escalation import EscalationDoesNotExistError as UpdatedEscalationDoesNotExistError
+from packages.application.escalations.update_escalation import EscalationPersistenceContractError, InvalidEscalationTransitionError, UpdateEscalationError
+from packages.application.tickets.add_ticket_comment import AddTicketCommentError, CommentAuthorDoesNotExistError, CommentAuthorNotActiveError
+from packages.application.tickets.add_ticket_comment import CommentAuthorRoleMismatchError, CommentTicketDoesNotExistError, CustomerInternalCommentError
+from packages.application.tickets.add_ticket_comment import TicketCommentOwnershipError, TicketCommentPersistenceContractError, TicketNotCommentableError
+from packages.application.tickets.create_ticket import CreateTicketError, TicketConversationDoesNotExistError, TicketConversationOwnershipError
+from packages.application.tickets.create_ticket import TicketCustomerDoesNotExistError, TicketCustomerNotActiveError, TicketEscalationDoesNotExistError
+from packages.application.tickets.create_ticket import TicketEscalationMismatchError, TicketEscalationNotActiveError, TicketIdempotencyConflictError
+from packages.application.tickets.create_ticket import TicketPersistenceContractError as CreateTicketPersistenceContractError
+from packages.application.tickets.create_ticket import TicketSourceMessageDoesNotExistError, TicketSourceMessageMismatchError
+from packages.application.tickets.query_tickets import TicketAccessDeniedError, TicketDoesNotExistError as QueriedTicketDoesNotExistError
+from packages.application.tickets.query_tickets import TicketQueryContractError, TicketQueryError, TicketRequesterDoesNotExistError
+from packages.application.tickets.query_tickets import TicketRequesterNotActiveError, TicketRequesterRoleMismatchError
+from packages.application.tickets.update_ticket import ClosedTicketMutationError, InvalidTicketTransitionError, TicketAgentDoesNotExistError
+from packages.application.tickets.update_ticket import TicketAgentNotAssignableError, TicketConcurrencyError, UpdateTicketError
+from packages.application.tickets.update_ticket import TicketDoesNotExistError as UpdatedTicketDoesNotExistError
+from packages.application.tickets.update_ticket import TicketPersistenceContractError as UpdateTicketPersistenceContractError
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +41,15 @@ ERROR_CONVERSATION_NOT_FOUND = "CONVERSATION_NOT_FOUND"
 ERROR_CONVERSATION_NOT_PROCESSABLE = "CONVERSATION_NOT_PROCESSABLE"
 ERROR_INVALID_CUSTOMER_MESSAGE = "INVALID_CUSTOMER_MESSAGE"
 ERROR_INTERNAL = "INTERNAL_ERROR"
+ERROR_ESCALATION_NOT_FOUND = "ESCALATION_NOT_FOUND"
+ERROR_INVALID_ESCALATION_OPERATION = "INVALID_ESCALATION_OPERATION"
+ERROR_ESCALATION_CONFLICT = "ESCALATION_CONFLICT"
+ERROR_TICKET_NOT_FOUND = "TICKET_NOT_FOUND"
+ERROR_TICKET_RELATED_RESOURCE_NOT_FOUND = "TICKET_RELATED_RESOURCE_NOT_FOUND"
+ERROR_TICKET_ACCESS_DENIED = "TICKET_ACCESS_DENIED"
+ERROR_INVALID_TICKET_OPERATION = "INVALID_TICKET_OPERATION"
+ERROR_TICKET_CONFLICT = "TICKET_CONFLICT"
+ERROR_TICKET_CONCURRENT_UPDATE = "TICKET_CONCURRENT_UPDATE"
 
 # Registration
 def register_exception_handlers(app: FastAPI) -> None:
@@ -38,6 +66,49 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(ConversationDoesNotExistError, conversation_not_found_handler)
     app.add_exception_handler(ConversationNotProcessableError, conversation_not_processable_handler)
     app.add_exception_handler(CustomerMessageValidationError, customer_message_validation_handler)
+    
+    for exception_type in (QueriedEscalationDoesNotExistError, UpdatedEscalationDoesNotExistError):
+        app.add_exception_handler(exception_type, escalation_not_found_handler)
+
+    for exception_type in (InvalidEscalationTransitionError, EscalationIdempotencyConflictError):
+        app.add_exception_handler(exception_type, escalation_conflict_handler)
+
+    for exception_type in (CreateEscalationError, EscalationQueryError, UpdateEscalationError):
+        app.add_exception_handler(exception_type, invalid_escalation_operation_handler)
+
+    for exception_type in (CreateEscalationContractError, EscalationQueryContractError, EscalationPersistenceContractError):
+        app.add_exception_handler(exception_type, escalation_internal_contract_handler)
+    
+    for exception_type in (QueriedTicketDoesNotExistError, UpdatedTicketDoesNotExistError, CommentTicketDoesNotExistError):
+        app.add_exception_handler(exception_type, ticket_not_found_handler)
+
+    for exception_type in (
+        TicketConversationDoesNotExistError, TicketCustomerDoesNotExistError, TicketSourceMessageDoesNotExistError,
+        TicketEscalationDoesNotExistError, CommentAuthorDoesNotExistError, TicketAgentDoesNotExistError, TicketRequesterDoesNotExistError
+    ):
+        app.add_exception_handler(exception_type, ticket_related_resource_not_found_handler)
+
+    for exception_type in (
+        TicketConversationOwnershipError, TicketCustomerNotActiveError, TicketCommentOwnershipError, CustomerInternalCommentError,
+        CommentAuthorNotActiveError, CommentAuthorRoleMismatchError, TicketAccessDeniedError, TicketRequesterNotActiveError, TicketRequesterRoleMismatchError
+    ):
+        app.add_exception_handler(exception_type, ticket_access_denied_handler)
+
+    app.add_exception_handler(TicketConcurrencyError,ticket_concurrency_handler)
+
+    for exception_type in (
+        InvalidTicketTransitionError, ClosedTicketMutationError, TicketNotCommentableError, TicketAgentNotAssignableError,
+        TicketEscalationNotActiveError, TicketIdempotencyConflictError
+    ):
+        app.add_exception_handler(exception_type, ticket_conflict_handler)
+
+    for exception_type in (
+        TicketSourceMessageMismatchError, TicketEscalationMismatchError, CreateTicketError, AddTicketCommentError, UpdateTicketError, TicketQueryError
+    ):
+        app.add_exception_handler(exception_type, invalid_ticket_operation_handler)
+
+    for exception_type in (CreateTicketPersistenceContractError, TicketCommentPersistenceContractError, UpdateTicketPersistenceContractError, TicketQueryContractError):
+        app.add_exception_handler(exception_type, ticket_internal_contract_handler)
 
     # Must remain last conceptually: this is the safety net for unexpected failures.
     app.add_exception_handler(Exception, unhandled_exception_handler)
@@ -93,6 +164,217 @@ async def customer_message_validation_handler(request: Request, exc: CustomerMes
         status_code=status.HTTP_400_BAD_REQUEST,
         code=ERROR_INVALID_CUSTOMER_MESSAGE,
         message="The customer message is invalid.",
+        trace_id=trace_id,
+    )
+    
+async def escalation_not_found_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "escalation_not_found",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_404_NOT_FOUND,
+        code=ERROR_ESCALATION_NOT_FOUND,
+        message="The requested escalation does not exist.",
+        trace_id=trace_id,
+    )
+
+async def escalation_conflict_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "escalation_operation_conflict",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_409_CONFLICT,
+        code=ERROR_ESCALATION_CONFLICT,
+        message="The escalation operation conflicts with the escalation's current state.",
+        trace_id=trace_id,
+    )
+
+async def invalid_escalation_operation_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "invalid_escalation_operation",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        code=ERROR_INVALID_ESCALATION_OPERATION,
+        message="The requested escalation operation is invalid.",
+        trace_id=trace_id,
+    )
+
+async def escalation_internal_contract_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.exception(
+        "escalation_internal_contract_failure",
+        exc_info=exc,
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        code=ERROR_INTERNAL,
+        message="An unexpected internal error occurred.",
+        trace_id=trace_id,
+    )
+    
+async def ticket_not_found_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "ticket_not_found",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_404_NOT_FOUND,
+        code=ERROR_TICKET_NOT_FOUND,
+        message="The requested ticket does not exist.",
+        trace_id=trace_id,
+    )
+
+async def ticket_related_resource_not_found_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "ticket_related_resource_not_found",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_404_NOT_FOUND,
+        code=ERROR_TICKET_RELATED_RESOURCE_NOT_FOUND,
+        message="A conversation, user, message, escalation, or agent required by the ticket operation does not exist.",
+        trace_id=trace_id,
+    )
+
+async def ticket_access_denied_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.warning(
+        "ticket_access_denied",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_403_FORBIDDEN,
+        code=ERROR_TICKET_ACCESS_DENIED,
+        message="You are not permitted to perform this ticket operation.",
+        trace_id=trace_id,
+    )
+
+async def invalid_ticket_operation_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "invalid_ticket_operation",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        code=ERROR_INVALID_TICKET_OPERATION,
+        message="The requested ticket operation is invalid.",
+        trace_id=trace_id,
+    )
+
+async def ticket_conflict_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "ticket_operation_conflict",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_409_CONFLICT,
+        code=ERROR_TICKET_CONFLICT,
+        message="The ticket operation conflicts with the ticket's current state.",
+        trace_id=trace_id,
+    )
+
+async def ticket_concurrency_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "ticket_concurrent_update",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_409_CONFLICT,
+        code=ERROR_TICKET_CONCURRENT_UPDATE,
+        message="The ticket was modified by another operation. Refresh the ticket and retry using its latest row version.",
+        trace_id=trace_id,
+    )
+
+async def ticket_internal_contract_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.exception(
+        "ticket_internal_contract_failure",
+        exc_info=exc,
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        code=ERROR_INTERNAL,
+        message="An unexpected internal error occurred.",
         trace_id=trace_id,
     )
 

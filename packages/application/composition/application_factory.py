@@ -19,6 +19,10 @@ from packages.knowledge.retrieval.profiles import create_default_customer_suppor
 from packages.knowledge.embeddings.input.contextual import ContextualEmbeddingInputBuilder
 from packages.application.escalations.query_escalations import GetEscalation, ListConversationEscalations, ListEscalations
 from packages.application.escalations.update_escalation import UpdateEscalation
+from packages.application.tickets.add_ticket_comment import AddTicketComment
+from packages.application.tickets.create_ticket import CreateTicket
+from packages.application.tickets.query_tickets import GetTicket, ListTickets
+from packages.application.tickets.update_ticket import UpdateTicket
 
 SessionFactory = sessionmaker[Session]
 ProviderFactory = Callable[..., LLMProvider]
@@ -44,6 +48,11 @@ class ApplicationServices:
     list_escalations: ListEscalations
     list_conversation_escalations: ListConversationEscalations
     update_escalation: UpdateEscalation
+    create_ticket: CreateTicket
+    add_ticket_comment: AddTicketComment
+    get_ticket: GetTicket
+    list_tickets: ListTickets
+    update_ticket: UpdateTicket
     ai_pipeline_factory: AIPipelineFactory
     base_llm_provider: LLMProvider
     orchestration_observer: OrchestrationObserver
@@ -120,6 +129,11 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
     list_escalations = ListEscalations(uow_factory=uow_factory)
     list_conversation_escalations = ListConversationEscalations(uow_factory=uow_factory)
     update_escalation = UpdateEscalation(uow_factory=uow_factory)
+    create_ticket = CreateTicket(uow_factory=uow_factory)
+    add_ticket_comment = AddTicketComment(uow_factory=uow_factory)
+    get_ticket = GetTicket(uow_factory=uow_factory)
+    list_tickets = ListTickets(uow_factory=uow_factory)
+    update_ticket = UpdateTicket(uow_factory=uow_factory)
 
     return ApplicationServices(
         process_customer_message=process_customer_message,
@@ -127,6 +141,11 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         list_escalations=list_escalations,
         list_conversation_escalations=list_conversation_escalations,
         update_escalation=update_escalation,
+        create_ticket=create_ticket,
+        add_ticket_comment=add_ticket_comment,
+        get_ticket=get_ticket,
+        list_tickets=list_tickets,
+        update_ticket=update_ticket,
         ai_pipeline_factory=pipeline_factory,
         base_llm_provider=resolved_provider,
         orchestration_observer=resolved_observer,

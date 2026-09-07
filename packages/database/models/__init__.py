@@ -3,6 +3,8 @@ from packages.database.models.support.user import UserModel
 from packages.database.models.support.conversation import ConversationModel
 from packages.database.models.support.message import MessageModel
 from packages.database.models.support.escalation import EscalationModel
+from packages.database.models.support.ticket import TicketModel
+from packages.database.models.support.ticket_comment import TicketCommentModel
 
 from packages.database.models.config.prompt_version import PromptVersionModel
 
@@ -21,6 +23,8 @@ __all__ = [
     "ConversationModel",
     "MessageModel",
     "EscalationModel",
+    "TicketModel",
+    "TicketCommentModel",
     "PromptVersionModel",
     "AIRunModel",
     "LLMCallModel",
