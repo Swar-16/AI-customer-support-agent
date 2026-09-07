@@ -7,10 +7,6 @@ from apps.api.app.main import create_api_app
 from packages.application.composition.application_factory import ApplicationServices
 
 def make_application_services(*, provider_healthy: bool = True) -> ApplicationServices:
-    """
-    Build a real ApplicationServices container while mocking only
-    external/runtime collaborators.
-    """
     provider = Mock()
     provider.provider_name = "mock"
     provider.model_name = "mock-model"
@@ -18,6 +14,24 @@ def make_application_services(*, provider_healthy: bool = True) -> ApplicationSe
 
     return ApplicationServices(
         process_customer_message=Mock(),
+        record_api_request=Mock(),
+
+        get_escalation=Mock(),
+        list_escalations=Mock(),
+        list_conversation_escalations=Mock(),
+        update_escalation=Mock(),
+
+        create_ticket=Mock(),
+        add_ticket_comment=Mock(),
+        get_ticket=Mock(),
+        list_tickets=Mock(),
+        update_ticket=Mock(),
+
+        submit_feedback=Mock(),
+        get_feedback=Mock(),
+        list_feedback=Mock(),
+        review_feedback=Mock(),
+
         ai_pipeline_factory=Mock(),
         base_llm_provider=provider,
         orchestration_observer=Mock(),

@@ -472,7 +472,7 @@ class ProcessCustomerMessage:
         if state.decision_result is None:
             raise PersistenceContractError("ESCALATED state must contain decision_result")
 
-        create_escalation = CreateEscalation(repository=repositories.escalations        )
+        create_escalation = CreateEscalation(repository=repositories.escalations)
         result = create_escalation.execute(
             CreateEscalationCommand(
                 conversation_id=state.conversation_id,
@@ -480,16 +480,21 @@ class ProcessCustomerMessage:
                 trigger_message_id=state.trigger_message_id,
                 source=state.escalation_source.value,
                 reason_code=state.escalation_reason_code,
-                reason_summary=state.decision_result.reason_summary),
+                reason_summary=state.decision_result.reason_summary,
                 priority=ProcessCustomerMessage._resolve_escalation_priority(state),
                 handoff_summary=ProcessCustomerMessage._build_handoff_summary(state),
                 metadata={
                     "trace_id": str(trace_id),
                     "pipeline_stage": state.stage.value,
-                    "intent": state.intent_result.intent.value if state.intent_result is not None else None,
+                    "intent": (
+                        state.intent_result.intent.value
+                        if state.intent_result is not None
+                        else None
+                    ),
                     "decision": state.decision_result.decision.value,
                 },
             )
+        )
 
         repositories.conversations.mark_escalated(conversation)
 

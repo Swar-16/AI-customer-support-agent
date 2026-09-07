@@ -16,6 +16,7 @@ from packages.application.ai.answer_service import AnswerService, AnswerServiceE
 from packages.application.ai.answer_service import UnsupportedAnswerDecisionError, UnsupportedRetrievalKindError
 from packages.guardrails.evaluator import GuardrailEvaluator
 from packages.guardrails.models import GuardrailContext, GuardrailOutcome
+from packages.ai.decision.policies import RetrievalKind
 
 
 # Observer contract
@@ -280,25 +281,22 @@ class AIOrchestrator:
     # Decision execution
     def _execute_decision(self, state: AIState) -> AIState:
         """
-        Execute the workflow selected by DecisionEngine.
+        Execute workflows currently supported by this pipeline version.
 
-        Currently supported execution paths:
+        Knowledge retrieval is implemented through AnswerService.
 
-            RETRIEVE_INFORMATION
-                -> retrieval
-                -> grounded generation
-                -> guardrails
-
-            ESCALATE
-                -> human-review disposition
-
-        Decisions whose dedicated workflow has not yet been implemented remain at DECISION_MADE.
+        Operational retrieval is not implemented yet, so those requests remain successfully routed at DECISION_MADE.
+        A future operational service can continue processing from that decision.
         """
         if state.decision_result is None:
             raise RuntimeError("Decision execution reached without decision_result")
 
         decision = state.decision_result.decision
         if decision is DecisionType.RETRIEVE_INFORMATION:
+            retrieval_kind = state.decision_result.metadata.get("retrieval_kind")
+            if retrieval_kind == RetrievalKind.OPERATIONAL.value:
+                return state
+
             return self._retrieve_and_generate(state)
 
         if decision is DecisionType.ESCALATE:
