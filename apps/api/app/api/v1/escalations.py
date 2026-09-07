@@ -65,7 +65,7 @@ def list_escalations(
             )
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
     items = [_to_escalation_response(item) for item in page.items]
     return EscalationListResponse(
