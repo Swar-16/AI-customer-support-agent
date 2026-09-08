@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from packages.database.repositories.knowledge import SQLAlchemyKnowledgeChunkRepository, SQLAlchemyKnowledgeDocumentRepository
 from packages.database.repositories.knowledge import SQLAlchemyKnowledgeEmbeddingRepository,SQLAlchemyKnowledgeVersionRepository
+from packages.database.repositories.audit.audit_event_repository import AuditEventRepository
 
 
 class SQLAlchemyKnowledgeUnitOfWork:
@@ -30,6 +31,7 @@ class SQLAlchemyKnowledgeUnitOfWork:
         self._versions: SQLAlchemyKnowledgeVersionRepository | None = None
         self._chunks: SQLAlchemyKnowledgeChunkRepository | None = None
         self._embeddings: SQLAlchemyKnowledgeEmbeddingRepository | None = None
+        self._audit_events: AuditEventRepository | None = None
 
     # Context manager
     def __enter__(self) -> Self:
@@ -42,6 +44,7 @@ class SQLAlchemyKnowledgeUnitOfWork:
         self._versions = SQLAlchemyKnowledgeVersionRepository(session)
         self._chunks = SQLAlchemyKnowledgeChunkRepository(session)
         self._embeddings = SQLAlchemyKnowledgeEmbeddingRepository(session)
+        self._audit_events = AuditEventRepository(session)
 
         return self
 
@@ -68,6 +71,7 @@ class SQLAlchemyKnowledgeUnitOfWork:
             self._versions = None
             self._chunks = None
             self._embeddings = None
+            self._audit_events = None
 
     # Repositories
     @property
@@ -97,6 +101,13 @@ class SQLAlchemyKnowledgeUnitOfWork:
             raise RuntimeError("Knowledge Unit of Work is not active. Use it inside a 'with' block.")
 
         return self._embeddings
+    
+    @property
+    def audit_events(self) -> AuditEventRepository:
+        if self._audit_events is None:
+            raise RuntimeError("Knowledge Unit of Work is not active. Use it inside a 'with' block.")
+
+        return self._audit_events
 
     # Transaction control
     def commit(self) -> None:

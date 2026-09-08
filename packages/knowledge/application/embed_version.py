@@ -15,6 +15,8 @@ from packages.knowledge.embeddings.models import EmbeddingInputDescriptor, Embed
 from packages.knowledge.embeddings import EmbeddingInputBuilder, EmbeddingProvider
 from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
 from packages.knowledge.embeddings import EmbeddingSourceChunk
+from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
+from packages.application.audit.recorder import AuditRecorder
 
 
 # Public contracts
@@ -284,7 +286,7 @@ class EmbedKnowledgeVersion:
                 chunk_metadata=chunk.metadata,
             )
 
-            prepared_input = self._input_builder.build(source)
+            prepared_input = self._input_builder.build(source=source)
             if prepared_input.chunk_id != chunk.id:
                 raise EmbeddingArtifactConflictError(
                     "Embedding input builder returned an input for a different chunk.",
@@ -428,10 +430,36 @@ class EmbedKnowledgeVersion:
             # - exact-artifact uniqueness,
             # before commit.
             uow.flush()
+
+            if created_count > 0:
+                AuditRecorder(repository=uow.audit_events).record(
+                    RecordAuditEventCommand(
+                        event_type="knowledge_version.embeddings_created",
+                        entity_type="knowledge_version",
+                        entity_id=version.id,
+                        action="embeddings_created",
+                        actor=AuditActor(actor_type=AuditActorType.SYSTEM),
+                        before_state=None,
+                        after_state={
+                            "created_count": created_count,
+                            "provider_identity": provider_descriptor.identity,
+                            "input_strategy_identity": input_descriptor.identity,
+                        },
+                        metadata={
+                            "document_id": str(version.document_id),
+                            "version_number": version.version_number,
+                            "version_status": version.status.value,
+                            "ingestion_status": version.ingestion_status.value,
+                            "generated_count": len(generated),
+                            "eligible_count": len(to_persist),
+                            "existing_count_before_insert": len(existing),
+                        },
+                    )
+                )
+
             uow.commit()
 
             return created_count
-
 
     # Validation helpers
     @staticmethod

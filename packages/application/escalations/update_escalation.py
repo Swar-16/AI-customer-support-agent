@@ -123,9 +123,9 @@ class UpdateEscalation:
                 return result
 
             self._validate_transition(escalation_id=escalation.id, current_status=previous_status, target_status=command.target_status)
+            before_state = self._audit_state(escalation)
             occurred_at = self._clock()
             self._validate_clock_value(occurred_at)
-            before_state = self._audit_state(escalation)
             self._apply_transition(escalation=escalation, target_status=command.target_status, occurred_at=occurred_at)
             # SQLAlchemy tracks this loaded ORM object automatically. No repository.save() method is necessary.
             uow.flush()

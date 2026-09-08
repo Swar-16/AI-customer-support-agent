@@ -230,10 +230,10 @@ class UpdateTicket:
                     )
 
                 self._validate_closed_ticket_mutation(ticket=ticket, command=command)
+                before_state = self._audit_state(ticket)
                 occurred_at = self._clock()
                 self._validate_clock_value(occurred_at)
                 previous_status = ticket.status
-                before_state = self._audit_state(ticket)
                 changed = self._apply_mutations(ticket=ticket, command=command, occurred_at=occurred_at, uow=uow)
                 if changed:
                     ticket.updated_at = occurred_at

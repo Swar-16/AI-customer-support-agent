@@ -7,6 +7,8 @@ from uuid import UUID
 from packages.knowledge.domain.enums import KnowledgeDocumentStatus, KnowledgeVersionStatus
 from packages.knowledge.domain.version import KnowledgeDocumentVersion
 from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
+from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
+from packages.application.audit.recorder import AuditRecorder
 
 
 # Application errors
@@ -123,6 +125,13 @@ class PublishKnowledgeVersion:
             if current_published is not None and current_published.id == target.id:
                 raise KnowledgePublicationConflictError("Target version is already the published version for this document.")
             
+            before_state = {
+                "status": target.status.value,
+                "ingestion_status": target.ingestion_status.value,
+                "published_at": target.published_at.isoformat() if target.published_at is not None else None,
+                "current_published_version_id": str(current_published.id) if current_published is not None else None,
+            }
+            
             occurred_at = datetime.now(timezone.utc)
             superseded_version_id: UUID | None = None
 
@@ -145,12 +154,35 @@ class PublishKnowledgeVersion:
             
             # Cause mapper/constraint problems to surface before commit.
             uow.flush()
+            
+            if published.published_at is None:
+                raise KnowledgePublicationConflictError("Published version did not contain published_at.")
+
+            AuditRecorder(repository=uow.audit_events).record(
+                RecordAuditEventCommand(
+                    event_type="knowledge_version.published",
+                    entity_type="knowledge_version",
+                    entity_id=published.id,
+                    action="published",
+                    actor=AuditActor(actor_type=AuditActorType.SYSTEM),
+                    before_state=before_state,
+                    after_state={
+                        "status": published.status.value,
+                        "ingestion_status": published.ingestion_status.value,
+                        "published_at": published.published_at.isoformat(),
+                        "active_published_version_id": str(published.id),
+                    },
+                    metadata={
+                        "document_id": str(published.document_id),
+                        "version_number": published.version_number,
+                        "superseded_version_id": str(superseded_version_id) if superseded_version_id is not None else None,
+                    },
+                    occurred_at=occurred_at,
+                )
+            )
+            
             # One atomic commit.
             uow.commit()
-
-        if published.published_at is None:
-            # This is a programming/domain-contract violation.
-            raise KnowledgePublicationConflictError("Published version did not contain published_at.")
 
         return PublishKnowledgeVersionResult(
             version_id=published.id,

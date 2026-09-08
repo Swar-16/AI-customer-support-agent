@@ -8,6 +8,12 @@ import pytest
 
 from sqlalchemy import delete, select
 
+import hashlib
+
+from packages.knowledge.embeddings import (
+    EmbeddingSourceChunk,
+)
+
 from packages.database.models.knowledge import (
     KnowledgeChunkEmbeddingModel,
     KnowledgeChunkModel,
@@ -138,21 +144,22 @@ class DeterministicEmbeddingInputBuilder(EmbeddingInputBuilder):
     def build(
         self,
         *,
-        chunk: KnowledgeChunk,
-        document_title: str,
+        source: EmbeddingSourceChunk,
     ) -> PreparedEmbeddingInput:
         text = (
-            f"Document: {document_title}\n"
-            f"Section: {chunk.section_title or ''}\n\n"
-            f"{chunk.content}"
+            f"Document: {source.document_title}\n"
+            f"Section: {source.section_title or ''}\n\n"
+            f"{source.chunk_text}"
         )
 
+        fingerprint = hashlib.sha256(
+            text.encode("utf-8")
+        ).hexdigest()
+
         return PreparedEmbeddingInput(
-            chunk_id=chunk.id,
+            chunk_id=source.chunk_id,
             text=text,
-            input_fingerprint=(
-                f"{chunk.chunk_index + 1:064x}"
-            ),
+            input_fingerprint=fingerprint,
         )
 
 
@@ -610,16 +617,22 @@ class TestEmbedKnowledgeVersionIntegration:
             def build(
                 self,
                 *,
-                chunk: KnowledgeChunk,
-                document_title: str,
+                source: EmbeddingSourceChunk,
             ) -> PreparedEmbeddingInput:
+                text = (
+                    f"Document: {source.document_title}\n"
+                    f"Section: {source.section_title or ''}\n\n"
+                    f"{source.chunk_text}"
+                )
+
+                fingerprint = hashlib.sha256(
+                    text.encode("utf-8")
+                ).hexdigest()
+
                 return PreparedEmbeddingInput(
-                    chunk_id=chunk.id,
-                    text=(
-                        f"Title: {document_title}\n\n"
-                        f"{chunk.content}"
-                    ),
-                    input_fingerprint="c" * 64,
+                    chunk_id=source.chunk_id,
+                    text=text,
+                    input_fingerprint=fingerprint,
                 )
 
         try:

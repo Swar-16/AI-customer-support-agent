@@ -17,6 +17,8 @@ from packages.knowledge.ingestion.normalization.base import DocumentNormalizerRe
 from packages.knowledge.ingestion.normalization.models import NormalizedDocument
 from packages.knowledge.ingestion.parser.base import DocumentParserResolver
 from packages.knowledge.uow import KnowledgeUnitOfWork, KnowledgeUnitOfWorkFactory
+from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
+from packages.application.audit.recorder import AuditRecorder
 
 
 # Errors
@@ -42,19 +44,13 @@ class KnowledgeVersionNotProcessableError(ProcessKnowledgeVersionError):
         )
 
 class KnowledgeVersionProcessingConflictError(ProcessKnowledgeVersionError):
-    """
-    Raised when the version changed after it was claimed but before this processing attempt could complete.
-    """
+    """Raised when the version changed after it was claimed but before this processing attempt could complete."""
 
 class KnowledgeProcessingContractError(ProcessKnowledgeVersionError):
-    """
-    Raised when parser/normalizer/chunker output violates cross-stage application invariants.
-    """
+    """Raised when parser/normalizer/chunker output violates cross-stage application invariants."""
 
 class KnowledgeProcessingPersistenceError(ProcessKnowledgeVersionError):
-    """
-    Raised when persistence fails while completing or recording failure state.
-    """
+    """Raised when persistence fails while completing or recording failure state."""
 
 # Command / result
 @dataclass(frozen=True, slots=True)
@@ -200,6 +196,7 @@ class ProcessKnowledgeVersion:
                 raise KnowledgeVersionNotFoundError(version_id)
 
             self._ensure_claimable(version)
+            before_state = self._audit_state(version)
             now = self._utc_now()
             claimed = self._copy_version(
                 version,
@@ -216,6 +213,25 @@ class ProcessKnowledgeVersion:
             uow.versions.save(claimed)
             # Ensure state-transition constraints fail here rather than after the expensive ingestion work.
             uow.flush()
+            
+            AuditRecorder(repository=uow.audit_events).record(
+                RecordAuditEventCommand(
+                    event_type="knowledge_version.processing_started",
+                    entity_type="knowledge_version",
+                    entity_id=claimed.id,
+                    action="processing_started",
+                    actor=AuditActor(actor_type=AuditActorType.SYSTEM),
+                    before_state=before_state,
+                    after_state=self._audit_state(claimed),
+                    metadata={
+                        "document_id": str(claimed.document_id),
+                        "version_number": claimed.version_number,
+                        "source_type": claimed.source_type.value,
+                    },
+                    occurred_at=now,
+                )
+            )
+
             snapshot = self._snapshot_from_version(claimed)
             uow.commit()
 
@@ -273,6 +289,7 @@ class ProcessKnowledgeVersion:
                 raise KnowledgeProcessingPersistenceError("Knowledge version disappeared before processing completion.")
 
             self._ensure_still_owned_for_processing(version)
+            before_state = self._audit_state(version)
 
             # Derived artifacts are replaceable for an unpublished processing version.
             # This also gives us deterministic cleanup if a previous attempt left stale chunks.
@@ -294,6 +311,28 @@ class ProcessKnowledgeVersion:
 
             # Force all INSERTs / constraints before commit.
             uow.flush()
+            
+            AuditRecorder(repository=uow.audit_events).record(
+                RecordAuditEventCommand(
+                    event_type="knowledge_version.processing_completed",
+                    entity_type="knowledge_version",
+                    entity_id=ready_version.id,
+                    action="processing_completed",
+                    actor=AuditActor(actor_type=AuditActorType.SYSTEM),
+                    before_state=before_state,
+                    after_state=self._audit_state(ready_version),
+                    metadata={
+                        "document_id": str(ready_version.document_id),
+                        "version_number": ready_version.version_number,
+                        "chunk_count": len(persisted_chunks),
+                        "parser_identity": artifacts.parsed.parser_identity,
+                        "normalizer_identity": artifacts.normalized.normalizer_identity,
+                        "chunker_identity": artifacts.chunked.chunker_identity,
+                    },
+                    occurred_at=completed_at,
+                )
+            )
+            
             uow.commit()
 
         return ProcessKnowledgeVersionResult(
@@ -338,6 +377,7 @@ class ProcessKnowledgeVersion:
             if version.status is not KnowledgeVersionStatus.PROCESSING or version.ingestion_status is not KnowledgeIngestionStatus.RUNNING:
                 return
 
+            before_state = self._audit_state(version)
             completed_at = self._utc_now()
             failed = self._copy_version(
                 version,
@@ -352,6 +392,26 @@ class ProcessKnowledgeVersion:
 
             uow.versions.save(failed)
             uow.flush()
+            
+            AuditRecorder(repository=uow.audit_events).record(
+                RecordAuditEventCommand(
+                    event_type="knowledge_version.processing_failed",
+                    entity_type="knowledge_version",
+                    entity_id=failed.id,
+                    action="processing_failed",
+                    actor=AuditActor(actor_type=AuditActorType.SYSTEM),
+                    before_state=before_state,
+                    after_state=self._audit_state(failed),
+                    metadata={
+                        "document_id": str(failed.document_id),
+                        "version_number": failed.version_number,
+                        "failure_code": failure_code,
+                        "exception_type": type(processing_error).__name__,
+                    },
+                    occurred_at=completed_at,
+                )
+            )
+            
             uow.commit()
 
     # Pipeline validation
@@ -360,22 +420,12 @@ class ProcessKnowledgeVersion:
                             normalized: NormalizedDocument, chunked: ChunkedDocument
     ) -> None:
         expected_version_id = snapshot.version_id
-        for stage_name, artifact in (
-            ("source", source),
-            ("parsed", parsed),
-            ("normalized", normalized),
-            ("chunked", chunked),
-        ):
+        for stage_name, artifact in (("source", source), ("parsed", parsed), ("normalized", normalized), ("chunked", chunked),):
             if artifact.version_id != expected_version_id:
                 raise KnowledgeProcessingContractError(f"{stage_name} artifact belongs to a different knowledge version.")
 
         expected_source_type = snapshot.source_type
-        for stage_name, artifact in (
-            ("source", source),
-            ("parsed", parsed),
-            ("normalized", normalized),
-            ("chunked", chunked),
-        ):
+        for stage_name, artifact in (("source", source), ("parsed", parsed), ("normalized", normalized), ("chunked", chunked),):
             if artifact.source_type is not expected_source_type:
                 raise KnowledgeProcessingContractError(f"{stage_name} artifact changed the knowledge source type.")
 
@@ -405,6 +455,17 @@ class ProcessKnowledgeVersion:
 
         if len(chunked.chunks) != chunked.chunk_count:
             raise KnowledgeProcessingContractError("Chunk count does not match chunk artifacts.")
+        
+    @staticmethod
+    def _audit_state(version: KnowledgeDocumentVersion) -> dict[str, object]:
+        return {
+            "status": version.status.value,
+            "ingestion_status": version.ingestion_status.value,
+            "processing_started_at": version.processing_started_at.isoformat() if version.processing_started_at is not None else None,
+            "processing_completed_at": version.processing_completed_at.isoformat() if version.processing_completed_at is not None else None,
+            "ready_at": version.ready_at.isoformat() if version.ready_at is not None else None,
+            "failure_code": version.failure_code,
+        }
 
     # Chunk persistence mapping
     @classmethod

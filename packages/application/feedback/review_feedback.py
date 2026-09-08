@@ -184,9 +184,9 @@ class ReviewFeedback:
                     return result
 
                 self._validate_transition(feedback_id=feedback.id, current_status=previous_status, target_status=command.target_status)
+                before_state = self._audit_state(feedback)
                 occurred_at = self._clock()
                 self._validate_clock_value(occurred_at)
-                before_state = self._audit_state(feedback)
                 self._apply_transition(
                     feedback=feedback,
                     reviewer_id=command.reviewer_id,

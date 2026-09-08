@@ -11,6 +11,8 @@ from packages.knowledge.domain.enums import KnowledgeDocumentStatus, KnowledgeSo
 from packages.knowledge.domain.errors import KnowledgeDocumentNotFoundError, KnowledgeDocumentAlreadyArchivedError, KnowledgeDocumentDeletedError
 from packages.knowledge.domain.version import KnowledgeDocumentVersion
 from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
+from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
+from packages.application.audit.recorder import AuditRecorder
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,11 +81,31 @@ class CreateKnowledgeVersion:
             )
 
             uow.versions.add(version)
-            # One transaction:
-            # document lock
-            #     - allocate version number
-            #     - insert version
-            #     - commit
+            AuditRecorder(repository=uow.audit_events).record(
+                RecordAuditEventCommand(
+                    event_type="knowledge_version.created",
+                    entity_type="knowledge_version",
+                    entity_id=version.id,
+                    action="created",
+                    actor=AuditActor(actor_type=AuditActorType.SYSTEM),
+                    before_state=None,
+                    after_state={
+                        "document_id": str(version.document_id),
+                        "version_number": version.version_number,
+                        "source_type": version.source_type.value,
+                        "status": version.status.value,
+                        "ingestion_status": version.ingestion_status.value,
+                        "content_hash": version.content_hash,
+                    },
+                    metadata={
+                        "source_content_length": len(version.source_content),
+                        "has_source_name": version.source_name is not None,
+                        "has_source_uri": version.source_uri is not None,
+                        "metadata_keys": sorted(version.metadata.keys()),
+                    },
+                    occurred_at=version.created_at,
+                )
+            )
             uow.commit()
 
         return CreateKnowledgeVersionResult(
