@@ -31,6 +31,7 @@ from packages.knowledge.embeddings.models import EmbeddingInputDescriptor
 from packages.application.escalations.create_escalation import CreateEscalation, CreateEscalationCommand
 from packages.database.repositories.support.escalation_repository import EscalationRepository
 from packages.database.models.support.conversation import ConversationModel
+from packages.database.repositories.audit.audit_event_repository import AuditEventRepository
 
 
 # Internal repository bundle
@@ -39,6 +40,7 @@ class _Repositories:
     conversations: ConversationRepository
     messages: MessageRepository
     escalations: EscalationRepository
+    audit_events: AuditEventRepository
     ai_runs: AIRunRepository
     llm_calls: LLMCallRepository
     intent_predictions: IntentPredictionRepository
@@ -472,10 +474,11 @@ class ProcessCustomerMessage:
         if state.decision_result is None:
             raise PersistenceContractError("ESCALATED state must contain decision_result")
 
-        create_escalation = CreateEscalation(repository=repositories.escalations)
+        create_escalation = CreateEscalation(repository=repositories.escalations, audit_repository=repositories.audit_events)
         result = create_escalation.execute(
             CreateEscalationCommand(
                 conversation_id=state.conversation_id,
+                trace_id=trace_id,
                 ai_run_id=state.ai_run_id,
                 trigger_message_id=state.trigger_message_id,
                 source=state.escalation_source.value,
@@ -484,13 +487,8 @@ class ProcessCustomerMessage:
                 priority=ProcessCustomerMessage._resolve_escalation_priority(state),
                 handoff_summary=ProcessCustomerMessage._build_handoff_summary(state),
                 metadata={
-                    "trace_id": str(trace_id),
                     "pipeline_stage": state.stage.value,
-                    "intent": (
-                        state.intent_result.intent.value
-                        if state.intent_result is not None
-                        else None
-                    ),
+                    "intent": state.intent_result.intent.value if state.intent_result is not None else None,
                     "decision": state.decision_result.decision.value,
                 },
             )
@@ -543,6 +541,9 @@ class ProcessCustomerMessage:
         
         if uow.escalations is None:
             raise PersistenceContractError("EscalationRepository unavailable")
+        
+        if uow.audit_events is None:
+            raise PersistenceContractError("AuditEventRepository unavailable")
 
         if uow.ai_runs is None:
             raise PersistenceContractError("AIRunRepository unavailable")
@@ -560,6 +561,7 @@ class ProcessCustomerMessage:
             conversations=uow.conversations,
             messages=uow.messages,
             escalations=uow.escalations,
+            audit_events=uow.audit_events,
             ai_runs=uow.ai_runs,
             llm_calls=uow.llm_calls,
             intent_predictions=uow.intent_predictions,

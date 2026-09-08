@@ -8,6 +8,9 @@ from typing import Any, Final, Mapping
 
 from packages.database.models.support.escalation import EscalationModel
 from packages.database.repositories.support.escalation_repository import EscalationRepository
+from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
+from packages.application.audit.recorder import AuditRecorder
+from packages.database.repositories.audit.audit_event_repository import AuditEventRepository
 
 VALID_ESCALATION_SOURCES: Final[frozenset[str]] = frozenset({"decision", "guardrail", "system", "manual",})
 VALID_ESCALATION_PRIORITIES: Final[frozenset[str]] = frozenset({"low", "normal", "high", "urgent",})
@@ -38,6 +41,7 @@ class CreateEscalationCommand:
     conversation_id: uuid.UUID
     source: str
     reason_code: str
+    trace_id: uuid.UUID | None = None
     ai_run_id: uuid.UUID | None = None
     trigger_message_id: uuid.UUID | None = None
     reason_summary: str | None = None
@@ -47,6 +51,9 @@ class CreateEscalationCommand:
 
     def __post_init__(self) -> None:
         self._validate_uuid(self.conversation_id, field_name="conversation_id")
+        if self.trace_id is not None:
+            self._validate_uuid(self.trace_id, field_name="trace_id")
+    
         if self.ai_run_id is not None:
             self._validate_uuid(self.ai_run_id, field_name="ai_run_id")
 
@@ -162,11 +169,15 @@ class CreateEscalation:
 
     This service does not create a Unit of Work and does not commit. Its caller owns the transaction boundary.
     """
-    def __init__(self, *, repository: EscalationRepository) -> None:
+    def __init__(self, *, repository: EscalationRepository, audit_repository: AuditEventRepository) -> None:
         if not isinstance(repository, EscalationRepository):
             raise TypeError("repository must be an EscalationRepository")
 
+        if not isinstance(audit_repository, AuditEventRepository):
+            raise TypeError("audit_repository must be an AuditEventRepository")
+
         self._repository = repository
+        self._audit_repository = audit_repository
 
     def execute(self, command: CreateEscalationCommand) -> CreateEscalationResult:
         if not isinstance(command, CreateEscalationCommand):
@@ -195,6 +206,33 @@ class CreateEscalation:
         self._repository.flush()
         if escalation.id is None:
             raise CreateEscalationContractError("Escalation ID was not generated after flush")
+        
+        if escalation.created_at is None:
+            raise CreateEscalationContractError("Escalation created_at was not generated after flush")
+
+        AuditRecorder(repository=self._audit_repository).record(
+            RecordAuditEventCommand(
+                event_type="escalation.created",
+                entity_type="escalation",
+                entity_id=escalation.id,
+                action="created",
+                actor=self._resolve_audit_actor(command),
+                trace_id=command.trace_id,
+                conversation_id=escalation.conversation_id,
+                ai_run_id=escalation.ai_run_id,
+                before_state=None,
+                after_state={
+                    "status": escalation.status,
+                    "priority": escalation.priority,
+                    "source": escalation.source,
+                    "reason_code": escalation.reason_code,
+                },
+                metadata={
+                    "trigger_message_id": str(escalation.trigger_message_id) if escalation.trigger_message_id is not None else None,
+                },
+                occurred_at=escalation.created_at,
+            )
+        )
 
         return self._to_result(escalation=escalation, created=True)
 
@@ -241,3 +279,10 @@ class CreateEscalation:
             status=escalation.status,
             created=created,
         )
+        
+    @staticmethod
+    def _resolve_audit_actor(command: CreateEscalationCommand) -> AuditActor:
+        if command.source in {"decision", "guardrail"}:
+            return AuditActor(actor_type=AuditActorType.AI)
+
+        return AuditActor(actor_type=AuditActorType.SYSTEM)

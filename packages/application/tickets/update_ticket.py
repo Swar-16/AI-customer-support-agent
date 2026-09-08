@@ -6,10 +6,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final
 from sqlalchemy.orm.exc import StaleDataError
+from typing import Any
 
 from packages.database.models.support.ticket import TicketModel
 from packages.database.repositories.support.ticket_repository import TicketRepository
 from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
+from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
+from packages.application.audit.recorder import AuditRecorder
+from packages.database.repositories.audit.audit_event_repository import AuditEventRepository
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork,]
 Clock = Callable[[], datetime]
@@ -213,7 +217,7 @@ class UpdateTicket:
 
         try:
             with self._uow_factory() as uow:
-                ticket_repository = self._require_repositories(uow)
+                ticket_repository, audit_repository = self._require_repositories(uow)
                 ticket = ticket_repository.get_by_id_for_update(command.ticket_id)
                 if ticket is None:
                     raise TicketDoesNotExistError(command.ticket_id)
@@ -229,10 +233,29 @@ class UpdateTicket:
                 occurred_at = self._clock()
                 self._validate_clock_value(occurred_at)
                 previous_status = ticket.status
+                before_state = self._audit_state(ticket)
                 changed = self._apply_mutations(ticket=ticket, command=command, occurred_at=occurred_at, uow=uow)
                 if changed:
                     ticket.updated_at = occurred_at
                     uow.flush()
+
+                    AuditRecorder(repository=audit_repository).record(
+                        RecordAuditEventCommand(
+                        event_type="ticket.updated",
+                        entity_type="ticket",
+                        entity_id=ticket.id,
+                        action="updated",
+                        actor=AuditActor(actor_type=AuditActorType.SYSTEM),
+                        conversation_id=ticket.conversation_id,
+                        before_state=before_state,
+                        after_state=self._audit_state(ticket),
+                        metadata={
+                            "ticket_number": ticket.ticket_number,
+                            "expected_row_version": command.expected_row_version,
+                        },
+                        occurred_at=occurred_at,
+                        )
+                    )
 
                 result = self._to_result(ticket=ticket, previous_status=previous_status, changed=changed)
                 uow.commit()
@@ -355,7 +378,7 @@ class UpdateTicket:
         # Reopening may be combined with assignment, priority, or category updates in the same atomic command.
 
     @staticmethod
-    def _require_repositories(uow: SqlAlchemyUnitOfWork) -> TicketRepository:
+    def _require_repositories(uow: SqlAlchemyUnitOfWork) -> tuple[TicketRepository, AuditEventRepository]:
         if uow.session is None:
             raise TicketPersistenceContractError("Active SQLAlchemy Session unavailable")
 
@@ -365,7 +388,24 @@ class UpdateTicket:
         if uow.users is None:
             raise TicketPersistenceContractError("UserRepository unavailable")
 
-        return uow.tickets
+        if uow.audit_events is None:
+            raise TicketPersistenceContractError("AuditEventRepository unavailable")
+
+        return uow.tickets, uow.audit_events
+    
+    @staticmethod
+    def _audit_state(ticket: TicketModel) -> dict[str, Any]:
+        return {
+            "status": ticket.status,
+            "priority": ticket.priority,
+            "category": ticket.category,
+            "assigned_agent_id": str(ticket.assigned_agent_id) if ticket.assigned_agent_id is not None else None,
+            "resolution_summary": ticket.resolution_summary,
+            "row_version": ticket.row_version,
+            "assigned_at": ticket.assigned_at.isoformat() if ticket.assigned_at is not None else None,
+            "resolved_at": ticket.resolved_at.isoformat() if ticket.resolved_at is not None else None,
+            "closed_at": ticket.closed_at.isoformat() if ticket.closed_at is not None else None,
+        }
 
     @staticmethod
     def _to_result(*, ticket: TicketModel, previous_status: str, changed: bool) -> UpdateTicketResult:

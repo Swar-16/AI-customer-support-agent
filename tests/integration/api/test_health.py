@@ -1,3 +1,4 @@
+# AI-customer-support-agent\tests\integration\api\test_health.py
 from __future__ import annotations
 from unittest.mock import Mock, patch
 import pytest
@@ -14,7 +15,12 @@ def make_application_services(*, provider_healthy: bool = True) -> ApplicationSe
 
     return ApplicationServices(
         process_customer_message=Mock(),
+        
         record_api_request=Mock(),
+        get_audit_event=Mock(),
+        list_audit_events=Mock(),
+        get_entity_audit_history=Mock(),
+        get_trace_audit_events=Mock(),
 
         get_escalation=Mock(),
         list_escalations=Mock(),

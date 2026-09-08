@@ -1,3 +1,4 @@
+# AI-customer-support-agent\tests\integration\api\test_escalation_flow.py
 from __future__ import annotations
 
 import uuid
@@ -22,6 +23,9 @@ from packages.database.models.support.message import MessageModel
 from packages.database.models.support.user import UserModel
 from packages.database.repositories.support.escalation_repository import (
     EscalationRepository,
+)
+from packages.database.repositories.audit.audit_event_repository import (
+    AuditEventRepository,
 )
 
 
@@ -354,8 +358,10 @@ class TestEscalationCreationIdempotency:
             session.flush()
 
             repository = EscalationRepository(session)
+            audit_repository = AuditEventRepository(session)
             service = CreateEscalation(
-                repository=repository
+                repository=repository,
+                audit_repository=audit_repository
             )
             command = CreateEscalationCommand(
                 conversation_id=conversation_id,

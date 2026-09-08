@@ -9,6 +9,9 @@ from typing import Final
 from packages.database.models.support.escalation import EscalationModel
 from packages.database.repositories.support.escalation_repository import EscalationRepository
 from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
+from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
+from packages.application.audit.recorder import AuditRecorder
+from packages.database.repositories.audit.audit_event_repository import AuditEventRepository
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork,]
 Clock = Callable[[], datetime]
@@ -106,7 +109,7 @@ class UpdateEscalation:
             raise TypeError("command must be an UpdateEscalationCommand")
 
         with self._uow_factory() as uow:
-            repository = self._require_repository(uow)
+            repository, audit_repository = self._require_repositories(uow)
             escalation = repository.get_by_id_for_update(command.escalation_id)
             if escalation is None:
                 raise EscalationDoesNotExistError(command.escalation_id)
@@ -122,20 +125,56 @@ class UpdateEscalation:
             self._validate_transition(escalation_id=escalation.id, current_status=previous_status, target_status=command.target_status)
             occurred_at = self._clock()
             self._validate_clock_value(occurred_at)
+            before_state = self._audit_state(escalation)
             self._apply_transition(escalation=escalation, target_status=command.target_status, occurred_at=occurred_at)
             # SQLAlchemy tracks this loaded ORM object automatically. No repository.save() method is necessary.
             uow.flush()
+            AuditRecorder(repository=audit_repository).record(
+                RecordAuditEventCommand(
+                    event_type="escalation.updated",
+                    entity_type="escalation",
+                    entity_id=escalation.id,
+                    action="updated",
+                    actor=AuditActor(actor_type=AuditActorType.SYSTEM),
+                    conversation_id=escalation.conversation_id,
+                    ai_run_id=escalation.ai_run_id,
+                    before_state=before_state,
+                    after_state=self._audit_state(escalation),
+                    metadata={
+                        "previous_status": previous_status,
+                        "target_status": command.target_status,
+                    },
+                    occurred_at=occurred_at,
+                )
+            )
 
             result = self._to_result(escalation=escalation, previous_status=previous_status, changed=True)
             uow.commit()
             return result
 
     @staticmethod
-    def _require_repository(uow: SqlAlchemyUnitOfWork) -> EscalationRepository:
+    def _require_repositories(uow: SqlAlchemyUnitOfWork) -> tuple[EscalationRepository, AuditEventRepository,]:
+        if uow.session is None:
+            raise EscalationPersistenceContractError("Active SQLAlchemy Session unavailable")
+
         if uow.escalations is None:
             raise EscalationPersistenceContractError("EscalationRepository unavailable")
 
-        return uow.escalations
+        if uow.audit_events is None:
+            raise EscalationPersistenceContractError("AuditEventRepository unavailable")
+
+        return uow.escalations, uow.audit_events
+    
+    @staticmethod
+    def _audit_state(escalation: EscalationModel) -> dict[str, object]:
+        return {
+            "status": escalation.status,
+            "priority": escalation.priority,
+            "source": escalation.source,
+            "reason_code": escalation.reason_code,
+            "resolved_at": escalation.resolved_at.isoformat() if escalation.resolved_at is not None else None,
+            "updated_at": escalation.updated_at.isoformat() if escalation.updated_at is not None else None,
+        }
 
     @staticmethod
     def _validate_transition(*, escalation_id: uuid.UUID, current_status: str, target_status: str) -> None:

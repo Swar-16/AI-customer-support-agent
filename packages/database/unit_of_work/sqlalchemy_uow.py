@@ -9,6 +9,7 @@ from packages.database.repositories.ai.decision_repository import AIDecisionRepo
 from packages.database.repositories.ai.intent_prediction_repository import IntentPredictionRepository
 from packages.database.repositories.ai.llm_call_repository import LLMCallRepository
 from packages.database.repositories.audit.api_request_repository import APIRequestRepository
+from packages.database.repositories.audit.audit_event_repository import AuditEventRepository
 from packages.database.repositories.support.conversation_repository import ConversationRepository
 from packages.database.repositories.support.message_repository import MessageRepository
 from packages.database.repositories.support.user_repository import UserRepository
@@ -44,6 +45,7 @@ class SqlAlchemyUnitOfWork:
         self.session: Session | None = None
         
         self.api_requests: APIRequestRepository | None = None
+        self.audit_events: AuditEventRepository | None = None
         
         self.users: UserRepository | None = None
         self.conversations: ConversationRepository | None = None
@@ -69,6 +71,7 @@ class SqlAlchemyUnitOfWork:
         self.session = self._session_factory()
         
         self.api_requests = APIRequestRepository(self.session)
+        self.audit_events = AuditEventRepository(self.session)
 
         self.users = UserRepository(self.session)
         self.conversations = ConversationRepository(self.session)
@@ -146,6 +149,7 @@ class SqlAlchemyUnitOfWork:
         self.session = None
         
         self.api_requests = None
+        self.audit_events = None
         
         self.users = None
         self.conversations = None

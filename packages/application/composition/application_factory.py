@@ -27,6 +27,7 @@ from packages.application.feedback.query_feedback import GetFeedback, ListFeedba
 from packages.application.feedback.review_feedback import ReviewFeedback
 from packages.application.feedback.submit_feedback import SubmitFeedback
 from packages.application.observability.record_api_request import RecordAPIRequest
+from packages.application.audit.query_audit_events import GetAuditEvent, GetEntityAuditHistory, GetTraceAuditEvents, ListAuditEvents
 
 SessionFactory = sessionmaker[Session]
 ProviderFactory = Callable[..., LLMProvider]
@@ -49,6 +50,10 @@ class ApplicationServices:
     """
     process_customer_message: ProcessCustomerMessage
     record_api_request: RecordAPIRequest
+    get_audit_event: GetAuditEvent
+    list_audit_events: ListAuditEvents
+    get_entity_audit_history: GetEntityAuditHistory
+    get_trace_audit_events: GetTraceAuditEvents
     get_escalation: GetEscalation
     list_escalations: ListEscalations
     list_conversation_escalations: ListConversationEscalations
@@ -135,6 +140,10 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
     )
     
     record_api_request = RecordAPIRequest(uow_factory=uow_factory)
+    get_audit_event = GetAuditEvent(uow_factory=uow_factory)
+    list_audit_events = ListAuditEvents(uow_factory=uow_factory)
+    get_entity_audit_history = GetEntityAuditHistory(uow_factory=uow_factory)
+    get_trace_audit_events = GetTraceAuditEvents(uow_factory=uow_factory)
     get_escalation = GetEscalation(uow_factory=uow_factory)
     list_escalations = ListEscalations(uow_factory=uow_factory)
     list_conversation_escalations = ListConversationEscalations(uow_factory=uow_factory)
@@ -152,6 +161,10 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
     return ApplicationServices(
         process_customer_message=process_customer_message,
         record_api_request=record_api_request,
+        get_audit_event=get_audit_event,
+        list_audit_events=list_audit_events,
+        get_entity_audit_history=get_entity_audit_history,
+        get_trace_audit_events=get_trace_audit_events,
         get_escalation=get_escalation,
         list_escalations=list_escalations,
         list_conversation_escalations=list_conversation_escalations,

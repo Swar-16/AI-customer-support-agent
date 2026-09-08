@@ -10,6 +10,9 @@ from sqlalchemy.orm.exc import StaleDataError
 from packages.database.models.support.feedback import FeedbackModel
 from packages.database.repositories.support.feedback_repository import FeedbackRepository
 from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
+from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
+from packages.application.audit.recorder import AuditRecorder
+from packages.database.repositories.audit.audit_event_repository import AuditEventRepository
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 Clock = Callable[[], datetime]
@@ -161,8 +164,8 @@ class ReviewFeedback:
 
         try:
             with self._uow_factory() as uow:
-                repository = self._require_repositories(uow)
-                self._validate_reviewer(reviewer_id=command.reviewer_id, uow=uow)
+                repository, audit_repository = self._require_repositories(uow)
+                reviewer_actor_type = self._validate_reviewer(reviewer_id=command.reviewer_id, uow=uow)
                 feedback = repository.get_by_id_for_update(command.feedback_id)
                 if feedback is None:
                     raise ReviewFeedbackDoesNotExistError(command.feedback_id)
@@ -183,6 +186,7 @@ class ReviewFeedback:
                 self._validate_transition(feedback_id=feedback.id, current_status=previous_status, target_status=command.target_status)
                 occurred_at = self._clock()
                 self._validate_clock_value(occurred_at)
+                before_state = self._audit_state(feedback)
                 self._apply_transition(
                     feedback=feedback,
                     reviewer_id=command.reviewer_id,
@@ -192,6 +196,25 @@ class ReviewFeedback:
                 )
                 
                 uow.flush()
+                AuditRecorder(repository=audit_repository).record(
+                    RecordAuditEventCommand(
+                        event_type="feedback.reviewed",
+                        entity_type="feedback",
+                        entity_id=feedback.id,
+                        action="reviewed",
+                        actor=AuditActor(actor_type=reviewer_actor_type, actor_id=command.reviewer_id),
+                        conversation_id=feedback.conversation_id,
+                        ai_run_id=feedback.ai_run_id,
+                        before_state=before_state,
+                        after_state=self._audit_state(feedback),
+                        metadata={
+                            "previous_status": previous_status,
+                            "target_status": command.target_status,
+                            "review_notes_length": len(command.review_notes) if command.review_notes is not None else 0,
+                        },
+                        occurred_at=occurred_at,
+                    )
+                )
                 result = self._to_result(feedback=feedback, previous_status=previous_status, changed=True)
                 uow.commit()
                 return result
@@ -200,7 +223,7 @@ class ReviewFeedback:
             raise FeedbackReviewConcurrencyError(feedback_id=command.feedback_id, expected_version=command.expected_row_version) from exc
 
     @staticmethod
-    def _require_repositories(uow: SqlAlchemyUnitOfWork) -> FeedbackRepository:
+    def _require_repositories(uow: SqlAlchemyUnitOfWork) -> tuple[FeedbackRepository, AuditEventRepository,]:
         if uow.session is None:
             raise FeedbackReviewPersistenceContractError("Active SQLAlchemy Session unavailable")
 
@@ -210,10 +233,13 @@ class ReviewFeedback:
         if uow.users is None:
             raise FeedbackReviewPersistenceContractError("UserRepository unavailable")
 
-        return uow.feedback
+        if uow.audit_events is None:
+            raise FeedbackReviewPersistenceContractError("AuditEventRepository unavailable")
+
+        return uow.feedback, uow.audit_events
 
     @staticmethod
-    def _validate_reviewer(*, reviewer_id: uuid.UUID, uow: SqlAlchemyUnitOfWork) -> None:
+    def _validate_reviewer(*, reviewer_id: uuid.UUID, uow: SqlAlchemyUnitOfWork) -> AuditActorType:
         if uow.users is None:
             raise FeedbackReviewPersistenceContractError("UserRepository unavailable")
 
@@ -224,8 +250,23 @@ class ReviewFeedback:
         if reviewer.status != "active":
             raise FeedbackReviewerNotAuthorizedError(f"Reviewer {reviewer_id} is not active: status={reviewer.status!r}")
 
-        if reviewer.role not in {"support_agent", "admin"}:
-            raise FeedbackReviewerNotAuthorizedError(f"User {reviewer_id} cannot review feedback: role={reviewer.role!r}")
+        if reviewer.role == "support_agent":
+            return AuditActorType.AGENT
+
+        if reviewer.role == "admin":
+            return AuditActorType.ADMIN
+
+        raise FeedbackReviewerNotAuthorizedError(f"User {reviewer_id} cannot review feedback: role={reviewer.role!r}")
+    
+    @staticmethod
+    def _audit_state(feedback: FeedbackModel) -> dict[str, object]:
+        return {
+            "status": feedback.status,
+            "reviewed_by_user_id": str(feedback.reviewed_by_user_id) if feedback.reviewed_by_user_id is not None else None,
+            "reviewed_at": feedback.reviewed_at.isoformat() if feedback.reviewed_at is not None else None,
+            "has_review_notes": feedback.review_notes is not None,
+            "row_version": feedback.row_version,
+        }
 
     @staticmethod
     def _validate_transition(*, feedback_id: uuid.UUID, current_status: str, target_status: str) -> None:

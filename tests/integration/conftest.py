@@ -1,3 +1,4 @@
+# AI-customer-support-agent\tests\integration\conftest.py
 from collections.abc import Generator
 import pytest
 from sqlalchemy import delete
@@ -21,6 +22,7 @@ from packages.database.models.support.feedback import FeedbackModel
 from packages.database.models.support.ticket import TicketModel
 from packages.database.models.support.ticket_comment import TicketCommentModel
 from packages.database.models.audit.api_request import APIRequestModel
+from packages.database.models.audit.audit_event import AuditEventModel
 
 
 @pytest.fixture(scope="session")
@@ -54,6 +56,7 @@ def _clear_database(session_factory: sessionmaker) -> None:
         session.execute(delete(EscalationModel))
         
         session.execute(delete(APIRequestModel))
+        session.execute(delete(AuditEventModel))
         
         session.execute(delete(AIDecisionModel))
         session.execute(delete(IntentPredictionModel))

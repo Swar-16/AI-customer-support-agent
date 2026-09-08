@@ -8,6 +8,7 @@ from packages.database.models.support.ticket_comment import TicketCommentModel
 from packages.database.models.support.feedback import FeedbackModel
 
 from packages.database.models.audit.api_request import APIRequestModel
+from packages.database.models.audit.audit_event import AuditEventModel
 
 from packages.database.models.config.prompt_version import PromptVersionModel
 
@@ -22,21 +23,9 @@ from packages.database.models.knowledge import KnowledgeDocumentVersionModel
 from packages.database.models.knowledge import KnowledgeChunkEmbeddingModel
 
 __all__ = [
-    "UserModel",
-    "ConversationModel",
-    "MessageModel",
-    "EscalationModel",
-    "TicketModel",
-    "TicketCommentModel",
-    "FeedbackModel",
-    "APIRequestModel",
+    "UserModel", "ConversationModel", "MessageModel", "EscalationModel", "TicketModel", "TicketCommentModel", "FeedbackModel",
+    "APIRequestModel", "AuditEventModel",
     "PromptVersionModel",
-    "AIRunModel",
-    "LLMCallModel",
-    "IntentPredictionModel",
-    "AIDecisionModel",
-    "KnowledgeChunkModel",
-    "KnowledgeDocumentModel",
-    "KnowledgeDocumentVersionModel",
-    "KnowledgeChunkEmbeddingModel",
+    "AIRunModel", "LLMCallModel", "IntentPredictionModel", "AIDecisionModel",
+    "KnowledgeChunkModel", "KnowledgeDocumentModel", "KnowledgeDocumentVersionModel", "KnowledgeChunkEmbeddingModel",
 ]

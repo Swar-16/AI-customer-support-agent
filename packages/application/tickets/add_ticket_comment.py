@@ -12,6 +12,9 @@ from packages.database.models.support.ticket_comment import TicketCommentModel
 from packages.database.repositories.support.ticket_comment_repository import TicketCommentRepository
 from packages.database.repositories.support.ticket_repository import TicketRepository
 from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
+from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
+from packages.application.audit.recorder import AuditRecorder
+from packages.database.repositories.audit.audit_event_repository import AuditEventRepository
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork,]
 VALID_AUTHOR_ROLES: Final[frozenset[str]] = frozenset({"customer", "support_agent", "admin", "system",})
@@ -186,7 +189,7 @@ class AddTicketComment:
             raise TypeError("command must be an AddTicketCommentCommand")
 
         with self._uow_factory() as uow:
-            tickets, comments = self._require_repositories(uow)
+            tickets, comments, audit_events = self._require_repositories(uow)
             ticket = tickets.get_by_id_for_update(command.ticket_id)
             if ticket is None:
                 raise CommentTicketDoesNotExistError(command.ticket_id)
@@ -209,6 +212,31 @@ class AddTicketComment:
 
             if comment.id is None:
                 raise TicketCommentPersistenceContractError("Ticket comment ID was not generated after flush")
+            
+            if comment.created_at is None:
+                raise TicketCommentPersistenceContractError("Ticket comment created_at was not generated after flush")
+
+            AuditRecorder(repository=audit_events).record(
+                RecordAuditEventCommand(
+                    event_type="ticket.comment_added",
+                    entity_type="ticket",
+                    entity_id=ticket.id,
+                    action="comment_added",
+                    actor=self._resolve_audit_actor(command),
+                    conversation_id=ticket.conversation_id,
+                    before_state=None,
+                    after_state={
+                        "comment_id": str(comment.id),
+                        "visibility": comment.visibility,
+                        "author_role": comment.author_role,
+                    },
+                    metadata={
+                        "comment_length": len(comment.content),
+                        "system_author_id": str(comment.author_id) if comment.author_role == "system" and comment.author_id is not None else None,
+                    },
+                    occurred_at=comment.created_at,
+                )
+            )
 
             result = AddTicketCommentResult(
                 comment_id=comment.id,
@@ -221,7 +249,6 @@ class AddTicketComment:
             )
 
             uow.commit()
-
             return result
 
     @staticmethod
@@ -270,7 +297,7 @@ class AddTicketComment:
             raise CommentAuthorRoleMismatchError(f"User {author.id} has role {author.role!r}, not 'system'")
 
     @staticmethod
-    def _require_repositories(uow: SqlAlchemyUnitOfWork) -> tuple[TicketRepository, TicketCommentRepository,]:
+    def _require_repositories(uow: SqlAlchemyUnitOfWork) -> tuple[TicketRepository, TicketCommentRepository, AuditEventRepository,]:
         if uow.session is None:
             raise TicketCommentPersistenceContractError("Active SQLAlchemy Session unavailable")
 
@@ -283,4 +310,23 @@ class AddTicketComment:
         if uow.users is None:
             raise TicketCommentPersistenceContractError("UserRepository unavailable")
 
-        return (uow.tickets, uow.ticket_comments,)
+        if uow.audit_events is None:
+            raise TicketCommentPersistenceContractError("AuditEventRepository unavailable")
+
+        return (uow.tickets, uow.ticket_comments, uow.audit_events,)
+    
+    @staticmethod
+    def _resolve_audit_actor(command: AddTicketCommentCommand) -> AuditActor:
+        actor_type_by_role = {
+            "customer": AuditActorType.CUSTOMER,
+            "support_agent": AuditActorType.AGENT,
+            "admin": AuditActorType.ADMIN,
+            "system": AuditActorType.SYSTEM,
+        }
+
+        actor_type = actor_type_by_role[command.author_role]
+
+        return AuditActor(
+            actor_type=actor_type,
+            actor_id=command.author_id if actor_type is not AuditActorType.SYSTEM else None,
+        )

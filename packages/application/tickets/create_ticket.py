@@ -11,6 +11,9 @@ from packages.database.models.support.ticket import TicketModel
 from packages.database.repositories.support.escalation_repository import EscalationRepository
 from packages.database.repositories.support.ticket_repository import TicketRepository
 from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
+from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
+from packages.application.audit.recorder import AuditRecorder
+from packages.database.repositories.audit.audit_event_repository import AuditEventRepository
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 VALID_TICKET_SOURCES: Final[frozenset[str]] = frozenset({"customer", "escalation", "agent","system",})
@@ -204,6 +207,7 @@ class CreateTicketResult:
 class _TicketRepositories:
     tickets: TicketRepository
     escalations: EscalationRepository
+    audit_events: AuditEventRepository
 
 class CreateTicket:
     """
@@ -283,6 +287,33 @@ class CreateTicket:
 
         repositories.tickets.add(ticket)
         repositories.tickets.flush()
+        
+        if ticket.id is None:
+            raise TicketPersistenceContractError("Ticket ID was not generated after flush")
+
+        AuditRecorder(repository=repositories.audit_events).record(
+            RecordAuditEventCommand(
+                event_type="ticket.created",
+                entity_type="ticket",
+                entity_id=ticket.id,
+                action="created",
+                actor=self._resolve_audit_actor(command),
+                conversation_id=ticket.conversation_id,
+                before_state=None,
+                after_state={
+                    "status": ticket.status,
+                    "priority": ticket.priority,
+                    "category": ticket.category,
+                    "source": ticket.source,
+                    "assigned_agent_id": str(ticket.assigned_agent_id) if ticket.assigned_agent_id is not None else None,
+                    "escalation_id": str(ticket.escalation_id) if ticket.escalation_id is not None else None,
+                },
+                metadata={
+                    "ticket_number": ticket.ticket_number,
+                    "source_message_id": str(ticket.source_message_id) if ticket.source_message_id is not None else None,
+                },
+            )
+        )
 
         return self._to_result(ticket=ticket, created=True)
 
@@ -368,8 +399,11 @@ class CreateTicket:
 
         if uow.tickets is None:
             raise TicketPersistenceContractError("TicketRepository unavailable")
+        
+        if uow.audit_events is None:
+            raise TicketPersistenceContractError("AuditEventRepository unavailable", audit_events=uow.audit_events)
 
-        return _TicketRepositories(tickets=uow.tickets, escalations=uow.escalations)
+        return _TicketRepositories(tickets=uow.tickets, escalations=uow.escalations, audit_events=uow.audit_events)
 
     @staticmethod
     def _to_result(*, ticket: TicketModel, created: bool) -> CreateTicketResult:
@@ -391,3 +425,14 @@ class CreateTicket:
             category=ticket.category,
             created=created,
         )
+        
+    @staticmethod
+    def _resolve_audit_actor(command: CreateTicketCommand) -> AuditActor:
+        if command.source == "customer":
+            return AuditActor(actor_type=AuditActorType.CUSTOMER, actor_id=command.customer_id)
+
+        if command.source == "agent":
+            # Authentication is not wired into this command yet, so the initiating agent ID is currently unavailable.
+            return AuditActor(actor_type=AuditActorType.AGENT, actor_id=None)
+
+        return AuditActor(actor_type=AuditActorType.SYSTEM, actor_id=None)

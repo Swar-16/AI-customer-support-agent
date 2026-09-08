@@ -11,6 +11,9 @@ from sqlalchemy.exc import IntegrityError
 from packages.database.models.support.feedback import FeedbackModel
 from packages.database.repositories.support.feedback_repository import FeedbackRepository
 from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
+from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
+from packages.application.audit.recorder import AuditRecorder
+from packages.database.repositories.audit.audit_event_repository import AuditEventRepository
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 VALID_FEEDBACK_REASON_CODES: Final[frozenset[str]] = frozenset(
@@ -233,7 +236,7 @@ class SubmitFeedback:
 
         try:
             with self._uow_factory() as uow:
-                repository = self._require_repositories(uow)
+                repository, audit_repository = self._require_repositories(uow)
                 self._validate_customer_and_conversation(command=command, uow=uow)
                 self._validate_response_message(command=command, uow=uow)
                 self._validate_ai_run(command=command, uow=uow)
@@ -262,6 +265,32 @@ class SubmitFeedback:
 
                 repository.add(feedback)
                 repository.flush()
+                if feedback.id is None:
+                    raise FeedbackPersistenceContractError("Feedback ID was not generated after flush")
+
+                AuditRecorder(repository=audit_repository).record(
+                    RecordAuditEventCommand(
+                        event_type="feedback.submitted",
+                        entity_type="feedback",
+                        entity_id=feedback.id,
+                        action="submitted",
+                        actor=AuditActor(actor_type=AuditActorType.CUSTOMER, actor_id=command.customer_id),
+                        conversation_id=feedback.conversation_id,
+                        ai_run_id=feedback.ai_run_id,
+                        before_state=None,
+                        after_state={
+                            "rating": feedback.rating,
+                            "helpful": feedback.helpful,
+                            "reason_codes": list(feedback.reason_codes),
+                            "status": feedback.status,
+                            "has_comment": feedback.comment is not None,
+                        },
+                        metadata={
+                            "response_message_id": str(feedback.response_message_id),
+                            "comment_length": len(feedback.comment) if feedback.comment is not None else 0,
+                        },
+                    )
+                )
                 result = self._to_result(feedback=feedback, created=True)
                 uow.commit()
 
@@ -274,7 +303,7 @@ class SubmitFeedback:
             raise
 
     @staticmethod
-    def _require_repositories(uow: SqlAlchemyUnitOfWork) -> FeedbackRepository:
+    def _require_repositories(uow: SqlAlchemyUnitOfWork) -> tuple[FeedbackRepository, AuditEventRepository,]:
         if uow.session is None:
             raise FeedbackPersistenceContractError("Active SQLAlchemy Session unavailable")
 
@@ -293,7 +322,10 @@ class SubmitFeedback:
         if uow.ai_runs is None:
             raise FeedbackPersistenceContractError("AIRunRepository unavailable")
 
-        return uow.feedback
+        if uow.audit_events is None:
+            raise FeedbackPersistenceContractError("AuditEventRepository unavailable")
+
+        return uow.feedback, uow.audit_events
 
     @staticmethod
     def _validate_customer_and_conversation(*, command: SubmitFeedbackCommand, uow: SqlAlchemyUnitOfWork) -> None:
