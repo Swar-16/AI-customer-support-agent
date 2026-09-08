@@ -16,6 +16,11 @@ from packages.database.models.ai.run import AIRunModel
 from packages.database.models.ai.llm_call import LLMCallModel
 from packages.database.models.ai.intent_prediction import IntentPredictionModel
 from packages.database.models.ai.decision import AIDecisionModel
+from packages.database.models.ai.stage_event import AIStageEventModel
+from packages.database.models.ai.embedding_call import EmbeddingCallModel
+from packages.database.models.ai.retrieval_run import RetrievalRunModel
+from packages.database.models.ai.retrieval_candidate import RetrievalCandidateModel
+from packages.database.models.ai.reranker_call import RerankerCallModel
 
 from packages.database.models.knowledge import KnowledgeChunkModel
 from packages.database.models.knowledge import KnowledgeDocumentModel
@@ -27,5 +32,6 @@ __all__ = [
     "APIRequestModel", "AuditEventModel",
     "PromptVersionModel",
     "AIRunModel", "LLMCallModel", "IntentPredictionModel", "AIDecisionModel",
+    "AIStageEventModel", "EmbeddingCallModel", "RetrievalRunModel", "RetrievalCandidateModel", "RerankerCallModel",
     "KnowledgeChunkModel", "KnowledgeDocumentModel", "KnowledgeDocumentVersionModel", "KnowledgeChunkEmbeddingModel",
 ]

@@ -17,6 +17,10 @@ from packages.database.repositories.support.escalation_repository import Escalat
 from packages.database.repositories.support.ticket_repository import TicketRepository
 from packages.database.repositories.support.ticket_comment_repository import TicketCommentRepository
 from packages.database.repositories.support.feedback_repository import FeedbackRepository
+from packages.database.repositories.ai.stage_event_repository import AIStageEventRepository
+from packages.database.repositories.ai.embedding_call_repository import EmbeddingCallRepository
+from packages.database.repositories.ai.retrieval_repository import RetrievalRepository
+from packages.database.repositories.ai.reranker_call_repository import RerankerCallRepository
 from packages.database.session import SessionLocal
 
 SessionFactory: TypeAlias = sessionmaker[Session]
@@ -59,6 +63,10 @@ class SqlAlchemyUnitOfWork:
         self.llm_calls: LLMCallRepository | None = None
         self.intent_predictions: IntentPredictionRepository | None = None
         self.ai_decisions: AIDecisionRepository | None = None
+        self.stage_events: AIStageEventRepository | None = None
+        self.embedding_calls: EmbeddingCallRepository | None = None
+        self.retrieval: RetrievalRepository | None = None
+        self.reranker_calls: RerankerCallRepository | None = None
 
         self._committed = False
         self._entered = False
@@ -83,8 +91,12 @@ class SqlAlchemyUnitOfWork:
 
         self.ai_runs = AIRunRepository(self.session)
         self.llm_calls = LLMCallRepository(self.session)
-        self.intent_predictions = (IntentPredictionRepository(self.session))
+        self.intent_predictions = IntentPredictionRepository(self.session)
         self.ai_decisions = AIDecisionRepository(self.session)
+        self.stage_events = AIStageEventRepository(self.session)
+        self.embedding_calls = EmbeddingCallRepository(self.session)
+        self.retrieval = RetrievalRepository(self.session)
+        self.reranker_calls = RerankerCallRepository(self.session)
 
         self._entered = True
         self._committed = False
@@ -163,6 +175,10 @@ class SqlAlchemyUnitOfWork:
         self.llm_calls = None
         self.intent_predictions = None
         self.ai_decisions = None
+        self.stage_events = None
+        self.embedding_calls = None
+        self.retrieval = None
+        self.reranker_calls = None
 
         self._entered = False
         self._committed = False

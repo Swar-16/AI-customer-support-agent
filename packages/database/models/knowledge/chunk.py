@@ -36,11 +36,11 @@ class KnowledgeChunkModel(Base):
 
         CheckConstraint(
             "chunk_index >= 0",
-            name="ck_knowledge_chunks_nonnegative_index",
+            name="nonnegative_index",
         ),
         CheckConstraint(
             "length(btrim(content)) > 0",
-            name="ck_knowledge_chunks_content_not_blank",
+            name="content_not_blank",
         ),
         CheckConstraint(
             """
@@ -56,15 +56,15 @@ class KnowledgeChunkModel(Base):
                 AND end_offset > start_offset
             )
             """,
-            name="ck_knowledge_chunks_valid_offsets",
+            name="valid_offsets",
         ),
         CheckConstraint(
             "token_count IS NULL OR token_count > 0",
-            name="ck_knowledge_chunks_positive_token_count",
+            name="positive_token_count",
         ),
         CheckConstraint(
             "updated_at >= created_at",
-            name="ck_knowledge_chunks_timestamp_order",
+            name="timestamp_order",
         ),
 
         Index(

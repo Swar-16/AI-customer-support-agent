@@ -35,31 +35,31 @@ class KnowledgeDocumentVersionModel(Base):
 
         CheckConstraint(
             "version_number > 0",
-            name="ck_knowledge_document_versions_positive_version",
+            name="positive_version",
         ),
         CheckConstraint(
             "length(btrim(source_content)) > 0",
-            name="ck_knowledge_document_versions_content_not_blank",
+            name="content_not_blank",
         ),
         CheckConstraint(
             "length(btrim(content_hash)) > 0",
-            name="ck_knowledge_document_versions_hash_not_blank",
+            name="hash_not_blank",
         ),
         CheckConstraint(
             enum_check_sql("source_type", KnowledgeSourceType),
-            name="ck_knowledge_document_versions_source_type",
+            name="source_type",
         ),
         CheckConstraint(
             enum_check_sql("status", KnowledgeVersionStatus),
-            name="ck_knowledge_document_versions_status",
+            name="status",
         ),
         CheckConstraint(
             enum_check_sql("ingestion_status", KnowledgeIngestionStatus),
-            name="ck_knowledge_document_versions_ingestion_status",
+            name="ingestion_status",
         ),
         CheckConstraint(
             "updated_at >= created_at",
-            name="ck_knowledge_document_versions_timestamp_order",
+            name="timestamp_order",
         ),
 
         # At most one PUBLISHED version may exist for a document.

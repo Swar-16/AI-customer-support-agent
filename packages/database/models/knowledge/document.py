@@ -43,19 +43,19 @@ class KnowledgeDocumentModel(Base):
     __table_args__ = (
         CheckConstraint(
             "length(btrim(title)) > 0",
-            name="ck_knowledge_documents_title_not_blank",
+            name="title_not_blank",
         ),
         CheckConstraint(
             enum_check_sql("content_type", KnowledgeContentType),
-            name="ck_knowledge_documents_content_type",
+            name="content_type",
         ),
         CheckConstraint(
             enum_check_sql("visibility", KnowledgeVisibility),
-            name="ck_knowledge_documents_visibility",
+            name="visibility",
         ),
         CheckConstraint(
             enum_check_sql("status", KnowledgeDocumentStatus),
-            name="ck_knowledge_documents_status",
+            name="status",
         ),
         CheckConstraint(
             """
@@ -76,19 +76,19 @@ class KnowledgeDocumentModel(Base):
                 AND deleted_at IS NOT NULL
             )
             """,
-            name="ck_knowledge_documents_lifecycle",
+            name="lifecycle",
         ),
         CheckConstraint(
             "updated_at >= created_at",
-            name="ck_knowledge_documents_timestamp_order",
+            name="timestamp_order",
         ),
         CheckConstraint(
             "archived_at IS NULL OR archived_at >= created_at",
-            name="ck_knowledge_documents_archived_at_order",
+            name="archived_at_order",
         ),
         CheckConstraint(
             "deleted_at IS NULL OR deleted_at >= created_at",
-            name="ck_knowledge_documents_deleted_at_order",
+            name="deleted_at_order",
         ),
         
         Index(
