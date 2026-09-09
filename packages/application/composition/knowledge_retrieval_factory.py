@@ -20,6 +20,9 @@ from packages.knowledge.retrieval.reranking.base import Reranker
 from packages.knowledge.retrieval.reranking.passthrough import PassthroughReranker
 from packages.knowledge.retrieval.reranking.service import RerankingService
 from packages.knowledge.retrieval.vector.service import VectorRetrievalService
+from packages.ai.telemetry.retrieval_recorder import RetrievalTelemetryRecorder
+from packages.ai.telemetry.reranker_recorder import RerankerTelemetryRecorder
+from packages.knowledge.retrieval.reranking.instrumented import InstrumentedReranker
 
 @dataclass(frozen=True, slots=True)
 class KnowledgeRetrievalComponents:
@@ -46,7 +49,8 @@ class KnowledgeRetrievalComponents:
 
 def create_knowledge_retrieval_components(*, session: Session, profile: RetrievalProfile, default_context_budget: GroundingContextBudget,
                                           embedding_provider: EmbeddingProvider | None = None, embedding_input_descriptor: EmbeddingInputDescriptor | None = None,
-                                          reranker: Reranker | None = None, token_estimator: TokenEstimator | None = None
+                                          reranker: Reranker | None = None, token_estimator: TokenEstimator | None = None,
+                                          telemetry_recorder: RetrievalTelemetryRecorder | None = None, reranker_telemetry_recorder: RerankerTelemetryRecorder | None = None,
 ) -> KnowledgeRetrievalComponents:
     """
     Compose the complete knowledge retrieval and grounding pipeline.
@@ -91,6 +95,8 @@ def create_knowledge_retrieval_components(*, session: Session, profile: Retrieva
         default_context_budget=default_context_budget,
         reranker=reranker,
         token_estimator=token_estimator,
+        telemetry_recorder=telemetry_recorder,
+        reranker_telemetry_recorder=reranker_telemetry_recorder
     )
 
     # Query preparation
@@ -108,7 +114,7 @@ def create_knowledge_retrieval_components(*, session: Session, profile: Retrieva
     lexical_service = _build_lexical_service(session=session, profile=profile)
 
     # Fusion / reranking
-    reranking_service = _build_reranking_service(profile=profile, reranker=reranker)
+    reranking_service = _build_reranking_service(profile=profile, reranker=reranker, telemetry_recorder=reranker_telemetry_recorder)
     fusion_strategy = ReciprocalRankFusion(k=profile.rrf_k)
     retrieve_knowledge = RetrieveKnowledge(
         profile=profile,
@@ -116,6 +122,7 @@ def create_knowledge_retrieval_components(*, session: Session, profile: Retrieva
         vector_service=vector_service,
         lexical_service=lexical_service,
         reranking_service=reranking_service,
+        telemetry_recorder=telemetry_recorder,
     )
 
     # Grounding context
@@ -125,6 +132,7 @@ def create_knowledge_retrieval_components(*, session: Session, profile: Retrieva
         retrieve_knowledge=retrieve_knowledge,
         context_builder=context_builder,
         default_budget=default_context_budget,
+        telemetry_recorder=telemetry_recorder,
     )
 
     return KnowledgeRetrievalComponents(
@@ -165,15 +173,19 @@ def _build_lexical_service(*, session: Session, profile: RetrievalProfile) -> Le
     repository = SQLAlchemyLexicalRetrievalRepository(session=session)
     return LexicalRetrievalService(repository=repository)
 
-def _build_reranking_service(*, profile: RetrievalProfile, reranker: Reranker | None) -> RerankingService | None:
+def _build_reranking_service(*, profile: RetrievalProfile, reranker: Reranker | None, telemetry_recorder: RerankerTelemetryRecorder | None) -> RerankingService | None:
     if not profile.reranking_enabled:
         return None
 
     effective_reranker = reranker if reranker is not None else PassthroughReranker()
+    if telemetry_recorder is not None:
+        effective_reranker = InstrumentedReranker(reranker=effective_reranker, recorder=telemetry_recorder)
+        
     return RerankingService(reranker=effective_reranker)
 
 def _validate_inputs(*, session: Session, embedding_provider: EmbeddingProvider | None, embedding_input_descriptor: EmbeddingInputDescriptor | None,
-                     profile: RetrievalProfile, default_context_budget: GroundingContextBudget, reranker: Reranker | None, token_estimator: TokenEstimator | None
+                     profile: RetrievalProfile, default_context_budget: GroundingContextBudget, reranker: Reranker | None,
+                     token_estimator: TokenEstimator | None, telemetry_recorder: RetrievalTelemetryRecorder | None, reranker_telemetry_recorder: RerankerTelemetryRecorder | None,
 ) -> None:
     if not isinstance(session, Session):
         raise TypeError("session must be a SQLAlchemy Session instance.")
@@ -206,3 +218,9 @@ def _validate_inputs(*, session: Session, embedding_provider: EmbeddingProvider 
 
     if token_estimator is not None and not isinstance(token_estimator, TokenEstimator):
         raise TypeError("token_estimator must be a TokenEstimator instance or None.")
+    
+    if telemetry_recorder is not None and not isinstance(telemetry_recorder, RetrievalTelemetryRecorder):
+        raise TypeError("telemetry_recorder must be a RetrievalTelemetryRecorder instance or None.")
+    
+    if reranker_telemetry_recorder is not None and not isinstance(reranker_telemetry_recorder, RerankerTelemetryRecorder):
+        raise TypeError("reranker_telemetry_recorder must be a RerankerTelemetryRecorder instance or None.")

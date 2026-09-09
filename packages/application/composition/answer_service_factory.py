@@ -14,7 +14,8 @@ from packages.knowledge.retrieval.context.models import GroundingContextBudget
 from packages.application.composition.knowledge_retrieval_factory import KnowledgeRetrievalComponents, create_knowledge_retrieval_components
 from packages.knowledge.retrieval.profiles import RetrievalProfile
 from packages.knowledge.retrieval.reranking.base import Reranker
-
+from packages.ai.telemetry.retrieval_recorder import RetrievalTelemetryRecorder
+from packages.ai.telemetry.reranker_recorder import RerankerTelemetryRecorder
 
 # Composed result
 @dataclass(frozen=True, slots=True)
@@ -44,6 +45,7 @@ def create_answer_service_components(*, session: Session, profile: RetrievalProf
                                      embedding_input_descriptor: EmbeddingInputDescriptor | None = None, reranker: Reranker | None = None,
                                      token_estimator: TokenEstimator | None = None, evidence_mapper: KnowledgeEvidenceMapper | None = None,
                                      knowledge_application: KnowledgeApplicationComponents | None = None, knowledge_retrieval: KnowledgeRetrievalComponents | None = None,
+                                     retrieval_telemetry_recorder: RetrievalTelemetryRecorder | None = None, reranker_telemetry_recorder: RerankerTelemetryRecorder | None = None
 ) -> AnswerServiceComponents:
     """
     Compose the application-level grounded-answer boundary.
@@ -121,6 +123,8 @@ def create_answer_service_components(*, session: Session, profile: RetrievalProf
         embedding_input_descriptor=embedding_input_descriptor,
         reranker=reranker,
         token_estimator=token_estimator,
+        telemetry_recorder=retrieval_telemetry_recorder,
+        reranker_telemetry_recorder=reranker_telemetry_recorder
     )
 
     if not isinstance(effective_knowledge_retrieval, KnowledgeRetrievalComponents):

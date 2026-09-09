@@ -32,6 +32,14 @@ from packages.application.escalations.create_escalation import CreateEscalation,
 from packages.database.repositories.support.escalation_repository import EscalationRepository
 from packages.database.models.support.conversation import ConversationModel
 from packages.database.repositories.audit.audit_event_repository import AuditEventRepository
+from packages.ai.telemetry.transactional_embedding_recorder import TransactionalEmbeddingTelemetryRecorder
+from packages.database.repositories.ai.embedding_call_repository import EmbeddingCallRepository
+from packages.knowledge.embeddings.provider.instrumented import EmbeddingCallContext, InstrumentedEmbeddingProvider
+from packages.ai.telemetry.retrieval_recorder import RetrievalTelemetryRecorder
+from packages.database.repositories.ai.retrieval_repository import RetrievalRepository
+from packages.ai.telemetry.reranker_recorder import RerankerTelemetryRecorder
+from packages.database.repositories.ai.reranker_call_repository import RerankerCallRepository
+from packages.database.repositories.ai.stage_event_repository import AIStageEventRepository
 
 
 # Internal repository bundle
@@ -43,6 +51,10 @@ class _Repositories:
     audit_events: AuditEventRepository
     ai_runs: AIRunRepository
     llm_calls: LLMCallRepository
+    embedding_calls: EmbeddingCallRepository
+    retrieval: RetrievalRepository
+    reranker_calls: RerankerCallRepository
+    stage_events: AIStageEventRepository
     intent_predictions: IntentPredictionRepository
     ai_decisions: AIDecisionRepository
 
@@ -261,14 +273,46 @@ class ProcessCustomerMessage:
                 session = uow.session
                 if session is None:
                     raise PersistenceContractError("Active SQLAlchemy Session unavailable while composing AnswerService")
+                
+                embedding_recorder = TransactionalEmbeddingTelemetryRecorder(repository=repositories.embedding_calls)
+                retrieval_recorder = RetrievalTelemetryRecorder(
+                    repository=repositories.retrieval, ai_run_id=ai_run.id, trace_id=trace_id, conversation_id=command.conversation_id,
+                    profile=self._retrieval_profile,
+                )
+                reranker_recorder = RerankerTelemetryRecorder(
+                    repository=repositories.reranker_calls,
+                    retrieval_run_id=lambda: retrieval_recorder.retrieval_run_id,
+                    trace_id=trace_id,
+                    metadata={
+                        "workflow": "customer_support_retrieval",
+                        "conversation_id": str(command.conversation_id),
+                        "ai_run_id": str(ai_run.id),
+                    },
+                )
+                instrumented_embedding_provider = InstrumentedEmbeddingProvider(
+                    provider=self._embedding_provider,
+                    recorder=embedding_recorder,
+                    context=EmbeddingCallContext(
+                        purpose="query",
+                        ai_run_id=ai_run.id,
+                        trace_id=trace_id,
+                        metadata={
+                            "workflow": "customer_support_retrieval",
+                            "conversation_id": str(command.conversation_id),
+                        },
+                    ),
+                )
 
                 components = create_answer_service_components(
                     session=session,
                     profile=self._retrieval_profile,
                     default_context_budget=self._grounding_context_budget,
                     response_generator=response_generator,
-                    embedding_provider=self._embedding_provider,
-                    embedding_input_descriptor=self._embedding_input_descriptor,                )
+                    embedding_provider=instrumented_embedding_provider,
+                    embedding_input_descriptor=self._embedding_input_descriptor,
+                    retrieval_telemetry_recorder=retrieval_recorder,
+                    reranker_telemetry_recorder=reranker_recorder
+                )
 
                 return components.answer_service
 
@@ -279,6 +323,7 @@ class ProcessCustomerMessage:
                     llm_calls=repositories.llm_calls,
                     intent_predictions=repositories.intent_predictions,
                     ai_decisions=repositories.ai_decisions,
+                    stage_events=repositories.stage_events,
                 ),
                 answer_service_builder=build_answer_service,
             )
@@ -550,6 +595,18 @@ class ProcessCustomerMessage:
 
         if uow.llm_calls is None:
             raise PersistenceContractError("LLMCallRepository unavailable")
+        
+        if uow.embedding_calls is None:
+            raise PersistenceContractError("EmbeddingCallRepository unavailable")
+        
+        if uow.retrieval is None:
+            raise PersistenceContractError("RetrievalRepository unavailable")
+        
+        if uow.reranker_calls is None:
+            raise PersistenceContractError("RerankerCallRepository unavailable")
+        
+        if uow.stage_events is None:
+            raise PersistenceContractError("AIStageEventRepository unavailable")
 
         if uow.intent_predictions is None:
             raise PersistenceContractError("IntentPredictionRepository unavailable")
@@ -564,6 +621,10 @@ class ProcessCustomerMessage:
             audit_events=uow.audit_events,
             ai_runs=uow.ai_runs,
             llm_calls=uow.llm_calls,
+            embedding_calls=uow.embedding_calls,
+            retrieval=uow.retrieval,
+            reranker_calls=uow.reranker_calls,
+            stage_events=uow.stage_events,
             intent_predictions=uow.intent_predictions,
             ai_decisions=uow.ai_decisions,
         )

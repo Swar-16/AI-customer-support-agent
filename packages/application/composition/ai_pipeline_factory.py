@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 from packages.ai.decision.engine import DecisionEngine, DecisionEngineConfig
 from packages.ai.generation.generator import GroundedResponseGenerator
@@ -18,9 +18,39 @@ from packages.database.repositories.ai.intent_prediction_repository import Inten
 from packages.database.repositories.ai.llm_call_repository import LLMCallRepository
 from packages.application.ai.answer_service import AnswerService
 from packages.guardrails.evaluator import GuardrailEvaluator
+from packages.ai.telemetry.observer import CompositeTelemetrySink, LoggingTelemetrySink, TelemetryOrchestrationObserver
+from packages.ai.telemetry.stage_event_sink import DatabaseStageEventSink
+from packages.database.repositories.ai.stage_event_repository import AIStageEventRepository
 
 
 AnswerServiceBuilder = Callable[[GroundedResponseGenerator], AnswerService]
+
+class CompositeOrchestrationObserver:
+    """
+    Fan out orchestration callbacks to multiple observers.
+
+    This preserves an explicitly configured observer while also enabling durable request-scoped stage telemetry.
+    """
+    def __init__(self, observers: Iterable[OrchestrationObserver]) -> None:
+        self._observers = tuple(observers)
+        if not self._observers:
+            raise ValueError("At least one observer is required")
+
+        for observer in self._observers:
+            if not isinstance(observer, OrchestrationObserver):
+                raise TypeError("Every observer must satisfy OrchestrationObserver")
+
+    def stage_started(self, *, state, stage) -> None:
+        for observer in self._observers:
+            observer.stage_started(state=state, stage=stage)
+
+    def stage_completed(self, *, state, stage) -> None:
+        for observer in self._observers:
+            observer.stage_completed(state=state, stage=stage)
+
+    def stage_failed(self, *, state, stage, error) -> None:
+        for observer in self._observers:
+            observer.stage_failed(state=state, stage=stage, error=error)
 
 # Immutable request-scoped pipeline bundle
 @dataclass(frozen=True, slots=True)
@@ -87,6 +117,7 @@ class AITelemetryRepositories:
     llm_calls: LLMCallRepository
     intent_predictions: IntentPredictionRepository
     ai_decisions: AIDecisionRepository
+    stage_events: AIStageEventRepository
 
     def __post_init__(self) -> None:
         if not isinstance(self.llm_calls, LLMCallRepository):
@@ -97,6 +128,9 @@ class AITelemetryRepositories:
 
         if not isinstance(self.ai_decisions, AIDecisionRepository):
             raise TypeError("ai_decisions must be an AIDecisionRepository")
+        
+        if not isinstance(self.stage_events, AIStageEventRepository):
+            raise TypeError("stage_events must be an AIStageEventRepository")
 
 # Factory configuration
 @dataclass(frozen=True, slots=True)
@@ -280,13 +314,14 @@ class AIPipelineFactory:
         answer_service = answer_service_builder(grounded_response_generator) if answer_service_builder is not None else None
         if answer_service is not None and not isinstance(answer_service, AnswerService):
             raise TypeError("answer_service_builder must return an AnswerService")
-
+        
+        orchestration_observer = self._create_orchestration_observer(repositories=repositories)
         orchestrator = AIOrchestrator(
             intent_classifier=intent_classifier,
             decision_engine=decision_engine,
             answer_service=answer_service,
             guardrail_evaluator=self._guardrail_evaluator,
-            observer=self._observer,
+            observer=orchestration_observer,
             config=self._orchestrator_config,
         )
 
@@ -309,6 +344,15 @@ class AIPipelineFactory:
             intent_predictions=repositories.intent_predictions,
             ai_decisions=repositories.ai_decisions,
         )
+    
+    def _create_orchestration_observer(self, *, repositories: AITelemetryRepositories) -> OrchestrationObserver:
+        telemetry_observer = TelemetryOrchestrationObserver(
+            sink=CompositeTelemetrySink((LoggingTelemetrySink(), DatabaseStageEventSink(repository=repositories.stage_events),)))
+
+        if self._observer is None:
+            return telemetry_observer
+
+        return CompositeOrchestrationObserver((telemetry_observer, self._observer,))
 
     def _create_instrumented_provider(self, *, ai_run_id: uuid.UUID, recorder: TelemetryRecorder, purpose: str,
                                       prompt_version_id: uuid.UUID | None, temperature: Decimal | None) -> InstrumentedLLMProvider:

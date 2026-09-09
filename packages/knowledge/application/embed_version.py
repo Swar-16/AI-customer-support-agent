@@ -17,6 +17,8 @@ from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
 from packages.knowledge.embeddings import EmbeddingSourceChunk
 from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
 from packages.application.audit.recorder import AuditRecorder
+from packages.ai.telemetry.embedding_recorder import EmbeddingTelemetryRecorder
+from packages.knowledge.embeddings.provider.instrumented import EmbeddingCallContext, InstrumentedEmbeddingProvider
 
 
 # Public contracts
@@ -178,6 +180,7 @@ class EmbedKnowledgeVersion:
         self._provider = provider
         self._input_builder = input_builder
         self._batch_size = batch_size
+        self._embedding_telemetry_recorder = EmbeddingTelemetryRecorder(uow_factory=uow_factory)
 
     # Public API
     def execute(self, command: EmbedKnowledgeVersionCommand) -> EmbedKnowledgeVersionResult:
@@ -213,7 +216,21 @@ class EmbedKnowledgeVersion:
                 input_strategy_identity=input_descriptor.identity,
             )
 
+        instrumented_provider = InstrumentedEmbeddingProvider(
+            provider=self._provider,
+            recorder=self._embedding_telemetry_recorder,
+            context=EmbeddingCallContext(
+                purpose="document_ingestion",
+                knowledge_version_id=snapshot.version_id,
+                metadata={
+                    "workflow": "knowledge_version_embedding",
+                    "document_id": str(snapshot.document_id),
+                },
+            ),
+        )
+        
         generated = self._generate_embeddings(
+            provider=instrumented_provider,
             items=missing_items,
             expected_provider=provider_descriptor,
             input_descriptor=input_descriptor,
@@ -336,15 +353,15 @@ class EmbedKnowledgeVersion:
         return result
 
     # Provider execution
-    def _generate_embeddings(self, *, items: Sequence[_PreparedWorkItem],
-                             expected_provider: EmbeddingProviderDescriptor, input_descriptor: EmbeddingInputDescriptor
+    def _generate_embeddings(self, *, provider: EmbeddingProvider, items: Sequence[_PreparedWorkItem], 
+                             expected_provider: EmbeddingProviderDescriptor, input_descriptor: EmbeddingInputDescriptor,
     ) -> tuple[KnowledgeChunkEmbedding, ...]:
         generated: list[KnowledgeChunkEmbedding] = []
         for batch_start in range(0, len(items), self._batch_size):
             batch_items = items[batch_start:batch_start + self._batch_size]
             texts = [item.prepared_input.text for item in batch_items]
             # Provider adapters own HTTP/SDK exception translation.
-            batch = self._provider.embed_documents(texts)
+            batch = provider.embed_documents(texts)
             self._validate_provider_response(
                 batch=batch,
                 expected_provider=expected_provider,
