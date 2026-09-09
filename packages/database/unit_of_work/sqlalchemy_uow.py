@@ -21,6 +21,7 @@ from packages.database.repositories.ai.stage_event_repository import AIStageEven
 from packages.database.repositories.ai.embedding_call_repository import EmbeddingCallRepository
 from packages.database.repositories.ai.retrieval_repository import RetrievalRepository
 from packages.database.repositories.ai.reranker_call_repository import RerankerCallRepository
+from packages.database.repositories.dashboard.overview_repository import DashboardOverviewRepository
 from packages.database.session import SessionLocal
 
 SessionFactory: TypeAlias = sessionmaker[Session]
@@ -67,6 +68,8 @@ class SqlAlchemyUnitOfWork:
         self.embedding_calls: EmbeddingCallRepository | None = None
         self.retrieval: RetrievalRepository | None = None
         self.reranker_calls: RerankerCallRepository | None = None
+        
+        self.dashboard_overview: DashboardOverviewRepository | None = None
 
         self._committed = False
         self._entered = False
@@ -97,6 +100,8 @@ class SqlAlchemyUnitOfWork:
         self.embedding_calls = EmbeddingCallRepository(self.session)
         self.retrieval = RetrievalRepository(self.session)
         self.reranker_calls = RerankerCallRepository(self.session)
+        
+        self.dashboard_overview = DashboardOverviewRepository(self.session)
 
         self._entered = True
         self._committed = False
@@ -179,6 +184,8 @@ class SqlAlchemyUnitOfWork:
         self.embedding_calls = None
         self.retrieval = None
         self.reranker_calls = None
+        
+        self.dashboard_overview = None
 
         self._entered = False
         self._committed = False

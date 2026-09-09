@@ -43,12 +43,20 @@ class RequestObservabilityMiddleware:
         response_size_bytes = 0
         response_body_prefix = bytearray()
         propagated_exception_type: str | None = None
+        route_template: str | None = None
+        route_name: str | None = None
 
         async def observed_send(message: Message) -> None:
             nonlocal status_code
             nonlocal response_size_bytes
+            nonlocal route_template
+            nonlocal route_name
+
             if message["type"] == "http.response.start":
                 status_code = int(message["status"])
+
+                route_template = self._resolve_route_template(scope)
+                route_name = self._resolve_route_name(scope)
 
                 headers = [(name, value) for name, value in message.get("headers", []) if name.lower() != _TRACE_HEADER_BYTES]
                 headers.append((_TRACE_HEADER_BYTES, str(trace_id).encode("latin-1"),))
@@ -95,6 +103,8 @@ class RequestObservabilityMiddleware:
             await self._record_best_effort(
                 scope=scope,
                 trace_id=trace_id,
+                route_template=route_template,
+                route_name=route_name,
                 status_code=status_code,
                 error_code=error_code,
                 exception_type=propagated_exception_type,
@@ -104,9 +114,9 @@ class RequestObservabilityMiddleware:
                 completed_at=completed_at,
             )
 
-    async def _record_best_effort(self, *, scope: Scope, trace_id: uuid.UUID, status_code: int, error_code: str | None, 
-                                  exception_type: str | None, response_size_bytes: int, latency_ms: int, started_at: datetime, 
-                                  completed_at: datetime) -> None:
+    async def _record_best_effort(self, *, scope: Scope, trace_id: uuid.UUID, route_template: str | None, route_name: str | None,
+                                  status_code: int, error_code: str | None, exception_type: str | None, response_size_bytes: int,
+                                  latency_ms: int, started_at: datetime, completed_at: datetime) -> None:
         services = getattr(scope["app"].state, "application_services", None)
         recorder = getattr(services, "record_api_request", None)
         if recorder is None:
@@ -125,7 +135,7 @@ class RequestObservabilityMiddleware:
         command = RecordAPIRequestCommand(
             trace_id=trace_id,
             method=str(scope.get("method", "GET")),
-            route_template=self._resolve_route_template(scope),
+            route_template=route_template,
             request_path=str(scope.get("path", "/")),
             status_code=status_code,
             error_code=error_code,
@@ -142,7 +152,7 @@ class RequestObservabilityMiddleware:
             metadata={
                 "http_version": scope.get("http_version"),
                 "scheme": scope.get("scheme"),
-                "route_name": self._resolve_route_name(scope),
+                "route_name": route_name,
             },
         )
 
@@ -167,7 +177,7 @@ class RequestObservabilityMiddleware:
             extra={
                 "trace_id": str(trace_id),
                 "method": scope.get("method"),
-                "route_template": self._resolve_route_template(scope),
+                "route_template": route_template,
                 "path": scope.get("path"),
                 "status_code": status_code,
                 "latency_ms": latency_ms,
@@ -195,12 +205,25 @@ class RequestObservabilityMiddleware:
 
     @staticmethod
     def _resolve_route_template(scope: Scope) -> str | None:
-        route = scope.get("route")
-        route_path = getattr(route, "path", None)
-        if isinstance(route_path, str) and route_path:
-            return route_path
+        # Do not treat unmatched/404 paths as route templates.
+        if scope.get("endpoint") is None:
+            return None
 
-        return None
+        request_path = scope.get("path")
+        if not isinstance(request_path, str) or not request_path:
+            return None
+
+        path_params = scope.get("path_params", {})
+        if not isinstance(path_params, dict):
+            return request_path
+
+        template = request_path
+        replacements = sorted(((str(value), f"{{{name}}}") for name, value in path_params.items()), key=lambda item: len(item[0]), reverse=True)
+        for concrete_value, placeholder in replacements:
+            if concrete_value:
+                template = template.replace(concrete_value, placeholder, 1)
+
+        return template
 
     @staticmethod
     def _resolve_route_name(scope: Scope) -> str | None:
@@ -208,6 +231,11 @@ class RequestObservabilityMiddleware:
         route_name = getattr(route, "name", None)
         if isinstance(route_name, str) and route_name:
             return route_name
+
+        endpoint = scope.get("endpoint")
+        endpoint_name = getattr(endpoint, "__name__", None)
+        if isinstance(endpoint_name, str) and endpoint_name:
+            return endpoint_name
 
         return None
 
