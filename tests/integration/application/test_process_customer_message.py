@@ -53,6 +53,9 @@ from packages.knowledge.retrieval.context.models import (
     GroundingContextBudget,
 )
 from packages.knowledge.retrieval.profiles import RetrievalProfile
+from packages.database.models.ai.stage_event import AIStageEventModel
+from packages.database.models.ai.retrieval_run import RetrievalRunModel
+from packages.database.models.ai.reranker_call import RerankerCallModel
 
 
 # ---------------------------------------------------------------------------
@@ -458,7 +461,7 @@ def test_customer_message_persists_complete_ai_trace_and_assistant_response(
 
     assert (
         result.pipeline_stage
-        is PipelineStage.RESPONSE_GENERATED
+        is PipelineStage.GUARDRAILS_COMPLETED
     )
 
     assert result.intent == "payment_issue"
@@ -699,6 +702,125 @@ def test_customer_message_persists_complete_ai_trace_and_assistant_response(
 
         # DecisionEngine is deterministic and therefore has no LLM call.
         assert decision.llm_call_id is None
+        
+        # --------------------------------------------------------------
+        # Retrieval telemetry
+        # --------------------------------------------------------------
+
+        retrieval_runs = tuple(
+            session.scalars(
+                select(RetrievalRunModel).where(
+                    RetrievalRunModel.ai_run_id == ai_run.id
+                )
+            )
+        )
+
+        assert len(retrieval_runs) == 1
+
+        retrieval_run = retrieval_runs[0]
+
+        assert retrieval_run.ai_run_id == ai_run.id
+        assert retrieval_run.trace_id == trace_id
+        assert retrieval_run.conversation_id == conversation_id
+        assert retrieval_run.status == "success"
+        assert retrieval_run.retrieval_mode == "lexical"
+        assert retrieval_run.embedding_call_id is None
+        assert retrieval_run.vector_candidate_count == 0
+        assert retrieval_run.reranker_used is False
+        reranker_calls = tuple(
+            session.scalars(
+                select(RerankerCallModel).where(
+                    RerankerCallModel.retrieval_run_id
+                    == retrieval_run.id
+                )
+            )
+        )
+
+        assert reranker_calls == ()
+        assert retrieval_run.zero_result is True
+        assert retrieval_run.completed_at is not None
+        assert retrieval_run.total_latency_ms is not None
+        assert retrieval_run.total_latency_ms >= 0
+
+        # --------------------------------------------------------------
+        # Orchestration stage telemetry
+        # --------------------------------------------------------------
+
+        stage_events = tuple(
+            session.scalars(
+                select(AIStageEventModel)
+                .where(AIStageEventModel.ai_run_id == ai_run.id)
+                .order_by(
+                    AIStageEventModel.occurred_at.asc(),
+                    AIStageEventModel.id.asc(),
+                )
+            )
+        )
+
+        assert stage_events
+
+        assert all(
+            event.trace_id == trace_id
+            for event in stage_events
+        )
+
+        assert all(
+            event.conversation_id == conversation_id
+            for event in stage_events
+        )
+
+        assert all(
+            event.trigger_message_id == result.customer_message_id
+            for event in stage_events
+        )
+
+        started_stages = {
+            event.stage
+            for event in stage_events
+            if event.event_type == "stage_started"
+        }
+
+        completed_stages = {
+            event.stage
+            for event in stage_events
+            if event.event_type == "stage_completed"
+        }
+
+        expected_stages = {
+            "intent_classified",
+            "decision_made",
+            "retrieval_completed",
+            "response_generated",
+            "guardrails_completed",
+        }
+
+        assert started_stages == expected_stages
+        assert completed_stages == expected_stages
+
+        assert not any(
+            event.event_type == "stage_failed"
+            for event in stage_events
+        )
+
+        for event in stage_events:
+            if event.event_type == "stage_started":
+                assert event.duration_ms is None
+                assert event.error_code is None
+                assert event.retryable is None
+
+            elif event.event_type == "stage_completed":
+                assert event.duration_ms is not None
+                assert event.duration_ms >= 0
+                assert event.error_code is None
+                assert event.retryable is None
+
+        serialized_stage_metadata = " ".join(
+            str(event.metadata_)
+            for event in stage_events
+        )
+
+        assert customer_text not in serialized_stage_metadata
+        assert result.response not in serialized_stage_metadata
 
 
 # ---------------------------------------------------------------------------
