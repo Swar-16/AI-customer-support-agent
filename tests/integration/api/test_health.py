@@ -1,3 +1,4 @@
+# AI-customer-support-agent\tests\integration\api\test_health.py
 from __future__ import annotations
 from unittest.mock import Mock, patch
 import pytest
@@ -7,10 +8,6 @@ from apps.api.app.main import create_api_app
 from packages.application.composition.application_factory import ApplicationServices
 
 def make_application_services(*, provider_healthy: bool = True) -> ApplicationServices:
-    """
-    Build a real ApplicationServices container while mocking only
-    external/runtime collaborators.
-    """
     provider = Mock()
     provider.provider_name = "mock"
     provider.model_name = "mock-model"
@@ -18,6 +15,36 @@ def make_application_services(*, provider_healthy: bool = True) -> ApplicationSe
 
     return ApplicationServices(
         process_customer_message=Mock(),
+        
+        record_api_request=Mock(),
+        get_dashboard_overview=Mock(),
+        query_dashboard_traces=Mock(),
+        get_dashboard_trace_detail=Mock(),
+        query_dashboard_llm_calls=Mock(),
+        query_dashboard_retrieval_runs=Mock(),
+        query_dashboard_api_requests=Mock(),
+        query_dashboard_audit_events=Mock(),
+        get_audit_event=Mock(),
+        list_audit_events=Mock(),
+        get_entity_audit_history=Mock(),
+        get_trace_audit_events=Mock(),
+
+        get_escalation=Mock(),
+        list_escalations=Mock(),
+        list_conversation_escalations=Mock(),
+        update_escalation=Mock(),
+
+        create_ticket=Mock(),
+        add_ticket_comment=Mock(),
+        get_ticket=Mock(),
+        list_tickets=Mock(),
+        update_ticket=Mock(),
+
+        submit_feedback=Mock(),
+        get_feedback=Mock(),
+        list_feedback=Mock(),
+        review_feedback=Mock(),
+
         ai_pipeline_factory=Mock(),
         base_llm_provider=provider,
         orchestration_observer=Mock(),

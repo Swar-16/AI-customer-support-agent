@@ -190,24 +190,31 @@ def test_full_application_with_real_groq_and_postgres(live_settings, live_sessio
         assert ai_run.total_latency_ms is not None
 
         # Real Groq call telemetry
-        llm_calls = tuple(session.scalars(
-                select(LLMCallModel)
-                .where(LLMCallModel.ai_run_id == result.ai_run_id)
+        llm_calls = tuple(
+            session.scalars(select(LLMCallModel)
+                            .where(LLMCallModel.ai_run_id == result.ai_run_id)
+                            .order_by(LLMCallModel.started_at.asc())
             )
         )
 
-        assert len(llm_calls) == 1
-        llm_call = llm_calls[0]
-        assert llm_call.status == "success"
-        assert llm_call.provider == "groq"
-        assert llm_call.model
-        assert llm_call.purpose == "intent_classification"
-        assert llm_call.input_tokens > 0
-        assert llm_call.output_tokens > 0
-        assert llm_call.total_tokens > 0
-        assert llm_call.latency_ms is not None
-        assert llm_call.latency_ms >= 0
-        assert llm_call.completed_at is not None
+        assert llm_calls
+
+        intent_calls = tuple(call for call in llm_calls if call.purpose == "intent_classification")
+
+        assert len(intent_calls) == 1
+        intent_call = intent_calls[0]
+
+        for llm_call in llm_calls:
+            assert llm_call.status == "success"
+            assert llm_call.provider == "groq"
+            assert llm_call.model
+            assert llm_call.purpose in {"intent_classification", "answer_generation",}
+            assert llm_call.input_tokens > 0
+            assert llm_call.output_tokens > 0
+            assert llm_call.total_tokens > 0
+            assert llm_call.latency_ms is not None
+            assert llm_call.latency_ms >= 0
+            assert llm_call.completed_at is not None
 
         # Intent prediction
         predictions = tuple(session.scalars(
@@ -220,7 +227,7 @@ def test_full_application_with_real_groq_and_postgres(live_settings, live_sessio
         prediction = predictions[0]
         assert prediction.intent
         assert prediction.confidence is not None
-        assert prediction.llm_call_id == llm_call.id
+        assert prediction.llm_call_id == intent_call.id
 
         # Decision
         decisions = tuple(session.scalars(

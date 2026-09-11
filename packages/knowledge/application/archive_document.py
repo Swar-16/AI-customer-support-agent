@@ -8,6 +8,8 @@ from packages.knowledge.domain.document import KnowledgeDocument
 from packages.knowledge.domain.enums import KnowledgeDocumentStatus
 from packages.knowledge.domain.version import KnowledgeDocumentVersion
 from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
+from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
+from packages.application.audit.recorder import AuditRecorder
 
 
 # Application errors
@@ -71,6 +73,11 @@ class ArchiveKnowledgeDocument:
 
             occurred_at = datetime.now(timezone.utc)
             
+            before_state = {
+                "status": document.status.value,
+                "archived_at": document.archived_at.isoformat() if document.archived_at is not None else None,
+            }
+            
             # 2. Resolve current active publication.
             published = (uow.versions.get_published_for_document(document.id))
             superseded_version_id: UUID | None = None
@@ -89,10 +96,30 @@ class ArchiveKnowledgeDocument:
             archived = document.archive(occurred_at=occurred_at)
             uow.documents.save(archived)
             uow.flush()
-            uow.commit()
+            
+            if archived.archived_at is None:
+                raise KnowledgeArchiveConflictError("Archived document did not contain archived_at.")
 
-        if archived.archived_at is None:
-            raise KnowledgeArchiveConflictError("Archived document did not contain archived_at.")
+            AuditRecorder(repository=uow.audit_events).record(
+                RecordAuditEventCommand(
+                    event_type="knowledge_document.archived",
+                    entity_type="knowledge_document",
+                    entity_id=archived.id,
+                    action="archived",
+                    actor=AuditActor(actor_type=AuditActorType.SYSTEM),
+                    before_state=before_state,
+                    after_state={
+                        "status": archived.status.value,
+                        "archived_at": archived.archived_at.isoformat(),
+                    },
+                    metadata={
+                        "superseded_version_id": str(superseded_version_id) if superseded_version_id is not None else None,
+                    },
+                    occurred_at=occurred_at,
+                )
+            )
+            
+            uow.commit()
 
         return ArchiveKnowledgeDocumentResult(
             document_id=archived.id,

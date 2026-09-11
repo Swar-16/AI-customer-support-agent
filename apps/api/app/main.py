@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from apps.api.app.api.v1.router import router as v1_router
 from apps.api.app.bootstrap.application import APIBootstrapError, get_application_services
 from apps.api.app.api.errors import register_exception_handlers as register_api_exception_handlers
+from apps.api.app.middleware.request_observability import RequestObservabilityMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -139,23 +140,10 @@ def _register_middleware(application: FastAPI) -> None:
     """
     Register process-wide HTTP middleware.
 
-    Kept intentionally empty for now.
-
-    Middleware should be introduced here when we implement concerns such as:
-
-    - request/response tracing
-    - structured access logging
-    - request timing
-    - security headers
-    - CORS
-    - trusted proxy handling
-
-    We deliberately avoid enabling permissive middleware defaults,
-    particularly wildcard CORS, before deployment requirements are known.
+    RequestObservabilityMiddleware establishes the trace ID, measures the request,
+    adds the trace response header, and persists a sanitized operational record.
     """
-
-    _ = application
-
+    application.add_middleware(RequestObservabilityMiddleware)
 
 # Exception handlers
 def _register_exception_handlers(application: FastAPI) -> None:

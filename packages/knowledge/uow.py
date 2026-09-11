@@ -4,6 +4,8 @@ from types import TracebackType
 from typing import Protocol, Self
 
 from packages.knowledge.repositories import KnowledgeChunkRepository, KnowledgeDocumentRepository, KnowledgeVersionRepository, KnowledgeEmbeddingRepository
+from packages.database.repositories.audit.audit_event_repository import AuditEventRepository
+from packages.database.repositories.ai.embedding_call_repository import EmbeddingCallRepository
 
 
 class KnowledgeUnitOfWorkFactory(Protocol):
@@ -25,6 +27,14 @@ class KnowledgeUnitOfWork(Protocol):
         
     @property
     def embeddings(self) -> KnowledgeEmbeddingRepository:
+        ...
+        
+    @property
+    def embedding_calls(self) -> EmbeddingCallRepository:
+        ...
+        
+    @property
+    def audit_events(self) -> AuditEventRepository:
         ...
 
     def __enter__(self) -> Self:

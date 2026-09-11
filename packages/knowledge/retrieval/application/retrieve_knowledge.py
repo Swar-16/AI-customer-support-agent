@@ -1,6 +1,8 @@
 # AI-customer-support-agent\packages\knowledge\retrieval\application\retrieve_knowledge.py
 from __future__ import annotations
+from time import perf_counter
 
+from packages.ai.telemetry.retrieval_recorder import RetrievalTelemetryRecorder
 from packages.knowledge.retrieval.errors import RetrievalPipelineError
 from packages.knowledge.retrieval.fusion.base import FusionInput, RetrievalFusionStrategy
 from packages.knowledge.retrieval.lexical.service import LexicalRetrievalService
@@ -35,7 +37,7 @@ class RetrieveKnowledge:
     """
     def __init__(self, *, profile: RetrievalProfile, fusion_strategy: RetrievalFusionStrategy,
                  vector_service: VectorRetrievalService | None = None, lexical_service: LexicalRetrievalService | None = None,
-                 reranking_service: RerankingService | None = None,
+                 reranking_service: RerankingService | None = None, telemetry_recorder: RetrievalTelemetryRecorder | None = None
     ) -> None:
         if not isinstance(profile, RetrievalProfile):
             raise TypeError("profile must be a RetrievalProfile instance.")
@@ -51,6 +53,9 @@ class RetrieveKnowledge:
 
         if reranking_service is not None and not isinstance(reranking_service, RerankingService):
             raise TypeError("reranking_service must be a RerankingService instance or None.")
+        
+        if telemetry_recorder is not None and not isinstance(telemetry_recorder, RetrievalTelemetryRecorder):
+            raise TypeError("telemetry_recorder must be a RetrievalTelemetryRecorder instance or None.")
 
         self._validate_dependencies(
             profile=profile,
@@ -64,6 +69,7 @@ class RetrieveKnowledge:
         self._vector_service = vector_service
         self._lexical_service = lexical_service
         self._reranking_service = reranking_service
+        self._telemetry_recorder = telemetry_recorder
 
     @property
     def profile(self) -> RetrievalProfile:
@@ -98,32 +104,76 @@ class RetrieveKnowledge:
         canonical_query = RetrievalQuery(text=prepared_query.original_query, filters=prepared_query.filters)
         rankings = self._retrieve_rankings(prepared_query=prepared_query)
         if not rankings:
+            if self._telemetry_recorder is not None:
+                self._telemetry_recorder.record_final(())
+
             return RetrievalResult(query=canonical_query, candidates=())
 
+        fusion_started = perf_counter()
         candidates = self._combine_rankings(query=canonical_query, rankings=rankings)
+        fusion_latency_ms = self._elapsed_ms(fusion_started)
+        if self._telemetry_recorder is not None:
+            self._telemetry_recorder.record_fusion(candidates, latency_ms=fusion_latency_ms)
+
         if self._profile.reranking_enabled and candidates:
+            reranking_started = perf_counter()
             candidates = self._rerank(query=canonical_query, candidates=candidates)
+            reranking_latency_ms = self._elapsed_ms(reranking_started)
+            if self._telemetry_recorder is not None:
+                self._telemetry_recorder.record_reranking(candidates, latency_ms=reranking_latency_ms)
 
         candidates = candidates[: self._profile.final_candidate_limit]
+
+        if self._telemetry_recorder is not None:
+            self._telemetry_recorder.record_final(candidates)
+            
         return RetrievalResult(query=canonical_query, candidates=candidates)
 
     def _retrieve_rankings(self, *, prepared_query: PreparedRetrievalQuery) -> tuple[tuple[RetrievalCandidate, ...], ...]:
         rankings: list[tuple[RetrievalCandidate, ...]] = []
         if self._profile.vector_enabled:
             vector_service = self._require_vector_service()
-            vector_query = RetrievalQuery(text=prepared_query.semantic_query, filters=prepared_query.filters,)
-            vector_candidates = vector_service.search(query=vector_query, limit=self._profile.vector_candidate_limit)
+            vector_query = RetrievalQuery(text=prepared_query.semantic_query, filters=prepared_query.filters)
+            vector_started = perf_counter()
+            try:
+                vector_candidates = vector_service.search(query=vector_query, limit=self._profile.vector_candidate_limit)
+                
+            finally:
+                self._attach_embedding_call(vector_service)
+
+            vector_latency_ms = self._elapsed_ms(vector_started)
+            if self._telemetry_recorder is not None:
+                self._telemetry_recorder.record_vector(vector_candidates, latency_ms=vector_latency_ms)
+
             if vector_candidates:
                 rankings.append(vector_candidates)
 
         if self._profile.lexical_enabled:
             lexical_service = self._require_lexical_service()
             lexical_query = RetrievalQuery(text=prepared_query.lexical_queries[0], filters=prepared_query.filters)
+            lexical_started = perf_counter()
             lexical_candidates = lexical_service.search(query=lexical_query, limit=self._profile.lexical_candidate_limit)
+            lexical_latency_ms = self._elapsed_ms(lexical_started)
+
+            if self._telemetry_recorder is not None:
+                self._telemetry_recorder.record_lexical(lexical_candidates, latency_ms=lexical_latency_ms)
+
             if lexical_candidates:
                 rankings.append(lexical_candidates)
 
         return tuple(rankings)
+    
+    def _attach_embedding_call(self, vector_service: VectorRetrievalService) -> None:
+        if self._telemetry_recorder is None:
+            return
+
+        call_id = getattr(vector_service.provider, "last_call_id", None)
+        self._telemetry_recorder.attach_embedding_call(call_id)
+
+    @staticmethod
+    def _elapsed_ms(started_at: float) -> int:
+        elapsed = perf_counter() - started_at
+        return max(0, int(round(elapsed * 1_000)))
 
     def _combine_rankings(self, *, query: RetrievalQuery, rankings: tuple[tuple[RetrievalCandidate, ...], ...,]) -> tuple[RetrievalCandidate, ...]:
         """
@@ -185,3 +235,8 @@ class RetrieveKnowledge:
 
         if profile.reranking_enabled and reranking_service is None:
             raise RetrievalPipelineError("Reranking is enabled by the retrieval profile, but no reranking service is configured.")
+        
+    @staticmethod
+    def _elapsed_ms(started_at: float) -> int:
+        elapsed = perf_counter() - started_at
+        return max(0, int(round(elapsed * 1_000)))

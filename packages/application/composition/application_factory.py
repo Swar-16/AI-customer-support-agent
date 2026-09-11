@@ -17,6 +17,24 @@ from packages.application.composition.knowledge_embedding_factory import create_
 from packages.knowledge.retrieval.context.models import GroundingContextBudget
 from packages.knowledge.retrieval.profiles import create_default_customer_support_profile
 from packages.knowledge.embeddings.input.contextual import ContextualEmbeddingInputBuilder
+from packages.application.escalations.query_escalations import GetEscalation, ListConversationEscalations, ListEscalations
+from packages.application.escalations.update_escalation import UpdateEscalation
+from packages.application.tickets.add_ticket_comment import AddTicketComment
+from packages.application.tickets.create_ticket import CreateTicket
+from packages.application.tickets.query_tickets import GetTicket, ListTickets
+from packages.application.tickets.update_ticket import UpdateTicket
+from packages.application.feedback.query_feedback import GetFeedback, ListFeedback
+from packages.application.feedback.review_feedback import ReviewFeedback
+from packages.application.feedback.submit_feedback import SubmitFeedback
+from packages.application.observability.record_api_request import RecordAPIRequest
+from packages.application.audit.query_audit_events import GetAuditEvent, GetEntityAuditHistory, GetTraceAuditEvents, ListAuditEvents
+from packages.application.dashboard.get_overview import GetDashboardOverview
+from packages.application.dashboard.query_traces import QueryDashboardTraces
+from packages.application.dashboard.get_trace_detail import GetTraceDetail
+from packages.application.dashboard.query_llm_calls import QueryDashboardLLMCalls
+from packages.application.dashboard.query_retrieval_runs import QueryDashboardRetrievalRuns
+from packages.application.dashboard.query_api_requests import QueryDashboardAPIRequests
+from packages.application.dashboard.query_audit_events import QueryDashboardAuditEvents
 
 SessionFactory = sessionmaker[Session]
 ProviderFactory = Callable[..., LLMProvider]
@@ -37,20 +55,41 @@ class ApplicationServices:
 
     Those are created per request / per application transaction.
     """
-
     process_customer_message: ProcessCustomerMessage
+    record_api_request: RecordAPIRequest
+    get_dashboard_overview: GetDashboardOverview
+    query_dashboard_traces: QueryDashboardTraces
+    get_dashboard_trace_detail: GetTraceDetail
+    query_dashboard_llm_calls: QueryDashboardLLMCalls
+    query_dashboard_retrieval_runs: QueryDashboardRetrievalRuns
+    query_dashboard_api_requests: QueryDashboardAPIRequests
+    query_dashboard_audit_events: QueryDashboardAuditEvents
+    get_audit_event: GetAuditEvent
+    list_audit_events: ListAuditEvents
+    get_entity_audit_history: GetEntityAuditHistory
+    get_trace_audit_events: GetTraceAuditEvents
+    get_escalation: GetEscalation
+    list_escalations: ListEscalations
+    list_conversation_escalations: ListConversationEscalations
+    update_escalation: UpdateEscalation
+    create_ticket: CreateTicket
+    add_ticket_comment: AddTicketComment
+    get_ticket: GetTicket
+    list_tickets: ListTickets
+    update_ticket: UpdateTicket
+    submit_feedback: SubmitFeedback
+    get_feedback: GetFeedback
+    list_feedback: ListFeedback
+    review_feedback: ReviewFeedback
     ai_pipeline_factory: AIPipelineFactory
     base_llm_provider: LLMProvider
     orchestration_observer: OrchestrationObserver
 
-
 class ApplicationConfigurationError(RuntimeError):
     """
-    Raised when the application cannot be composed from the supplied
-    configuration.
+    Raised when the application cannot be composed from the supplied configuration.
 
-    This represents a startup/configuration failure rather than a normal
-    request failure.
+    This represents a startup/configuration failure rather than a normal request failure.
     """
 
 def create_application(*, settings: Settings, session_factory: SessionFactory = SessionLocal,
@@ -113,9 +152,60 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         retrieval_profile=retrieval_profile,
         grounding_context_budget=grounding_budget,
     )
+    
+    record_api_request = RecordAPIRequest(uow_factory=uow_factory)
+    get_dashboard_overview = GetDashboardOverview(uow_factory=uow_factory)
+    query_dashboard_traces = QueryDashboardTraces(uow_factory=uow_factory)
+    get_dashboard_trace_detail = GetTraceDetail(uow_factory=uow_factory)
+    query_dashboard_llm_calls = QueryDashboardLLMCalls(uow_factory=uow_factory)
+    query_dashboard_retrieval_runs = QueryDashboardRetrievalRuns(uow_factory=uow_factory)
+    query_dashboard_api_requests = QueryDashboardAPIRequests(uow_factory=uow_factory)
+    query_dashboard_audit_events = QueryDashboardAuditEvents(uow_factory=uow_factory)
+    get_audit_event = GetAuditEvent(uow_factory=uow_factory)
+    list_audit_events = ListAuditEvents(uow_factory=uow_factory)
+    get_entity_audit_history = GetEntityAuditHistory(uow_factory=uow_factory)
+    get_trace_audit_events = GetTraceAuditEvents(uow_factory=uow_factory)
+    get_escalation = GetEscalation(uow_factory=uow_factory)
+    list_escalations = ListEscalations(uow_factory=uow_factory)
+    list_conversation_escalations = ListConversationEscalations(uow_factory=uow_factory)
+    update_escalation = UpdateEscalation(uow_factory=uow_factory)
+    create_ticket = CreateTicket(uow_factory=uow_factory)
+    add_ticket_comment = AddTicketComment(uow_factory=uow_factory)
+    get_ticket = GetTicket(uow_factory=uow_factory)
+    list_tickets = ListTickets(uow_factory=uow_factory)
+    update_ticket = UpdateTicket(uow_factory=uow_factory)
+    submit_feedback = SubmitFeedback(uow_factory=uow_factory)
+    get_feedback = GetFeedback(uow_factory=uow_factory)
+    list_feedback = ListFeedback(uow_factory=uow_factory)
+    review_feedback = ReviewFeedback(uow_factory=uow_factory)
 
     return ApplicationServices(
         process_customer_message=process_customer_message,
+        record_api_request=record_api_request,
+        get_dashboard_overview=get_dashboard_overview,
+        query_dashboard_traces=query_dashboard_traces,
+        get_dashboard_trace_detail=get_dashboard_trace_detail,
+        query_dashboard_llm_calls=query_dashboard_llm_calls,
+        query_dashboard_retrieval_runs=query_dashboard_retrieval_runs,
+        query_dashboard_api_requests=query_dashboard_api_requests,
+        query_dashboard_audit_events=query_dashboard_audit_events,
+        get_audit_event=get_audit_event,
+        list_audit_events=list_audit_events,
+        get_entity_audit_history=get_entity_audit_history,
+        get_trace_audit_events=get_trace_audit_events,
+        get_escalation=get_escalation,
+        list_escalations=list_escalations,
+        list_conversation_escalations=list_conversation_escalations,
+        update_escalation=update_escalation,
+        create_ticket=create_ticket,
+        add_ticket_comment=add_ticket_comment,
+        get_ticket=get_ticket,
+        list_tickets=list_tickets,
+        update_ticket=update_ticket,
+        submit_feedback=submit_feedback,
+        get_feedback=get_feedback,
+        list_feedback=list_feedback,
+        review_feedback=review_feedback,
         ai_pipeline_factory=pipeline_factory,
         base_llm_provider=resolved_provider,
         orchestration_observer=resolved_observer,
@@ -133,7 +223,6 @@ def _resolve_provider(*, settings: Settings, base_provider: LLMProvider | None) 
     - local experiments
     - provider failover experiments
     """
-
     if base_provider is not None:
         if not isinstance(base_provider, LLMProvider):
             raise TypeError("base_provider must implement LLMProvider")

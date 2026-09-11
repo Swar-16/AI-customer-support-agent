@@ -28,6 +28,18 @@ from packages.knowledge.embeddings.provider.base import EmbeddingProvider
 from packages.knowledge.retrieval.context.models import GroundingContextBudget
 from packages.knowledge.retrieval.profiles import RetrievalProfile
 from packages.knowledge.embeddings.models import EmbeddingInputDescriptor
+from packages.application.escalations.create_escalation import CreateEscalation, CreateEscalationCommand
+from packages.database.repositories.support.escalation_repository import EscalationRepository
+from packages.database.models.support.conversation import ConversationModel
+from packages.database.repositories.audit.audit_event_repository import AuditEventRepository
+from packages.ai.telemetry.transactional_embedding_recorder import TransactionalEmbeddingTelemetryRecorder
+from packages.database.repositories.ai.embedding_call_repository import EmbeddingCallRepository
+from packages.knowledge.embeddings.provider.instrumented import EmbeddingCallContext, InstrumentedEmbeddingProvider
+from packages.ai.telemetry.retrieval_recorder import RetrievalTelemetryRecorder
+from packages.database.repositories.ai.retrieval_repository import RetrievalRepository
+from packages.ai.telemetry.reranker_recorder import RerankerTelemetryRecorder
+from packages.database.repositories.ai.reranker_call_repository import RerankerCallRepository
+from packages.database.repositories.ai.stage_event_repository import AIStageEventRepository
 
 
 # Internal repository bundle
@@ -35,8 +47,14 @@ from packages.knowledge.embeddings.models import EmbeddingInputDescriptor
 class _Repositories:
     conversations: ConversationRepository
     messages: MessageRepository
+    escalations: EscalationRepository
+    audit_events: AuditEventRepository
     ai_runs: AIRunRepository
     llm_calls: LLMCallRepository
+    embedding_calls: EmbeddingCallRepository
+    retrieval: RetrievalRepository
+    reranker_calls: RerankerCallRepository
+    stage_events: AIStageEventRepository
     intent_predictions: IntentPredictionRepository
     ai_decisions: AIDecisionRepository
 
@@ -89,6 +107,8 @@ class ProcessCustomerMessageResult:
     IDs are returned instead of live ORM objects so callers do not receive entities bound to a Session that has already been closed.
 
     ``assistant_message_id`` and ``response`` are populated only when the pipeline produced a customer-visible assistant response.
+    
+    ``escalation_id`` is populated when the pipeline requests human review.
     """
     conversation_id: uuid.UUID
     customer_message_id: uuid.UUID
@@ -98,6 +118,7 @@ class ProcessCustomerMessageResult:
     intent: str | None
     decision: str | None
     assistant_message_id: uuid.UUID | None
+    escalation_id: uuid.UUID | None
     response: str | None
     succeeded: bool
 
@@ -252,14 +273,46 @@ class ProcessCustomerMessage:
                 session = uow.session
                 if session is None:
                     raise PersistenceContractError("Active SQLAlchemy Session unavailable while composing AnswerService")
+                
+                embedding_recorder = TransactionalEmbeddingTelemetryRecorder(repository=repositories.embedding_calls)
+                retrieval_recorder = RetrievalTelemetryRecorder(
+                    repository=repositories.retrieval, ai_run_id=ai_run.id, trace_id=trace_id, conversation_id=command.conversation_id,
+                    profile=self._retrieval_profile,
+                )
+                reranker_recorder = RerankerTelemetryRecorder(
+                    repository=repositories.reranker_calls,
+                    retrieval_run_id=lambda: retrieval_recorder.retrieval_run_id,
+                    trace_id=trace_id,
+                    metadata={
+                        "workflow": "customer_support_retrieval",
+                        "conversation_id": str(command.conversation_id),
+                        "ai_run_id": str(ai_run.id),
+                    },
+                )
+                instrumented_embedding_provider = InstrumentedEmbeddingProvider(
+                    provider=self._embedding_provider,
+                    recorder=embedding_recorder,
+                    context=EmbeddingCallContext(
+                        purpose="query",
+                        ai_run_id=ai_run.id,
+                        trace_id=trace_id,
+                        metadata={
+                            "workflow": "customer_support_retrieval",
+                            "conversation_id": str(command.conversation_id),
+                        },
+                    ),
+                )
 
                 components = create_answer_service_components(
                     session=session,
                     profile=self._retrieval_profile,
                     default_context_budget=self._grounding_context_budget,
                     response_generator=response_generator,
-                    embedding_provider=self._embedding_provider,
-                    embedding_input_descriptor=self._embedding_input_descriptor,                )
+                    embedding_provider=instrumented_embedding_provider,
+                    embedding_input_descriptor=self._embedding_input_descriptor,
+                    retrieval_telemetry_recorder=retrieval_recorder,
+                    reranker_telemetry_recorder=reranker_recorder
+                )
 
                 return components.answer_service
 
@@ -270,6 +323,7 @@ class ProcessCustomerMessage:
                     llm_calls=repositories.llm_calls,
                     intent_predictions=repositories.intent_predictions,
                     ai_decisions=repositories.ai_decisions,
+                    stage_events=repositories.stage_events,
                 ),
                 answer_service_builder=build_answer_service,
             )
@@ -293,6 +347,17 @@ class ProcessCustomerMessage:
                 ai_run_id=ai_run.id,
                 intent_llm_call_id=pipeline.intent_provider.last_call_id,
             )
+            
+            # Persist human-review escalation when requested by orchestration.
+            escalation_id: uuid.UUID | None = None
+
+            if state.stage is PipelineStage.ESCALATED:
+                escalation_id = self._persist_escalation(
+                    repositories=repositories,
+                    conversation=conversation,
+                    state=state,
+                    trace_id=trace_id,
+                )
 
             # Persist customer-visible assistant response
             assistant_message: MessageModel | None = None
@@ -331,6 +396,7 @@ class ProcessCustomerMessage:
                 intent=state.intent_result.intent.value if state.intent_result is not None else None,
                 decision=state.decision_result.decision.value if state.decision_result is not None else None,
                 assistant_message_id=assistant_message_id,
+                escalation_id=escalation_id,
                 response=response,
                 succeeded=state.stage is not PipelineStage.FAILED,
             )
@@ -432,6 +498,50 @@ class ProcessCustomerMessage:
             raise PersistenceContractError("Assistant message ID was not generated after flush")
 
         return assistant_message
+    
+    @staticmethod
+    def _persist_escalation(*, repositories: _Repositories, conversation: ConversationModel, state: AIState, trace_id: uuid.UUID) -> uuid.UUID:
+        """
+        Persist an orchestration-requested escalation and move the conversation into the escalated state.
+
+        Both mutations occur through repositories sharing the current Unit of Work, so they are committed or rolled back 
+        together with the customer message, AI run, and telemetry.
+        """
+        if state.stage is not PipelineStage.ESCALATED:
+            raise PersistenceContractError("Escalation may only be persisted from an ESCALATED AIState")
+
+        if state.escalation_source is None:
+            raise PersistenceContractError("ESCALATED state must contain escalation_source")
+
+        if state.escalation_reason_code is None:
+            raise PersistenceContractError("ESCALATED state must contain escalation_reason_code")
+
+        if state.decision_result is None:
+            raise PersistenceContractError("ESCALATED state must contain decision_result")
+
+        create_escalation = CreateEscalation(repository=repositories.escalations, audit_repository=repositories.audit_events)
+        result = create_escalation.execute(
+            CreateEscalationCommand(
+                conversation_id=state.conversation_id,
+                trace_id=trace_id,
+                ai_run_id=state.ai_run_id,
+                trigger_message_id=state.trigger_message_id,
+                source=state.escalation_source.value,
+                reason_code=state.escalation_reason_code,
+                reason_summary=state.decision_result.reason_summary,
+                priority=ProcessCustomerMessage._resolve_escalation_priority(state),
+                handoff_summary=ProcessCustomerMessage._build_handoff_summary(state),
+                metadata={
+                    "pipeline_stage": state.stage.value,
+                    "intent": state.intent_result.intent.value if state.intent_result is not None else None,
+                    "decision": state.decision_result.decision.value,
+                },
+            )
+        )
+
+        repositories.conversations.mark_escalated(conversation)
+
+        return result.escalation_id
 
     # Validation
     @staticmethod
@@ -473,12 +583,30 @@ class ProcessCustomerMessage:
 
         if uow.messages is None:
             raise PersistenceContractError("MessageRepository unavailable")
+        
+        if uow.escalations is None:
+            raise PersistenceContractError("EscalationRepository unavailable")
+        
+        if uow.audit_events is None:
+            raise PersistenceContractError("AuditEventRepository unavailable")
 
         if uow.ai_runs is None:
             raise PersistenceContractError("AIRunRepository unavailable")
 
         if uow.llm_calls is None:
             raise PersistenceContractError("LLMCallRepository unavailable")
+        
+        if uow.embedding_calls is None:
+            raise PersistenceContractError("EmbeddingCallRepository unavailable")
+        
+        if uow.retrieval is None:
+            raise PersistenceContractError("RetrievalRepository unavailable")
+        
+        if uow.reranker_calls is None:
+            raise PersistenceContractError("RerankerCallRepository unavailable")
+        
+        if uow.stage_events is None:
+            raise PersistenceContractError("AIStageEventRepository unavailable")
 
         if uow.intent_predictions is None:
             raise PersistenceContractError("IntentPredictionRepository unavailable")
@@ -489,8 +617,57 @@ class ProcessCustomerMessage:
         return _Repositories(
             conversations=uow.conversations,
             messages=uow.messages,
+            escalations=uow.escalations,
+            audit_events=uow.audit_events,
             ai_runs=uow.ai_runs,
             llm_calls=uow.llm_calls,
+            embedding_calls=uow.embedding_calls,
+            retrieval=uow.retrieval,
+            reranker_calls=uow.reranker_calls,
+            stage_events=uow.stage_events,
             intent_predictions=uow.intent_predictions,
             ai_decisions=uow.ai_decisions,
         )
+        
+    @staticmethod
+    def _resolve_escalation_priority(state: AIState) -> str:
+        """
+        Assign a deterministic initial escalation priority.
+
+        Priority is derived only from trusted reason codes. Arbitrary LLM metadata must never control support priority.
+        """
+        reason_code = state.escalation_reason_code
+
+        if reason_code is None:
+            raise PersistenceContractError("Cannot resolve escalation priority without a reason code")
+
+        urgent_reasons = {"SECURITY_SENSITIVE_REQUEST", "SENSITIVE_ACTION_CLAIM", "SAFETY_RESTRICTION",}
+        high_reasons = {"HUMAN_APPROVAL_REQUIRED", "POLICY_CONFLICT", "UNSUPPORTED_OPERATIONAL_CLAIM",}
+        if reason_code in urgent_reasons:
+            return "urgent"
+
+        if reason_code in high_reasons:
+            return "high"
+
+        return "normal"
+
+
+    @staticmethod
+    def _build_handoff_summary(state: AIState) -> str:
+        """
+        Build a deterministic, bounded summary for a support agent.
+
+        This is not generated by an additional LLM call. It contains only already-available structured pipeline information.
+        """
+        if state.escalation_source is None:
+            raise PersistenceContractError("Cannot build handoff summary without escalation_source")
+
+        if state.escalation_reason_code is None:
+            raise PersistenceContractError("Cannot build handoff summary without escalation_reason_code")
+
+        if state.decision_result is None:
+            raise PersistenceContractError("Cannot build handoff summary without decision_result")
+
+        intent = state.intent_result.intent.value if state.intent_result is not None else "unknown"
+
+        return f"Human review requested by {state.escalation_source.value}. Intent: {intent}. Reason: {state.escalation_reason_code}. {state.decision_result.reason_summary}"

@@ -1,3 +1,4 @@
+# AI-customer-support-agent\tests\integration\conftest.py
 from collections.abc import Generator
 import pytest
 from sqlalchemy import delete
@@ -16,6 +17,12 @@ from packages.database.models.knowledge.chunk import KnowledgeChunkModel
 from packages.database.models.knowledge.document_version import KnowledgeDocumentVersionModel
 from packages.database.models.knowledge.document import KnowledgeDocumentModel
 from packages.database.models.knowledge.chunk_embedding import KnowledgeChunkEmbeddingModel
+from packages.database.models.support.escalation import EscalationModel
+from packages.database.models.support.feedback import FeedbackModel
+from packages.database.models.support.ticket import TicketModel
+from packages.database.models.support.ticket_comment import TicketCommentModel
+from packages.database.models.audit.api_request import APIRequestModel
+from packages.database.models.audit.audit_event import AuditEventModel
 
 
 @pytest.fixture(scope="session")
@@ -43,6 +50,14 @@ def clean_database(test_session_factory) -> Generator[None, None, None]:
 
 def _clear_database(session_factory: sessionmaker) -> None:
     with session_factory() as session:
+        session.execute(delete(FeedbackModel))
+        session.execute(delete(TicketCommentModel))
+        session.execute(delete(TicketModel))
+        session.execute(delete(EscalationModel))
+        
+        session.execute(delete(APIRequestModel))
+        session.execute(delete(AuditEventModel))
+        
         session.execute(delete(AIDecisionModel))
         session.execute(delete(IntentPredictionModel))
         session.execute(delete(LLMCallModel))

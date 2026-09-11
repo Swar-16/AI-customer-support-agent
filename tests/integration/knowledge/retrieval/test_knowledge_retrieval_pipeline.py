@@ -6,7 +6,29 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import select
 
+from packages.ai.telemetry.retrieval_recorder import (
+    RetrievalTelemetryRecorder,
+)
+from packages.ai.telemetry.transactional_embedding_recorder import (
+    TransactionalEmbeddingTelemetryRecorder,
+)
+from packages.database.models.ai.embedding_call import EmbeddingCallModel
+from packages.database.models.ai.retrieval_candidate import (
+    RetrievalCandidateModel,
+)
+from packages.database.models.ai.retrieval_run import RetrievalRunModel
+from packages.database.repositories.ai.embedding_call_repository import (
+    EmbeddingCallRepository,
+)
+from packages.database.repositories.ai.retrieval_repository import (
+    RetrievalRepository,
+)
+from packages.knowledge.embeddings.provider.instrumented import (
+    EmbeddingCallContext,
+    InstrumentedEmbeddingProvider,
+)
 from packages.application.composition.knowledge_retrieval_factory import (
     create_knowledge_retrieval_components,
 )
@@ -1138,4 +1160,129 @@ class TestPipelineContextBudget:
         assert (
             context.query.text
             == prepared_query.original_query
+        )
+        
+        
+class TestRetrievalTelemetry:
+    def test_persists_complete_retrieval_telemetry(
+        self,
+        pipeline_session: Session,
+    ) -> None:
+        _, _, expected_chunk_id = seed_retrievable_chunk(
+            pipeline_session,
+            vector=(1.0, 0.0, 0.0),
+            title="Refund Policy",
+            section_title="Refund Eligibility",
+            content=(
+                "Customers may request a refund within "
+                "thirty days of purchase."
+            ),
+        )
+        pipeline_session.commit()
+
+        embedding_recorder = (
+            TransactionalEmbeddingTelemetryRecorder(
+                repository=EmbeddingCallRepository(
+                    pipeline_session
+                ),
+            )
+        )
+
+        instrumented_provider = InstrumentedEmbeddingProvider(
+            provider=DeterministicEmbeddingProvider(),
+            recorder=embedding_recorder,
+            context=EmbeddingCallContext(
+                purpose="query",
+                metadata={
+                    "workflow": "retrieval_integration_test",
+                },
+            ),
+        )
+
+        retrieval_recorder = RetrievalTelemetryRecorder(
+            repository=RetrievalRepository(pipeline_session),
+            ai_run_id=None,
+            trace_id=None,
+            conversation_id=None,
+            profile=TEST_PROFILE,
+        )
+
+        components = create_knowledge_retrieval_components(
+            session=pipeline_session,
+            embedding_provider=instrumented_provider,
+            embedding_input_descriptor=TEST_INPUT_DESCRIPTOR,
+            profile=TEST_PROFILE,
+            default_context_budget=DEFAULT_CONTEXT_BUDGET,
+            telemetry_recorder=retrieval_recorder,
+        )
+
+        raw_query = "What is the refund eligibility?"
+        prepared_query = prepare_query(
+            components,
+            customer_message=raw_query,
+            intent_key="refund_request",
+        )
+
+        context = components.build_grounding_context.build(
+            prepared_query=prepared_query,
+        )
+        pipeline_session.flush()
+
+        run = pipeline_session.scalar(
+            select(RetrievalRunModel)
+            .order_by(RetrievalRunModel.started_at.desc())
+            .limit(1)
+        )
+
+        assert run is not None
+        assert run.status == "success"
+        assert run.retrieval_mode == "hybrid"
+        assert run.embedding_call_id is not None
+        assert run.vector_candidate_count >= 1
+        assert run.lexical_candidate_count >= 1
+        assert run.fused_candidate_count >= 1
+        assert run.selected_candidate_count == context.block_count
+        assert run.context_block_count == context.block_count
+        assert run.context_token_count == context.estimated_token_count
+        assert run.zero_result is False
+        assert run.query_fingerprint != raw_query
+
+        embedding_call = pipeline_session.get(
+            EmbeddingCallModel,
+            run.embedding_call_id,
+        )
+
+        assert embedding_call is not None
+        assert embedding_call.purpose == "query"
+        assert embedding_call.status == "success"
+        assert embedding_call.dimensions == 3
+
+        candidates = tuple(
+            pipeline_session.scalars(
+                select(RetrievalCandidateModel).where(
+                    RetrievalCandidateModel.retrieval_run_id
+                    == run.id
+                )
+            )
+        )
+
+        assert candidates
+        assert any(
+            candidate.chunk_id == expected_chunk_id
+            for candidate in candidates
+        )
+        assert any(
+            candidate.selected_for_context
+            for candidate in candidates
+        )
+
+        serialized_metadata = " ".join(
+            str(candidate.metadata_)
+            for candidate in candidates
+        )
+
+        assert raw_query not in serialized_metadata
+        assert (
+            "Customers may request a refund"
+            not in serialized_metadata
         )

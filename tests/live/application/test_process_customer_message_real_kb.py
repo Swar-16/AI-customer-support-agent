@@ -363,7 +363,7 @@ def test_customer_message_uses_real_kb_jina_and_groq(
 
     assert (
         result.pipeline_stage
-        is PipelineStage.RESPONSE_GENERATED
+        is PipelineStage.GUARDRAILS_COMPLETED
     )
 
     # Groq should classify this as a refund-related request.

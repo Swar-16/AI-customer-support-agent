@@ -9,6 +9,8 @@ from uuid6 import uuid7
 from packages.knowledge.domain.document import KnowledgeDocument
 from packages.knowledge.domain.enums import KnowledgeContentType, KnowledgeVisibility
 from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
+from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
+from packages.application.audit.recorder import AuditRecorder
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +52,27 @@ class CreateKnowledgeDocument:
 
         with self._uow_factory() as uow:
             uow.documents.add(document)
+            AuditRecorder(repository=uow.audit_events).record(
+                RecordAuditEventCommand(
+                    event_type="knowledge_document.created",
+                    entity_type="knowledge_document",
+                    entity_id=document.id,
+                    action="created",
+                    actor=AuditActor(actor_type=AuditActorType.SYSTEM),
+                    before_state=None,
+                    after_state={
+                        "title": document.title,
+                        "content_type": document.content_type.value,
+                        "visibility": document.visibility.value,
+                        "status": document.status.value,
+                        "has_description": document.description is not None,
+                    },
+                    metadata={
+                        "metadata_keys": sorted(document.metadata.keys()),
+                    },
+                    occurred_at=document.created_at,
+                )
+            )
             uow.commit()
 
         return CreateKnowledgeDocumentResult(
