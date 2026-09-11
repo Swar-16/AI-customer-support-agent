@@ -2,17 +2,26 @@
 from __future__ import annotations
 import uuid
 from typing import Annotated
-from fastapi import APIRouter, HTTPException, Path, Query, status
+from fastapi import APIRouter, HTTPException, Path, Query, status, Depends
 
-from apps.api.app.api.dependencies import ApplicationServicesDependency
-from apps.api.app.api.v1.schemas.escalations import EscalationListResponse, EscalationPriority, EscalationResponse
+from apps.api.app.api.v1.schemas.escalations import EscalationListResponse, EscalationPriority, EscalationResponse, CustomerEscalationStatusResponse
 from apps.api.app.api.v1.schemas.escalations import EscalationStatus, UpdateEscalationRequest, UpdateEscalationResponse
 # from packages.application.escalations.query_escalations import EscalationDoesNotExistError as QueryEscalationDoesNotExistError
 from packages.application.escalations.query_escalations import EscalationView, GetEscalationQuery, ListConversationEscalationsQuery, ListEscalationsQuery
 # from packages.application.escalations.update_escalation import EscalationDoesNotExistError as UpdateEscalationDoesNotExistError
 from packages.application.escalations.update_escalation import UpdateEscalationCommand#, InvalidEscalationTransitionError
+from apps.api.app.api.dependencies import ApplicationServicesDependency, CurrentPrincipalDependency, CustomerPrincipalDependency, TraceIdDependency, require_roles
+from packages.application.auth.models import AuthRole
+from packages.application.escalations.get_customer_escalation_status import GetCustomerEscalationStatusQuery
 
-router = APIRouter(prefix="/escalations", tags=["escalations"])
+router = APIRouter(
+    prefix="/escalations",
+    tags=["escalations"],
+    dependencies=[Depends(require_roles(
+        AuthRole.SUPPORT_AGENT,
+        AuthRole.ADMIN,
+    ))],
+)
 EscalationIdPath = Annotated[uuid.UUID, Path(description="Persistent escalation identifier.")]
 ConversationIdPath = Annotated[uuid.UUID, Path(description="Conversation whose escalation history should be returned.")]
 PageLimitQuery = Annotated[int, Query(ge=1, le=200, description="Maximum number of escalations to return.")]
@@ -95,9 +104,17 @@ def get_escalation(escalation_id: EscalationIdPath, services: ApplicationService
     summary="Update escalation status",
     description="Move an escalation through its controlled human-review lifecycle.",
 )
-def update_escalation(escalation_id: EscalationIdPath, payload: UpdateEscalationRequest, services: ApplicationServicesDependency) -> UpdateEscalationResponse:
-    """Transition an escalation using a row-level database lock."""
-    result = services.update_escalation.execute(UpdateEscalationCommand(escalation_id=escalation_id, target_status=payload.status))
+def update_escalation(escalation_id: EscalationIdPath, payload: UpdateEscalationRequest, services: ApplicationServicesDependency,
+                      principal: CurrentPrincipalDependency, trace_id: TraceIdDependency) -> UpdateEscalationResponse:
+    result = services.update_escalation.execute(
+        UpdateEscalationCommand(
+            escalation_id=escalation_id,
+            target_status=payload.status,
+            principal=principal,
+            trace_id=trace_id,
+        )
+    )
+
     return UpdateEscalationResponse(
         escalation_id=result.escalation_id,
         conversation_id=result.conversation_id,
@@ -132,6 +149,10 @@ def _to_escalation_response(escalation: EscalationView) -> EscalationResponse:
 conversation_escalations_router = APIRouter(
     prefix="/conversations",
     tags=["escalations"],
+    dependencies=[Depends(require_roles(
+        AuthRole.SUPPORT_AGENT,
+        AuthRole.ADMIN,
+    ))],
 )
 
 @conversation_escalations_router.get(
@@ -145,3 +166,35 @@ def list_conversation_escalations(conversation_id: ConversationIdPath, services:
     escalations = services.list_conversation_escalations.execute(ListConversationEscalationsQuery(conversation_id=conversation_id, limit=limit))
 
     return [_to_escalation_response(escalation) for escalation in escalations]
+
+customer_escalations_router = APIRouter(
+    prefix="/conversations",
+    tags=["customer escalations"],
+)
+
+@customer_escalations_router.get(
+    "/{conversation_id}/escalation-status",
+    response_model=CustomerEscalationStatusResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get customer escalation status",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"description": "Authentication required",},
+        status.HTTP_403_FORBIDDEN: {"description": "Customer role required",},
+        status.HTTP_404_NOT_FOUND: {"description": "Conversation or escalation unavailable",},
+    },
+)
+def get_customer_escalation_status(conversation_id: ConversationIdPath, services: ApplicationServicesDependency, principal: CustomerPrincipalDependency) -> CustomerEscalationStatusResponse:
+    """Return the newest escalation status for a conversation owned by the authenticated customer."""
+    escalation = services.get_customer_escalation_status.execute(
+        GetCustomerEscalationStatusQuery(conversation_id=conversation_id, principal=principal)
+    )
+
+    return CustomerEscalationStatusResponse(
+        escalation_id=escalation.escalation_id,
+        conversation_id=escalation.conversation_id,
+        status=escalation.status,
+        priority=escalation.priority,
+        created_at=escalation.created_at,
+        updated_at=escalation.updated_at,
+        resolved_at=escalation.resolved_at,
+    )

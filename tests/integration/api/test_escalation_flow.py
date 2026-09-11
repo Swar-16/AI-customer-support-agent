@@ -88,10 +88,10 @@ def seeded_escalation(
 class TestEscalationQueries:
     def test_gets_escalation(
         self,
-        client: TestClient,
+        support_agent_client: TestClient,
         seeded_escalation: SeededEscalation,
     ) -> None:
-        response = client.get(
+        response = support_agent_client.get(
             f"/v1/escalations/{seeded_escalation.escalation_id}"
         )
 
@@ -116,10 +116,10 @@ class TestEscalationQueries:
 
     def test_lists_dashboard_escalations(
         self,
-        client: TestClient,
+        support_agent_client: TestClient,
         seeded_escalation: SeededEscalation,
     ) -> None:
-        response = client.get(
+        response = support_agent_client.get(
             "/v1/escalations",
             params={
                 "active_only": "true",
@@ -144,10 +144,10 @@ class TestEscalationQueries:
 
     def test_lists_conversation_escalations(
         self,
-        client: TestClient,
+        support_agent_client: TestClient,
         seeded_escalation: SeededEscalation,
     ) -> None:
-        response = client.get(
+        response = support_agent_client.get(
             "/v1/conversations/"
             f"{seeded_escalation.conversation_id}/escalations"
         )
@@ -166,12 +166,12 @@ class TestEscalationQueries:
 
     def test_missing_escalation_returns_canonical_error(
         self,
-        client: TestClient,
+        support_agent_client: TestClient,
         clean_database,
     ) -> None:
         missing_id = uuid7()
 
-        response = client.get(
+        response = support_agent_client.get(
             f"/v1/escalations/{missing_id}"
         )
 
@@ -194,11 +194,11 @@ class TestEscalationQueries:
 class TestEscalationLifecycle:
     def test_moves_open_to_in_review_to_resolved(
         self,
-        client: TestClient,
+        support_agent_client: TestClient,
         seeded_escalation: SeededEscalation,
         test_session_factory,
     ) -> None:
-        in_review_response = client.patch(
+        in_review_response = support_agent_client.patch(
             f"/v1/escalations/{seeded_escalation.escalation_id}",
             json={
                 "status": "in_review",
@@ -214,7 +214,7 @@ class TestEscalationLifecycle:
         assert in_review_body["resolved_at"] is None
         assert in_review_body["changed"] is True
 
-        resolved_response = client.patch(
+        resolved_response = support_agent_client.patch(
             f"/v1/escalations/{seeded_escalation.escalation_id}",
             json={
                 "status": "resolved",
@@ -242,10 +242,10 @@ class TestEscalationLifecycle:
 
     def test_repeating_current_status_is_idempotent(
         self,
-        client: TestClient,
+        support_agent_client: TestClient,
         seeded_escalation: SeededEscalation,
     ) -> None:
-        response = client.patch(
+        response = support_agent_client.patch(
             f"/v1/escalations/{seeded_escalation.escalation_id}",
             json={
                 "status": "open",
@@ -262,10 +262,10 @@ class TestEscalationLifecycle:
 
     def test_invalid_terminal_transition_returns_conflict(
         self,
-        client: TestClient,
+        support_agent_client: TestClient,
         seeded_escalation: SeededEscalation,
     ) -> None:
-        resolved_response = client.patch(
+        resolved_response = support_agent_client.patch(
             f"/v1/escalations/{seeded_escalation.escalation_id}",
             json={
                 "status": "resolved",
@@ -274,7 +274,7 @@ class TestEscalationLifecycle:
 
         assert resolved_response.status_code == 200
 
-        invalid_response = client.patch(
+        invalid_response = support_agent_client.patch(
             f"/v1/escalations/{seeded_escalation.escalation_id}",
             json={
                 "status": "in_review",
@@ -296,10 +296,10 @@ class TestEscalationLifecycle:
 
     def test_invalid_list_filter_combination_returns_422(
         self,
-        client: TestClient,
+        support_agent_client: TestClient,
         seeded_escalation: SeededEscalation,
     ) -> None:
-        response = client.get(
+        response = support_agent_client.get(
             "/v1/escalations",
             params={
                 "active_only": "true",

@@ -21,12 +21,12 @@ def isolate_database(clean_database):
 
 def _create_llm_call(
     *,
-    client: TestClient,
+    admin_client: TestClient,
     conversation_id: uuid.UUID,
     trace_id: uuid.UUID,
     message: str = "Where is my order ORD-12345?",
 ) -> dict[str, Any]:
-    response = client.post(
+    response = admin_client.post(
         f"/v1/conversations/{conversation_id}/messages",
         headers={
             "X-Trace-ID": str(trace_id),
@@ -44,18 +44,18 @@ def _create_llm_call(
 class TestDashboardLLMCalls:
     def test_returns_correlated_llm_call(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         seeded_conversation: uuid.UUID,
     ) -> None:
         trace_id = uuid7()
 
         message_result = _create_llm_call(
-            client=client,
+            admin_client=admin_client,
             conversation_id=seeded_conversation,
             trace_id=trace_id,
         )
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/llm-calls",
             params={
                 "trace_id": str(trace_id),
@@ -96,18 +96,18 @@ class TestDashboardLLMCalls:
 
     def test_filters_by_ai_run_and_conversation(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         seeded_conversation: uuid.UUID,
     ) -> None:
         trace_id = uuid7()
 
         message_result = _create_llm_call(
-            client=client,
+            admin_client=admin_client,
             conversation_id=seeded_conversation,
             trace_id=trace_id,
         )
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/llm-calls",
             params={
                 "ai_run_id": message_result["ai_run_id"],
@@ -131,18 +131,18 @@ class TestDashboardLLMCalls:
 
     def test_filters_by_provider_model_purpose_and_status(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         seeded_conversation: uuid.UUID,
     ) -> None:
         trace_id = uuid7()
 
         _create_llm_call(
-            client=client,
+            admin_client=admin_client,
             conversation_id=seeded_conversation,
             trace_id=trace_id,
         )
 
-        initial_response = client.get(
+        initial_response = admin_client.get(
             "/v1/dashboard/llm-calls",
             params={
                 "trace_id": str(trace_id),
@@ -153,7 +153,7 @@ class TestDashboardLLMCalls:
 
         initial_call = initial_response.json()["items"][0]
 
-        filtered_response = client.get(
+        filtered_response = admin_client.get(
             "/v1/dashboard/llm-calls",
             params={
                 "trace_id": str(trace_id),
@@ -174,16 +174,16 @@ class TestDashboardLLMCalls:
 
     def test_non_matching_trace_returns_empty_page(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         seeded_conversation: uuid.UUID,
     ) -> None:
         _create_llm_call(
-            client=client,
+            admin_client=admin_client,
             conversation_id=seeded_conversation,
             trace_id=uuid7(),
         )
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/llm-calls",
             params={
                 "trace_id": str(uuid7()),
@@ -202,28 +202,28 @@ class TestDashboardLLMCalls:
 
     def test_paginates_llm_calls_without_duplicates(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         seeded_conversation: uuid.UUID,
     ) -> None:
         _create_llm_call(
-            client=client,
+            admin_client=admin_client,
             conversation_id=seeded_conversation,
             trace_id=uuid7(),
         )
         _create_llm_call(
-            client=client,
+            admin_client=admin_client,
             conversation_id=seeded_conversation,
             trace_id=uuid7(),
         )
 
-        first_response = client.get(
+        first_response = admin_client.get(
             "/v1/dashboard/llm-calls",
             params={
                 "limit": 1,
                 "offset": 0,
             },
         )
-        second_response = client.get(
+        second_response = admin_client.get(
             "/v1/dashboard/llm-calls",
             params={
                 "limit": 1,
@@ -256,9 +256,9 @@ class TestDashboardLLMCalls:
 
     def test_rejects_invalid_status(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/llm-calls",
             params={
                 "status": "unknown",
@@ -269,9 +269,9 @@ class TestDashboardLLMCalls:
 
     def test_rejects_invalid_purpose(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/llm-calls",
             params={
                 "purpose": "raw_prompt_debugging",
@@ -282,7 +282,7 @@ class TestDashboardLLMCalls:
 
     def test_does_not_expose_sensitive_llm_fields(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         seeded_conversation: uuid.UUID,
     ) -> None:
         secret_message = (
@@ -291,13 +291,13 @@ class TestDashboardLLMCalls:
         trace_id = uuid7()
 
         _create_llm_call(
-            client=client,
+            admin_client=admin_client,
             conversation_id=seeded_conversation,
             trace_id=trace_id,
             message=secret_message,
         )
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/llm-calls",
             params={
                 "trace_id": str(trace_id),

@@ -2,6 +2,7 @@
 from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
+from datetime import timedelta
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
@@ -9,6 +10,16 @@ from sqlalchemy.engine import URL
 class Settings(BaseSettings):
     app_env: str = "development"
     app_name: str = "support-ai"
+    
+    # Authentication
+    auth_jwt_secret: str
+    auth_jwt_issuer: str = "support-ai"
+    auth_jwt_audience: str = "support-ai-api"
+    auth_access_token_ttl_minutes: int = 15
+    auth_refresh_token_ttl_days: int = 30
+    auth_clock_skew_seconds: int = 30
+    auth_login_max_failed_attempts: int = 5
+    auth_login_lockout_minutes: int = 15
 
     ## Database
     database_host: str = "localhost"
@@ -51,6 +62,34 @@ class Settings(BaseSettings):
     def validate_provider_configuration(self) -> "Settings":
         self.llm_provider = self.llm_provider.strip().lower()
         self.embedding_provider = self.embedding_provider.strip().lower()
+        
+        self.auth_jwt_secret = self.auth_jwt_secret.strip()
+        self.auth_jwt_issuer = self.auth_jwt_issuer.strip()
+        self.auth_jwt_audience = self.auth_jwt_audience.strip()
+
+        if len(self.auth_jwt_secret.encode("utf-8")) < 32:
+            raise ValueError("auth_jwt_secret must contain at least 32 UTF-8 encoded bytes.")
+
+        if not self.auth_jwt_issuer:
+            raise ValueError("auth_jwt_issuer must not be blank.")
+
+        if not self.auth_jwt_audience:
+            raise ValueError("auth_jwt_audience must not be blank.")
+
+        if self.auth_access_token_ttl_minutes <= 0:
+            raise ValueError("auth_access_token_ttl_minutes must be greater than zero.")
+
+        if self.auth_refresh_token_ttl_days <= 0:
+            raise ValueError("auth_refresh_token_ttl_days must be greater than zero.")
+
+        if self.auth_clock_skew_seconds < 0:
+            raise ValueError("auth_clock_skew_seconds cannot be negative.")
+
+        if self.auth_login_max_failed_attempts <= 0:
+            raise ValueError("auth_login_max_failed_attempts must be greater than zero.")
+
+        if self.auth_login_lockout_minutes <= 0:
+            raise ValueError("auth_login_lockout_minutes must be greater than zero.")
 
         if not self.llm_provider:
             raise ValueError("llm_provider must not be blank.")
@@ -82,6 +121,18 @@ class Settings(BaseSettings):
             raise ValueError("rag_context_max_blocks must be greater than zero.")
         
         return self
+    
+    @property
+    def auth_access_token_ttl(self) -> timedelta:
+        return timedelta(minutes=self.auth_access_token_ttl_minutes)
+
+    @property
+    def auth_refresh_token_ttl(self) -> timedelta:
+        return timedelta(days=self.auth_refresh_token_ttl_days)
+
+    @property
+    def auth_login_lockout_duration(self) -> timedelta:
+        return timedelta(minutes=self.auth_login_lockout_minutes)
     
     @property
     def database_url(self) -> URL:

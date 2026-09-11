@@ -35,6 +35,15 @@ from packages.application.dashboard.query_llm_calls import QueryDashboardLLMCall
 from packages.application.dashboard.query_retrieval_runs import QueryDashboardRetrievalRuns
 from packages.application.dashboard.query_api_requests import QueryDashboardAPIRequests
 from packages.application.dashboard.query_audit_events import QueryDashboardAuditEvents
+from packages.application.auth.authenticate_access_token import AuthenticateAccessToken
+from packages.application.auth.get_current_user import GetCurrentUser
+from packages.application.auth.login_user import LoginUser
+from packages.application.auth.logout_user import LogoutUser
+from packages.application.auth.password_hasher import Argon2PasswordHasher
+from packages.application.auth.refresh_session import RefreshSession
+from packages.application.auth.register_user import RegisterUser
+from packages.application.auth.token_service import TokenService, TokenServiceConfig
+from packages.application.escalations.get_customer_escalation_status import GetCustomerEscalationStatus
 
 SessionFactory = sessionmaker[Session]
 ProviderFactory = Callable[..., LLMProvider]
@@ -57,6 +66,14 @@ class ApplicationServices:
     """
     process_customer_message: ProcessCustomerMessage
     record_api_request: RecordAPIRequest
+    
+    register_user: RegisterUser
+    login_user: LoginUser
+    refresh_session: RefreshSession
+    logout_user: LogoutUser
+    authenticate_access_token: AuthenticateAccessToken
+    get_current_user: GetCurrentUser
+    
     get_dashboard_overview: GetDashboardOverview
     query_dashboard_traces: QueryDashboardTraces
     get_dashboard_trace_detail: GetTraceDetail
@@ -64,23 +81,29 @@ class ApplicationServices:
     query_dashboard_retrieval_runs: QueryDashboardRetrievalRuns
     query_dashboard_api_requests: QueryDashboardAPIRequests
     query_dashboard_audit_events: QueryDashboardAuditEvents
+    
     get_audit_event: GetAuditEvent
     list_audit_events: ListAuditEvents
     get_entity_audit_history: GetEntityAuditHistory
     get_trace_audit_events: GetTraceAuditEvents
+    
     get_escalation: GetEscalation
     list_escalations: ListEscalations
     list_conversation_escalations: ListConversationEscalations
+    get_customer_escalation_status: GetCustomerEscalationStatus
     update_escalation: UpdateEscalation
+    
     create_ticket: CreateTicket
     add_ticket_comment: AddTicketComment
     get_ticket: GetTicket
     list_tickets: ListTickets
     update_ticket: UpdateTicket
+    
     submit_feedback: SubmitFeedback
     get_feedback: GetFeedback
     list_feedback: ListFeedback
     review_feedback: ReviewFeedback
+    
     ai_pipeline_factory: AIPipelineFactory
     base_llm_provider: LLMProvider
     orchestration_observer: OrchestrationObserver
@@ -153,6 +176,37 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         grounding_context_budget=grounding_budget,
     )
     
+    password_hasher = Argon2PasswordHasher()
+    token_service = TokenService(
+        TokenServiceConfig(
+            secret_key=settings.auth_jwt_secret,
+            issuer=settings.auth_jwt_issuer,
+            audience=settings.auth_jwt_audience,
+            access_token_ttl=settings.auth_access_token_ttl,
+            clock_skew_seconds=settings.auth_clock_skew_seconds,
+        )
+    )
+
+    register_user = RegisterUser(
+        uow_factory=uow_factory,
+        password_hasher=password_hasher,
+        token_service=token_service,
+        refresh_token_ttl=settings.auth_refresh_token_ttl,
+    )
+
+    login_user = LoginUser(
+        uow_factory=uow_factory,
+        password_hasher=password_hasher,
+        token_service=token_service,
+        refresh_token_ttl=settings.auth_refresh_token_ttl,
+        maximum_failed_attempts=settings.auth_login_max_failed_attempts,
+        lockout_duration=settings.auth_login_lockout_duration,
+    )
+
+    refresh_session = RefreshSession(uow_factory=uow_factory, token_service=token_service)
+    logout_user = LogoutUser(uow_factory=uow_factory)
+    authenticate_access_token = AuthenticateAccessToken(uow_factory=uow_factory, token_service=token_service)
+    get_current_user = GetCurrentUser(uow_factory=uow_factory)
     record_api_request = RecordAPIRequest(uow_factory=uow_factory)
     get_dashboard_overview = GetDashboardOverview(uow_factory=uow_factory)
     query_dashboard_traces = QueryDashboardTraces(uow_factory=uow_factory)
@@ -168,6 +222,7 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
     get_escalation = GetEscalation(uow_factory=uow_factory)
     list_escalations = ListEscalations(uow_factory=uow_factory)
     list_conversation_escalations = ListConversationEscalations(uow_factory=uow_factory)
+    get_customer_escalation_status = GetCustomerEscalationStatus(uow_factory=uow_factory)
     update_escalation = UpdateEscalation(uow_factory=uow_factory)
     create_ticket = CreateTicket(uow_factory=uow_factory)
     add_ticket_comment = AddTicketComment(uow_factory=uow_factory)
@@ -182,6 +237,12 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
     return ApplicationServices(
         process_customer_message=process_customer_message,
         record_api_request=record_api_request,
+        register_user=register_user,
+        login_user=login_user,
+        refresh_session=refresh_session,
+        logout_user=logout_user,
+        authenticate_access_token=authenticate_access_token,
+        get_current_user=get_current_user,
         get_dashboard_overview=get_dashboard_overview,
         query_dashboard_traces=query_dashboard_traces,
         get_dashboard_trace_detail=get_dashboard_trace_detail,
@@ -196,6 +257,7 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         get_escalation=get_escalation,
         list_escalations=list_escalations,
         list_conversation_escalations=list_conversation_escalations,
+        get_customer_escalation_status=get_customer_escalation_status,
         update_escalation=update_escalation,
         create_ticket=create_ticket,
         add_ticket_comment=add_ticket_comment,

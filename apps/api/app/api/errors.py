@@ -42,6 +42,8 @@ from packages.application.feedback.submit_feedback import FeedbackConversationOw
 from packages.application.feedback.submit_feedback import FeedbackCustomerNotActiveError, FeedbackCustomerRoleError, SubmitFeedbackError
 from packages.application.feedback.submit_feedback import FeedbackPersistenceContractError, FeedbackResponseMessageDoesNotExistError
 from packages.application.feedback.submit_feedback import FeedbackResponseMessageMismatchError, FeedbackSubmissionConflictError
+from packages.application.auth.exceptions import *
+from packages.application.escalations.get_customer_escalation_status import CustomerConversationNotAccessibleError, CustomerEscalationDoesNotExistError, CustomerEscalationStatusContractError
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,7 @@ ERROR_INTERNAL = "INTERNAL_ERROR"
 ERROR_ESCALATION_NOT_FOUND = "ESCALATION_NOT_FOUND"
 ERROR_INVALID_ESCALATION_OPERATION = "INVALID_ESCALATION_OPERATION"
 ERROR_ESCALATION_CONFLICT = "ESCALATION_CONFLICT"
+ERROR_CUSTOMER_ESCALATION_STATUS_NOT_FOUND = "CUSTOMER_ESCALATION_STATUS_NOT_FOUND"
 ERROR_TICKET_NOT_FOUND = "TICKET_NOT_FOUND"
 ERROR_TICKET_RELATED_RESOURCE_NOT_FOUND = "TICKET_RELATED_RESOURCE_NOT_FOUND"
 ERROR_TICKET_ACCESS_DENIED = "TICKET_ACCESS_DENIED"
@@ -67,6 +70,11 @@ ERROR_FEEDBACK_ACCESS_DENIED = "FEEDBACK_ACCESS_DENIED"
 ERROR_INVALID_FEEDBACK_OPERATION = "INVALID_FEEDBACK_OPERATION"
 ERROR_FEEDBACK_CONFLICT = "FEEDBACK_CONFLICT"
 ERROR_FEEDBACK_CONCURRENT_UPDATE = "FEEDBACK_CONCURRENT_UPDATE"
+ERROR_EMAIL_ALREADY_REGISTERED = "EMAIL_ALREADY_REGISTERED"
+ERROR_PASSWORD_POLICY_VIOLATION = "PASSWORD_POLICY_VIOLATION"
+ERROR_INVALID_CREDENTIALS = "INVALID_CREDENTIALS"
+ERROR_INVALID_REFRESH_TOKEN = "INVALID_REFRESH_TOKEN"
+ERROR_UNAUTHENTICATED = "UNAUTHENTICATED"
 
 # Registration
 def register_exception_handlers(app: FastAPI) -> None:
@@ -95,6 +103,11 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     for exception_type in (CreateEscalationContractError, EscalationQueryContractError, EscalationPersistenceContractError):
         app.add_exception_handler(exception_type, escalation_internal_contract_handler)
+        
+    for exception_type in (CustomerConversationNotAccessibleError, CustomerEscalationDoesNotExistError):
+        app.add_exception_handler(exception_type, customer_escalation_status_not_found_handler)
+
+    app.add_exception_handler(CustomerEscalationStatusContractError, escalation_internal_contract_handler)
     
     for exception_type in (QueriedTicketDoesNotExistError, UpdatedTicketDoesNotExistError, CommentTicketDoesNotExistError):
         app.add_exception_handler(exception_type, ticket_not_found_handler)
@@ -154,6 +167,23 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     for exception_type in (FeedbackPersistenceContractError, FeedbackQueryContractError, FeedbackReviewPersistenceContractError):
         app.add_exception_handler(exception_type, feedback_internal_contract_handler)
+        
+    # Authentication errors
+    app.add_exception_handler(RegistrationConflictError, registration_conflict_handler)
+    app.add_exception_handler(RegistrationPasswordPolicyError, registration_password_policy_handler)
+    app.add_exception_handler(InvalidCredentialsError, invalid_credentials_handler)
+    app.add_exception_handler(InvalidRefreshTokenError, invalid_refresh_token_handler)
+
+    for exception_type in (CurrentUserUnavailableError, CurrentUserStateConflictError):
+        app.add_exception_handler(exception_type, current_user_unavailable_handler)
+
+    for exception_type in (
+        RegistrationConfigurationError, RegistrationPasswordHashingError, RegistrationPersistenceError, LoginConfigurationError,
+        LoginPasswordHashingError,LoginPersistenceError, RefreshSessionConfigurationError, RefreshSessionPersistenceError,
+        LogoutConfigurationError, LogoutPersistenceError, LogoutSessionOwnershipError, GetCurrentUserPersistenceError,
+        AccessAuthenticationConfigurationError, AccessAuthenticationPersistenceError,
+    ):
+        app.add_exception_handler(exception_type, authentication_internal_error_handler)
 
     # Must remain last conceptually: this is the safety net for unexpected failures.
     app.add_exception_handler(Exception, unhandled_exception_handler)
@@ -286,6 +316,25 @@ async def escalation_internal_contract_handler(request: Request, exc: Exception)
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         code=ERROR_INTERNAL,
         message="An unexpected internal error occurred.",
+        trace_id=trace_id,
+    )
+    
+async def customer_escalation_status_not_found_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "customer_escalation_status_unavailable",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_404_NOT_FOUND,
+        code=ERROR_CUSTOMER_ESCALATION_STATUS_NOT_FOUND,
+        message="Escalation status is unavailable for the requested conversation.",
         trace_id=trace_id,
     )
     
@@ -542,6 +591,122 @@ async def feedback_internal_contract_handler(request: Request, exc: Exception) -
     trace_id = _resolve_trace_id(request)
     logger.exception(
         "feedback_internal_contract_failure",
+        exc_info=exc,
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        code=ERROR_INTERNAL,
+        message="An unexpected internal error occurred.",
+        trace_id=trace_id,
+    )
+    
+# Authentication exception handlers
+async def registration_conflict_handler(request: Request, exc: RegistrationConflictError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "registration_conflict",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_409_CONFLICT,
+        code=ERROR_EMAIL_ALREADY_REGISTERED,
+        message="An account already exists for this email address.",
+        trace_id=trace_id,
+    )
+
+async def registration_password_policy_handler(request: Request, exc: RegistrationPasswordPolicyError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "registration_password_policy_rejected",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        code=ERROR_PASSWORD_POLICY_VIOLATION,
+        message="The supplied password does not satisfy the password policy.",
+        trace_id=trace_id,
+    )
+
+async def invalid_credentials_handler(request: Request, exc: InvalidCredentialsError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "login_rejected",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        code=ERROR_INVALID_CREDENTIALS,
+        message="The email or password is invalid.",
+        trace_id=trace_id,
+        headers={"WWW-Authenticate": "Bearer",},
+    )
+
+async def invalid_refresh_token_handler(request: Request, exc: InvalidRefreshTokenError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "refresh_token_rejected",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        code=ERROR_INVALID_REFRESH_TOKEN,
+        message="The refresh token is invalid or expired.",
+        trace_id=trace_id,
+        headers={"WWW-Authenticate": "Bearer",},
+    )
+
+async def current_user_unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "current_user_unavailable",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        code=ERROR_UNAUTHENTICATED,
+        message="Valid authentication credentials are required.",
+        trace_id=trace_id,
+        headers={"WWW-Authenticate": "Bearer",},
+    )
+
+
+async def authentication_internal_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.exception(
+        "authentication_internal_failure",
         exc_info=exc,
         extra={
             "trace_id": str(trace_id),

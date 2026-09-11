@@ -57,3 +57,18 @@ class UpdateEscalationResponse(BaseModel):
     resolved_at: datetime | None = None
     updated_at: datetime
     changed: bool
+    
+class CustomerEscalationStatusResponse(BaseModel):
+    """
+    Sanitized escalation status visible to the customer who owns the associated conversation.
+
+    Internal AI, guardrail, handoff, and diagnostic details are excluded.
+    """
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    escalation_id: uuid.UUID
+    conversation_id: uuid.UUID
+    status: EscalationStatus
+    priority: EscalationPriority
+    created_at: datetime
+    updated_at: datetime
+    resolved_at: datetime | None = None

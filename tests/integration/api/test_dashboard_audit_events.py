@@ -87,14 +87,14 @@ def _seed_audit_event(
 class TestDashboardAuditEvents:
     def test_returns_sanitized_audit_event(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         test_session_factory,
     ) -> None:
         identifiers = _seed_audit_event(
             test_session_factory=test_session_factory,
         )
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/audit-events",
             params={
                 "trace_id": str(identifiers["trace_id"]),
@@ -140,7 +140,7 @@ class TestDashboardAuditEvents:
 
     def test_filters_by_event_entity_action_and_actor(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         test_session_factory,
     ) -> None:
         identifiers = _seed_audit_event(
@@ -152,7 +152,7 @@ class TestDashboardAuditEvents:
             actor_id=uuid7(),
         )
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/audit-events",
             params={
                 "event_type": (
@@ -186,7 +186,7 @@ class TestDashboardAuditEvents:
 
     def test_filters_by_trace_and_conversation(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         test_session_factory,
     ) -> None:
         trace_id = uuid7()
@@ -198,7 +198,7 @@ class TestDashboardAuditEvents:
             conversation_id=conversation_id,
         )
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/audit-events",
             params={
                 "trace_id": str(trace_id),
@@ -217,7 +217,7 @@ class TestDashboardAuditEvents:
 
     def test_respects_explicit_time_range(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         test_session_factory,
     ) -> None:
         now = datetime.now(timezone.utc)
@@ -231,7 +231,7 @@ class TestDashboardAuditEvents:
             occurred_at=now - timedelta(days=2),
         )
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/audit-events",
             params={
                 "started_at": (
@@ -252,14 +252,14 @@ class TestDashboardAuditEvents:
 
     def test_non_matching_filter_returns_empty_page(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         test_session_factory,
     ) -> None:
         _seed_audit_event(
             test_session_factory=test_session_factory,
         )
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/audit-events",
             params={
                 "trace_id": str(uuid7()),
@@ -278,7 +278,7 @@ class TestDashboardAuditEvents:
 
     def test_paginates_without_duplicates(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         test_session_factory,
     ) -> None:
         _seed_audit_event(
@@ -288,14 +288,14 @@ class TestDashboardAuditEvents:
             test_session_factory=test_session_factory,
         )
 
-        first_response = client.get(
+        first_response = admin_client.get(
             "/v1/dashboard/audit-events",
             params={
                 "limit": 1,
                 "offset": 0,
             },
         )
-        second_response = client.get(
+        second_response = admin_client.get(
             "/v1/dashboard/audit-events",
             params={
                 "limit": 1,
@@ -326,9 +326,9 @@ class TestDashboardAuditEvents:
 
     def test_rejects_invalid_actor_type(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/audit-events",
             params={
                 "actor_type": "superuser",
@@ -339,14 +339,14 @@ class TestDashboardAuditEvents:
 
     def test_does_not_expose_sensitive_audit_state(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         test_session_factory,
     ) -> None:
         identifiers = _seed_audit_event(
             test_session_factory=test_session_factory,
         )
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/audit-events",
             params={
                 "trace_id": str(identifiers["trace_id"]),

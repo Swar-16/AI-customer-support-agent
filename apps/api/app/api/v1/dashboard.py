@@ -2,7 +2,7 @@
 from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, status, Depends
 import uuid
 
 from apps.api.app.api.dependencies import ApplicationServicesDependency
@@ -16,10 +16,13 @@ from packages.application.dashboard.query_llm_calls import QueryDashboardLLMCall
 from packages.application.dashboard.query_retrieval_runs import QueryDashboardRetrievalRunsCommand
 from packages.application.dashboard.query_api_requests import QueryDashboardAPIRequestsCommand
 from packages.application.dashboard.query_audit_events import QueryDashboardAuditEventsCommand
+from apps.api.app.api.dependencies import require_roles
+from packages.application.auth.models import AuthRole
 
 router = APIRouter(
     prefix="/dashboard",
     tags=["dashboard"],
+    dependencies=[Depends(require_roles(AuthRole.ADMIN))],
 )
 DEFAULT_OVERVIEW_WINDOW = timedelta(hours=24)
 MAX_OVERVIEW_WINDOW = timedelta(days=90)

@@ -32,11 +32,11 @@ def isolate_database(clean_database):
 
 def _create_ai_run(
     *,
-    client: TestClient,
+    admin_client: TestClient,
     conversation_id: uuid.UUID,
     trace_id: uuid.UUID,
 ) -> dict[str, Any]:
-    response = client.post(
+    response = admin_client.post(
         f"/v1/conversations/{conversation_id}/messages",
         headers={
             "X-Trace-ID": str(trace_id),
@@ -53,7 +53,7 @@ def _create_ai_run(
 
 def _seed_retrieval_run(
     *,
-    client: TestClient,
+    admin_client: TestClient,
     test_session_factory,
     conversation_id: uuid.UUID,
     trace_id: uuid.UUID | None = None,
@@ -64,7 +64,7 @@ def _seed_retrieval_run(
     resolved_trace_id = trace_id or uuid7()
 
     ai_result = _create_ai_run(
-        client=client,
+        admin_client=admin_client,
         conversation_id=conversation_id,
         trace_id=resolved_trace_id,
     )
@@ -193,17 +193,17 @@ def _seed_retrieval_run(
 class TestDashboardRetrievalRuns:
     def test_returns_correlated_retrieval_run(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         test_session_factory,
         seeded_conversation: uuid.UUID,
     ) -> None:
         identifiers = _seed_retrieval_run(
-            client=client,
+            admin_client=admin_client,
             test_session_factory=test_session_factory,
             conversation_id=seeded_conversation,
         )
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/retrieval-runs",
             params={
                 "trace_id": str(identifiers["trace_id"]),
@@ -273,12 +273,12 @@ class TestDashboardRetrievalRuns:
 
     def test_filters_by_correlation_and_configuration(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         test_session_factory,
         seeded_conversation: uuid.UUID,
     ) -> None:
         identifiers = _seed_retrieval_run(
-            client=client,
+            admin_client=admin_client,
             test_session_factory=test_session_factory,
             conversation_id=seeded_conversation,
             retrieval_mode="hybrid",
@@ -286,7 +286,7 @@ class TestDashboardRetrievalRuns:
             reranker_used=True,
         )
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/retrieval-runs",
             params={
                 "trace_id": str(identifiers["trace_id"]),
@@ -317,19 +317,19 @@ class TestDashboardRetrievalRuns:
 
     def test_filters_zero_result_queries(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         test_session_factory,
         seeded_conversation: uuid.UUID,
     ) -> None:
         identifiers = _seed_retrieval_run(
-            client=client,
+            admin_client=admin_client,
             test_session_factory=test_session_factory,
             conversation_id=seeded_conversation,
             zero_result=True,
             reranker_used=False,
         )
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/retrieval-runs",
             params={
                 "trace_id": str(identifiers["trace_id"]),
@@ -355,17 +355,17 @@ class TestDashboardRetrievalRuns:
 
     def test_non_matching_filter_returns_empty_page(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         test_session_factory,
         seeded_conversation: uuid.UUID,
     ) -> None:
         _seed_retrieval_run(
-            client=client,
+            admin_client=admin_client,
             test_session_factory=test_session_factory,
             conversation_id=seeded_conversation,
         )
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/retrieval-runs",
             params={
                 "trace_id": str(uuid7()),
@@ -384,29 +384,29 @@ class TestDashboardRetrievalRuns:
 
     def test_paginates_without_duplicates(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         test_session_factory,
         seeded_conversation: uuid.UUID,
     ) -> None:
         _seed_retrieval_run(
-            client=client,
+            admin_client=admin_client,
             test_session_factory=test_session_factory,
             conversation_id=seeded_conversation,
         )
         _seed_retrieval_run(
-            client=client,
+            admin_client=admin_client,
             test_session_factory=test_session_factory,
             conversation_id=seeded_conversation,
         )
 
-        first_response = client.get(
+        first_response = admin_client.get(
             "/v1/dashboard/retrieval-runs",
             params={
                 "limit": 1,
                 "offset": 0,
             },
         )
-        second_response = client.get(
+        second_response = admin_client.get(
             "/v1/dashboard/retrieval-runs",
             params={
                 "limit": 1,
@@ -437,15 +437,15 @@ class TestDashboardRetrievalRuns:
 
     def test_rejects_invalid_filters(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
-        invalid_mode = client.get(
+        invalid_mode = admin_client.get(
             "/v1/dashboard/retrieval-runs",
             params={
                 "retrieval_mode": "semantic-magic",
             },
         )
-        invalid_status = client.get(
+        invalid_status = admin_client.get(
             "/v1/dashboard/retrieval-runs",
             params={
                 "status": "unknown",
@@ -457,17 +457,17 @@ class TestDashboardRetrievalRuns:
 
     def test_does_not_expose_sensitive_retrieval_data(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         test_session_factory,
         seeded_conversation: uuid.UUID,
     ) -> None:
         identifiers = _seed_retrieval_run(
-            client=client,
+            admin_client=admin_client,
             test_session_factory=test_session_factory,
             conversation_id=seeded_conversation,
         )
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/retrieval-runs",
             params={
                 "trace_id": str(identifiers["trace_id"]),
