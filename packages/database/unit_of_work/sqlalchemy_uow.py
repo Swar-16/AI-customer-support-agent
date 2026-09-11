@@ -21,7 +21,9 @@ from packages.database.repositories.ai.stage_event_repository import AIStageEven
 from packages.database.repositories.ai.embedding_call_repository import EmbeddingCallRepository
 from packages.database.repositories.ai.retrieval_repository import RetrievalRepository
 from packages.database.repositories.ai.reranker_call_repository import RerankerCallRepository
-from packages.database.repositories.dashboard.overview_repository import DashboardOverviewRepository
+from packages.database.repositories.dashboard import DashboardOverviewRepository, DashboardTraceDetailRepository, DashboardTraceRepository
+from packages.database.repositories.dashboard import DashboardLLMCallRepository, DashboardRetrievalRunRepository, DashboardAPIRequestRepository
+from packages.database.repositories.dashboard import DashboardAuditEventRepository
 from packages.database.session import SessionLocal
 
 SessionFactory: TypeAlias = sessionmaker[Session]
@@ -70,6 +72,12 @@ class SqlAlchemyUnitOfWork:
         self.reranker_calls: RerankerCallRepository | None = None
         
         self.dashboard_overview: DashboardOverviewRepository | None = None
+        self.dashboard_trace: DashboardTraceRepository | None = None
+        self.dashboard_trace_detail: DashboardTraceDetailRepository | None = None
+        self.dashboard_llm_calls: DashboardLLMCallRepository| None = None
+        self.dashboard_retrieval_runs:  DashboardRetrievalRunRepository | None = None
+        self.dashboard_api_requests: DashboardAPIRequestRepository | None = None
+        self.dashboard_audit_events: DashboardAuditEventRepository | None = None
 
         self._committed = False
         self._entered = False
@@ -102,6 +110,12 @@ class SqlAlchemyUnitOfWork:
         self.reranker_calls = RerankerCallRepository(self.session)
         
         self.dashboard_overview = DashboardOverviewRepository(self.session)
+        self.dashboard_trace = DashboardTraceRepository(self.session)
+        self.dashboard_trace_detail = DashboardTraceDetailRepository(self.session)
+        self.dashboard_llm_calls = DashboardLLMCallRepository(self.session)
+        self.dashboard_retrieval_runs = DashboardRetrievalRunRepository(self.session)
+        self.dashboard_api_requests = DashboardAPIRequestRepository(self.session)
+        self.dashboard_audit_events = DashboardAuditEventRepository(self.session)
 
         self._entered = True
         self._committed = False
@@ -114,10 +128,10 @@ class SqlAlchemyUnitOfWork:
 
         try:
             # Explicit transaction semantics:
-            #
+
             # exception → rollback
             # no explicit commit → rollback
-            #
+
             # This prevents accidental partial persistence simply because
             # application code forgot to call commit().
             if exc_type is not None or not self._committed:
@@ -186,6 +200,12 @@ class SqlAlchemyUnitOfWork:
         self.reranker_calls = None
         
         self.dashboard_overview = None
+        self.dashboard_trace = None
+        self.dashboard_trace_detail = None
+        self.dashboard_llm_calls = None
+        self.dashboard_retrieval_runs = None
+        self.dashboard_api_requests = None
+        self.dashboard_audit_events  = None
 
         self._entered = False
         self._committed = False

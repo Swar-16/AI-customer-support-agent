@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from packages.application.dashboard.models import DashboardMetric, DashboardTimeRange
-from packages.database.repositories.dashboard.overview_repository import DashboardOverviewRepository, DashboardOverviewSnapshot
+from packages.database.repositories.dashboard import DashboardOverviewRepository, DashboardOverviewSnapshot
 from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]

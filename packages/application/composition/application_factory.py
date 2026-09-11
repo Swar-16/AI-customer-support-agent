@@ -29,6 +29,12 @@ from packages.application.feedback.submit_feedback import SubmitFeedback
 from packages.application.observability.record_api_request import RecordAPIRequest
 from packages.application.audit.query_audit_events import GetAuditEvent, GetEntityAuditHistory, GetTraceAuditEvents, ListAuditEvents
 from packages.application.dashboard.get_overview import GetDashboardOverview
+from packages.application.dashboard.query_traces import QueryDashboardTraces
+from packages.application.dashboard.get_trace_detail import GetTraceDetail
+from packages.application.dashboard.query_llm_calls import QueryDashboardLLMCalls
+from packages.application.dashboard.query_retrieval_runs import QueryDashboardRetrievalRuns
+from packages.application.dashboard.query_api_requests import QueryDashboardAPIRequests
+from packages.application.dashboard.query_audit_events import QueryDashboardAuditEvents
 
 SessionFactory = sessionmaker[Session]
 ProviderFactory = Callable[..., LLMProvider]
@@ -52,6 +58,12 @@ class ApplicationServices:
     process_customer_message: ProcessCustomerMessage
     record_api_request: RecordAPIRequest
     get_dashboard_overview: GetDashboardOverview
+    query_dashboard_traces: QueryDashboardTraces
+    get_dashboard_trace_detail: GetTraceDetail
+    query_dashboard_llm_calls: QueryDashboardLLMCalls
+    query_dashboard_retrieval_runs: QueryDashboardRetrievalRuns
+    query_dashboard_api_requests: QueryDashboardAPIRequests
+    query_dashboard_audit_events: QueryDashboardAuditEvents
     get_audit_event: GetAuditEvent
     list_audit_events: ListAuditEvents
     get_entity_audit_history: GetEntityAuditHistory
@@ -143,6 +155,12 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
     
     record_api_request = RecordAPIRequest(uow_factory=uow_factory)
     get_dashboard_overview = GetDashboardOverview(uow_factory=uow_factory)
+    query_dashboard_traces = QueryDashboardTraces(uow_factory=uow_factory)
+    get_dashboard_trace_detail = GetTraceDetail(uow_factory=uow_factory)
+    query_dashboard_llm_calls = QueryDashboardLLMCalls(uow_factory=uow_factory)
+    query_dashboard_retrieval_runs = QueryDashboardRetrievalRuns(uow_factory=uow_factory)
+    query_dashboard_api_requests = QueryDashboardAPIRequests(uow_factory=uow_factory)
+    query_dashboard_audit_events = QueryDashboardAuditEvents(uow_factory=uow_factory)
     get_audit_event = GetAuditEvent(uow_factory=uow_factory)
     list_audit_events = ListAuditEvents(uow_factory=uow_factory)
     get_entity_audit_history = GetEntityAuditHistory(uow_factory=uow_factory)
@@ -165,6 +183,12 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         process_customer_message=process_customer_message,
         record_api_request=record_api_request,
         get_dashboard_overview=get_dashboard_overview,
+        query_dashboard_traces=query_dashboard_traces,
+        get_dashboard_trace_detail=get_dashboard_trace_detail,
+        query_dashboard_llm_calls=query_dashboard_llm_calls,
+        query_dashboard_retrieval_runs=query_dashboard_retrieval_runs,
+        query_dashboard_api_requests=query_dashboard_api_requests,
+        query_dashboard_audit_events=query_dashboard_audit_events,
         get_audit_event=get_audit_event,
         list_audit_events=list_audit_events,
         get_entity_audit_history=get_entity_audit_history,
@@ -199,7 +223,6 @@ def _resolve_provider(*, settings: Settings, base_provider: LLMProvider | None) 
     - local experiments
     - provider failover experiments
     """
-
     if base_provider is not None:
         if not isinstance(base_provider, LLMProvider):
             raise TypeError("base_provider must implement LLMProvider")

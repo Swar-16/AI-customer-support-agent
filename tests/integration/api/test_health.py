@@ -17,6 +17,13 @@ def make_application_services(*, provider_healthy: bool = True) -> ApplicationSe
         process_customer_message=Mock(),
         
         record_api_request=Mock(),
+        get_dashboard_overview=Mock(),
+        query_dashboard_traces=Mock(),
+        get_dashboard_trace_detail=Mock(),
+        query_dashboard_llm_calls=Mock(),
+        query_dashboard_retrieval_runs=Mock(),
+        query_dashboard_api_requests=Mock(),
+        query_dashboard_audit_events=Mock(),
         get_audit_event=Mock(),
         list_audit_events=Mock(),
         get_entity_audit_history=Mock(),

@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+import uuid
+from uuid6 import uuid7
 
 from packages.database.models.audit.api_request import APIRequestModel
 
@@ -49,6 +51,327 @@ def _metrics_by_key(
         metric["key"]: metric
         for metric in section["metrics"]
     }
+    
+def _trace_query_range() -> dict[str, str]:
+    now = datetime.now(timezone.utc)
+
+    return {
+        "started_at": (
+            now - timedelta(minutes=5)
+        ).isoformat(),
+        "ended_at": (
+            now + timedelta(minutes=5)
+        ).isoformat(),
+    }
+
+
+class TestDashboardTraceQueries:
+    def test_lists_api_only_trace(
+        self,
+        client: TestClient,
+    ) -> None:
+        trace_id = uuid7()
+
+        source_response = client.get(
+            "/v1/health",
+            headers={
+                "X-Trace-ID": str(trace_id),
+            },
+        )
+
+        assert source_response.status_code == 200
+
+        response = client.get(
+            "/v1/dashboard/traces",
+            params={
+                **_trace_query_range(),
+                "trace_id": str(trace_id),
+            },
+        )
+
+        assert response.status_code == 200
+
+        body = response.json()
+
+        assert body["total"] == 1
+        assert body["count"] == 1
+        assert body["has_more"] is False
+        assert body["next_offset"] is None
+
+        trace = body["items"][0]
+
+        assert trace["trace_id"] == str(trace_id)
+        assert trace["status"] == "success"
+        assert trace["api_request_count"] == 1
+        assert trace["ai_run_count"] == 0
+        assert trace["failed_api_request_count"] == 0
+        assert trace["failed_ai_run_count"] == 0
+        assert trace["running_ai_run_count"] == 0
+        assert trace["maximum_api_latency_ms"] is not None
+        assert trace["maximum_api_latency_ms"] >= 0
+        assert trace["maximum_ai_latency_ms"] is None
+
+    def test_correlates_api_request_and_ai_run(
+        self,
+        client: TestClient,
+        seeded_conversation: uuid.UUID,
+    ) -> None:
+        trace_id = uuid7()
+
+        message_response = client.post(
+            (
+                f"/v1/conversations/"
+                f"{seeded_conversation}/messages"
+            ),
+            headers={
+                "X-Trace-ID": str(trace_id),
+            },
+            json={
+                "message": "Where is my order ORD-12345?",
+            },
+        )
+
+        assert message_response.status_code == 200
+
+        message_body = message_response.json()
+        ai_run_id = uuid.UUID(message_body["ai_run_id"])
+
+        response = client.get(
+            "/v1/dashboard/traces",
+            params={
+                **_trace_query_range(),
+                "trace_id": str(trace_id),
+            },
+        )
+
+        assert response.status_code == 200
+
+        body = response.json()
+
+        assert body["total"] == 1
+        assert body["count"] == 1
+
+        trace = body["items"][0]
+
+        assert trace["trace_id"] == str(trace_id)
+        assert trace["status"] == "success"
+        assert trace["api_request_count"] == 1
+        assert trace["ai_run_count"] == 1
+        assert trace["failed_api_request_count"] == 0
+        assert trace["failed_ai_run_count"] == 0
+        assert trace["running_ai_run_count"] == 0
+        assert trace["maximum_api_latency_ms"] is not None
+        assert trace["maximum_ai_latency_ms"] is not None
+
+        by_conversation = client.get(
+            "/v1/dashboard/traces",
+            params={
+                **_trace_query_range(),
+                "conversation_id": str(seeded_conversation),
+            },
+        )
+
+        assert by_conversation.status_code == 200
+        assert by_conversation.json()["total"] == 1
+        assert (
+            by_conversation.json()["items"][0]["trace_id"]
+            == str(trace_id)
+        )
+
+        by_ai_run = client.get(
+            "/v1/dashboard/traces",
+            params={
+                **_trace_query_range(),
+                "ai_run_id": str(ai_run_id),
+            },
+        )
+
+        assert by_ai_run.status_code == 200
+        assert by_ai_run.json()["total"] == 1
+        assert (
+            by_ai_run.json()["items"][0]["trace_id"]
+            == str(trace_id)
+        )
+
+    def test_filters_error_traces(
+        self,
+        client: TestClient,
+    ) -> None:
+        trace_id = uuid7()
+
+        invalid_response = client.get(
+            "/v1/dashboard/overview",
+            headers={
+                "X-Trace-ID": str(trace_id),
+            },
+            params={
+                "started_at": "2026-09-02T00:00:00+00:00",
+                "ended_at": "2026-09-01T00:00:00+00:00",
+            },
+        )
+
+        assert invalid_response.status_code == 422
+
+        response = client.get(
+            "/v1/dashboard/traces",
+            params={
+                **_trace_query_range(),
+                "trace_id": str(trace_id),
+                "status": "error",
+            },
+        )
+
+        assert response.status_code == 200
+
+        body = response.json()
+
+        assert body["total"] == 1
+        assert body["count"] == 1
+
+        trace = body["items"][0]
+
+        assert trace["trace_id"] == str(trace_id)
+        assert trace["status"] == "error"
+        assert trace["api_request_count"] == 1
+        assert trace["failed_api_request_count"] == 1
+        assert trace["ai_run_count"] == 0
+
+        success_filter = client.get(
+            "/v1/dashboard/traces",
+            params={
+                **_trace_query_range(),
+                "trace_id": str(trace_id),
+                "status": "success",
+            },
+        )
+
+        assert success_filter.status_code == 200
+        assert success_filter.json()["total"] == 0
+        assert success_filter.json()["items"] == []
+
+    def test_paginates_trace_results(
+        self,
+        client: TestClient,
+        test_session_factory,
+    ) -> None:
+        first_trace_id = uuid7()
+        second_trace_id = uuid7()
+
+        for trace_id in (
+            first_trace_id,
+            second_trace_id,
+        ):
+            response = client.get(
+                "/v1/health",
+                headers={
+                    "X-Trace-ID": str(trace_id),
+                },
+            )
+
+            assert response.status_code == 200
+            
+        with test_session_factory() as session:
+            recorded_started_at = tuple(
+                session.scalars(
+                    select(APIRequestModel.started_at)
+                    .where(
+                        APIRequestModel.trace_id.in_(
+                            (
+                                first_trace_id,
+                                second_trace_id,
+                            )
+                        )
+                    )
+                )
+            )
+
+        assert len(recorded_started_at) == 2
+
+        query_ended_at = max(recorded_started_at)
+
+        query_range = {
+            "started_at": (
+                query_ended_at - timedelta(minutes=5)
+            ).isoformat(),
+            "ended_at": query_ended_at.isoformat(),
+        }
+
+        first_page = client.get(
+            "/v1/dashboard/traces",
+            params={
+                **query_range,
+                "limit": 1,
+                "offset": 0,
+            },
+        )
+
+        assert first_page.status_code == 200
+
+        first_body = first_page.json()
+
+        assert first_body["total"] == 2
+        assert first_body["count"] == 1
+        assert first_body["limit"] == 1
+        assert first_body["offset"] == 0
+        assert first_body["has_more"] is True
+        assert first_body["next_offset"] == 1
+
+        second_page = client.get(
+            "/v1/dashboard/traces",
+            params={
+                **query_range,
+                "limit": 1,
+                "offset": 1,
+            },
+        )
+
+        assert second_page.status_code == 200
+
+        second_body = second_page.json()
+
+        # The first trace-list request is recorded after its response, so it
+        # becomes another trace visible to the second query. Pagination must
+        # nevertheless remain internally consistent.
+        assert second_body["total"] == 2
+        assert second_body["count"] == 1
+        assert second_body["offset"] == 1
+        assert second_body["has_more"] is False
+        assert second_body["next_offset"] is None
+
+        assert (
+            first_body["items"][0]["trace_id"]
+            != second_body["items"][0]["trace_id"]
+        )
+        
+        # assert second_body["total"] == first_body["total"]
+        # assert second_body["count"] == 1
+        # assert second_body["offset"] == 1
+
+        # expected_has_more = second_body["total"] > 2
+
+        # assert second_body["has_more"] is expected_has_more
+        # assert second_body["next_offset"] == (
+        #     2 if expected_has_more else None
+        # )
+
+        # assert (
+        #     first_body["items"][0]["trace_id"]
+        #     != second_body["items"][0]["trace_id"]
+        # )
+
+    def test_rejects_invalid_trace_status(
+        self,
+        client: TestClient,
+    ) -> None:
+        response = client.get(
+            "/v1/dashboard/traces",
+            params={
+                **_trace_query_range(),
+                "status": "unknown",
+            },
+        )
+
+        assert response.status_code == 422
 
 
 class TestDashboardOverview:
