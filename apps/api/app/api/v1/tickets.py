@@ -2,9 +2,9 @@
 from __future__ import annotations
 import uuid
 from typing import Any
-from fastapi import APIRouter, Path, Query, status
+from fastapi import APIRouter, Path, Query, status, Depends
 
-from apps.api.app.api.dependencies import ApplicationServicesDependency
+from apps.api.app.api.dependencies import ApplicationServicesDependency, CurrentPrincipalDependency, TraceIdDependency, require_roles
 from apps.api.app.api.schemas.errors import APIErrorResponse
 from apps.api.app.api.v1.schemas.tickets import AddTicketCommentRequest, AddTicketCommentResponse, CreateTicketRequest, CreateTicketResponse
 from apps.api.app.api.v1.schemas.tickets import TicketCategory, TicketCommentResponse, TicketDetailResponse, TicketListResponse, TicketPriority
@@ -13,6 +13,7 @@ from packages.application.tickets.add_ticket_comment import AddTicketCommentComm
 from packages.application.tickets.create_ticket import CreateTicketCommand, CreateTicketResult
 from packages.application.tickets.query_tickets import GetTicketQuery, ListTicketsQuery, TicketCommentView, TicketDetail, TicketPage, TicketView
 from packages.application.tickets.update_ticket import UpdateTicketCommand, UpdateTicketResult
+from packages.application.auth.models import AuthRole
 
 router = APIRouter(tags=["tickets"])
 _COMMON_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
@@ -29,24 +30,22 @@ _COMMON_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     response_model=CreateTicketResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a support ticket",
-    description="Create a customer, escalation, agent, or system support ticket for a conversation.",
+    description="Create an authenticated customer or staff-originated support ticket for a conversation.",
     responses=_COMMON_ERROR_RESPONSES,
 )
-def create_ticket(
-    payload: CreateTicketRequest,
-    services: ApplicationServicesDependency,
-    conversation_id: uuid.UUID = Path(..., description="Conversation for which the ticket is created."),
+def create_ticket(payload: CreateTicketRequest, services: ApplicationServicesDependency, principal: CurrentPrincipalDependency,
+                  trace_id: TraceIdDependency, conversation_id: uuid.UUID = Path(..., description="Conversation for which the ticket is created."),
 ) -> CreateTicketResponse:
     command = CreateTicketCommand(
         conversation_id=conversation_id,
-        customer_id=payload.customer_id,
-        source=payload.source,
         subject=payload.subject,
         description=payload.description,
+        principal=principal,
+        trace_id=trace_id,
+        customer_id=payload.customer_id,
         category=payload.category,
         priority=payload.priority,
         source_message_id=payload.source_message_id,
-        escalation_id=payload.escalation_id,
         metadata=payload.metadata,
     )
 
@@ -61,22 +60,17 @@ def create_ticket(
     description="Return customer-owned tickets or an agent/admin support queue. Authorization is enforced by the application service.",
     responses=_COMMON_ERROR_RESPONSES,
 )
-def list_tickets(
-    services: ApplicationServicesDependency,
-    requester_id: uuid.UUID = Query(..., description="Authenticated requester identity."),
-    requester_role: TicketRequesterRole = Query(..., description="Authenticated requester role."),
-    active_only: bool = Query(default=False, description="Return only the active support work queue."),
-    ticket_status: TicketStatus | None = Query(default=None, alias="status", description="Filter by exact ticket status."),
-    priority: TicketPriority | None = Query(default=None, description="Filter by priority."),
-    category: TicketCategory | None = Query(default=None, description="Filter by category."),
-    assigned_agent_id: uuid.UUID | None = Query(default=None, description="Filter by assigned agent."),
-    unassigned_only: bool = Query(default=False, description="Return only unassigned tickets."),
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
+def list_tickets(services: ApplicationServicesDependency, principal: CurrentPrincipalDependency, 
+                 active_only: bool = Query(default=False, description="Return only the active support work queue."),
+                 ticket_status: TicketStatus | None = Query(default=None, alias="status", description="Filter by exact ticket status."),
+                 priority: TicketPriority | None = Query(default=None, description="Filter by priority."),
+                 category: TicketCategory | None = Query(default=None, description="Filter by category."),
+                 assigned_agent_id: uuid.UUID | None = Query(default=None, description="Filter by assigned agent."),
+                 unassigned_only: bool = Query(default=False, description="Return only unassigned tickets."),
+                 limit: int = Query(default=50, ge=1, le=200), offset: int = Query(default=0, ge=0),
 ) -> TicketListResponse:
     query = ListTicketsQuery(
-        requester_id=requester_id,
-        requester_role=requester_role,
+        principal=principal,
         active_only=active_only,
         status=ticket_status,
         priority=priority,
@@ -98,19 +92,12 @@ def list_tickets(
     description="Return one ticket and the comments visible to the requester.",
     responses=_COMMON_ERROR_RESPONSES,
 )
-def get_ticket(
-    services: ApplicationServicesDependency,
-    ticket_id: uuid.UUID = Path(..., description="Ticket identifier."),
-    requester_id: uuid.UUID = Query(..., description="Authenticated requester identity."),
-    requester_role: TicketRequesterRole = Query(..., description="Authenticated requester role."),
+def get_ticket(services: ApplicationServicesDependency, principal: CurrentPrincipalDependency, 
+               ticket_id: uuid.UUID = Path(..., description="Ticket identifier.")
 ) -> TicketDetailResponse:
-    query = GetTicketQuery(
-        ticket_id=ticket_id,
-        requester_id=requester_id,
-        requester_role=requester_role,
-    )
-
+    query = GetTicketQuery(ticket_id=ticket_id, principal=principal)
     result = services.get_ticket.execute(query)
+    
     return _ticket_detail_response(result)
 
 @router.patch(
@@ -120,15 +107,20 @@ def get_ticket(
     summary="Update a support ticket",
     description="Apply a controlled status, priority, category, or assignment mutation using optimistic concurrency control.",
     responses=_COMMON_ERROR_RESPONSES,
+    dependencies=[Depends(require_roles(AuthRole.SUPPORT_AGENT, AuthRole.ADMIN,))]
 )
 def update_ticket(
     payload: UpdateTicketRequest,
     services: ApplicationServicesDependency,
-    ticket_id: uuid.UUID = Path(..., description="Ticket identifier."),
+    principal: CurrentPrincipalDependency,
+    trace_id: TraceIdDependency,
+    ticket_id: uuid.UUID = Path(..., description="Ticket identifier.")
 ) -> UpdateTicketResponse:
     command = UpdateTicketCommand(
         ticket_id=ticket_id,
         expected_row_version=payload.expected_row_version,
+        principal=principal,
+        trace_id=trace_id,
         target_status=payload.target_status,
         priority=payload.priority,
         category=payload.category,
@@ -145,19 +137,17 @@ def update_ticket(
     response_model=AddTicketCommentResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Add a ticket comment",
-    description="Add an append-only customer-visible reply or internal support note.",
+    description="Add an authenticated customer-visible reply or internal support note.",
     responses=_COMMON_ERROR_RESPONSES,
 )
-def add_ticket_comment(
-    payload: AddTicketCommentRequest,
-    services: ApplicationServicesDependency,
-    ticket_id: uuid.UUID = Path(..., description="Ticket receiving the comment."),
+def add_ticket_comment(payload: AddTicketCommentRequest, services: ApplicationServicesDependency, principal: CurrentPrincipalDependency,
+                       trace_id: TraceIdDependency, ticket_id: uuid.UUID = Path(..., description="Ticket receiving the comment.")
 ) -> AddTicketCommentResponse:
     command = AddTicketCommentCommand(
         ticket_id=ticket_id,
-        author_role=payload.author_role,
+        principal=principal,
+        trace_id=trace_id,
         content=payload.content,
-        author_id=payload.author_id,
         visibility=payload.visibility,
         metadata=payload.metadata,
     )

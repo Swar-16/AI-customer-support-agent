@@ -28,7 +28,7 @@ from packages.application.tickets.query_tickets import TicketAccessDeniedError, 
 from packages.application.tickets.query_tickets import TicketQueryContractError, TicketQueryError, TicketRequesterDoesNotExistError
 from packages.application.tickets.query_tickets import TicketRequesterNotActiveError, TicketRequesterRoleMismatchError
 from packages.application.tickets.update_ticket import ClosedTicketMutationError, InvalidTicketTransitionError, TicketAgentDoesNotExistError
-from packages.application.tickets.update_ticket import TicketAgentNotAssignableError, TicketConcurrencyError, UpdateTicketError
+from packages.application.tickets.update_ticket import TicketAgentNotAssignableError, TicketConcurrencyError, UpdateTicketError, TicketUpdateAccessDeniedError
 from packages.application.tickets.update_ticket import TicketDoesNotExistError as UpdatedTicketDoesNotExistError
 from packages.application.tickets.update_ticket import TicketPersistenceContractError as UpdateTicketPersistenceContractError
 from packages.application.feedback.query_feedback import FeedbackAccessDeniedError, FeedbackDoesNotExistError, FeedbackQueryContractError
@@ -44,6 +44,7 @@ from packages.application.feedback.submit_feedback import FeedbackPersistenceCon
 from packages.application.feedback.submit_feedback import FeedbackResponseMessageMismatchError, FeedbackSubmissionConflictError
 from packages.application.auth.exceptions import *
 from packages.application.escalations.get_customer_escalation_status import CustomerConversationNotAccessibleError, CustomerEscalationDoesNotExistError, CustomerEscalationStatusContractError
+from packages.application.tickets.create_ticket import TicketCreationAccessDeniedError
 
 logger = logging.getLogger(__name__)
 
@@ -119,8 +120,8 @@ def register_exception_handlers(app: FastAPI) -> None:
         app.add_exception_handler(exception_type, ticket_related_resource_not_found_handler)
 
     for exception_type in (
-        TicketConversationOwnershipError, TicketCustomerNotActiveError, TicketCommentOwnershipError, CustomerInternalCommentError,
-        CommentAuthorNotActiveError, CommentAuthorRoleMismatchError, TicketAccessDeniedError, TicketRequesterNotActiveError, TicketRequesterRoleMismatchError
+        TicketConversationOwnershipError, TicketCustomerNotActiveError, TicketCommentOwnershipError, CustomerInternalCommentError, TicketUpdateAccessDeniedError,
+        CommentAuthorNotActiveError, CommentAuthorRoleMismatchError, TicketAccessDeniedError, TicketRequesterNotActiveError, TicketRequesterRoleMismatchError, TicketCreationAccessDeniedError,
     ):
         app.add_exception_handler(exception_type, ticket_access_denied_handler)
 

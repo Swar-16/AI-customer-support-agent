@@ -18,14 +18,12 @@ class TicketAPIModel(BaseModel):
 
 # Creation
 class CreateTicketRequest(TicketAPIModel):
-    customer_id: uuid.UUID
-    source: TicketSource = "customer"
+    customer_id: uuid.UUID | None = None
     subject: str = Field(..., min_length=1, max_length=300)
     description: str = Field(..., min_length=1, max_length=20_000)
     category: TicketCategory = "general"
     priority: TicketPriority = "normal"
     source_message_id: uuid.UUID | None = None
-    escalation_id: uuid.UUID | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("subject", "description")
@@ -36,16 +34,6 @@ class CreateTicketRequest(TicketAPIModel):
             raise ValueError("value cannot be blank")
 
         return normalized
-
-    @model_validator(mode="after")
-    def validate_escalation_source(self) -> CreateTicketRequest:
-        if self.source == "escalation" and self.escalation_id is None:
-            raise ValueError("escalation_id is required when source='escalation'")
-
-        if self.source != "escalation" and self.escalation_id is not None:
-            raise ValueError("escalation_id may only be supplied when source='escalation'")
-
-        return self
 
 class CreateTicketResponse(TicketAPIModel):
     ticket_id: uuid.UUID
@@ -119,8 +107,6 @@ class UpdateTicketResponse(TicketAPIModel):
 
 # Comments
 class AddTicketCommentRequest(TicketAPIModel):
-    author_role: TicketCommentAuthorRole
-    author_id: uuid.UUID | None = None
     visibility: TicketCommentVisibility = "customer"
     content: str = Field(..., min_length=1, max_length=20_000)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -133,16 +119,6 @@ class AddTicketCommentRequest(TicketAPIModel):
             raise ValueError("content cannot be blank")
 
         return normalized
-
-    @model_validator(mode="after")
-    def validate_author(self) -> AddTicketCommentRequest:
-        if self.author_role != "system" and self.author_id is None:
-            raise ValueError("author_id is required for non-system comments")
-
-        if self.author_role == "customer" and self.visibility == "internal":
-            raise ValueError("customers cannot create internal comments")
-
-        return self
 
 class AddTicketCommentResponse(TicketAPIModel):
     comment_id: uuid.UUID

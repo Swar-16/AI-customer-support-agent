@@ -9,6 +9,10 @@ import pytest
 from sqlalchemy import select
 from uuid6 import uuid7
 
+from packages.application.auth.models import (
+    AuthenticatedPrincipal,
+    AuthRole,
+)
 from packages.application.tickets.add_ticket_comment import (
     AddTicketComment,
     AddTicketCommentCommand,
@@ -40,7 +44,10 @@ from packages.database.unit_of_work.sqlalchemy_uow import (
 @dataclass(frozen=True, slots=True)
 class AuditTestContext:
     customer_id: uuid.UUID
+    agent_id: uuid.UUID
     conversation_id: uuid.UUID
+    customer_principal: AuthenticatedPrincipal
+    agent_principal: AuthenticatedPrincipal
 
 
 @pytest.fixture()
@@ -49,16 +56,25 @@ def audit_context(
     test_session_factory,
 ) -> AuditTestContext:
     customer_id = uuid7()
+    agent_id = uuid7()
     conversation_id = uuid7()
 
     with test_session_factory() as session:
-        session.add(
-            UserModel(
-                id=customer_id,
-                external_id="audit-test-customer",
-                role="customer",
-                status="active",
-            )
+        session.add_all(
+            [
+                UserModel(
+                    id=customer_id,
+                    external_id="audit-test-customer",
+                    role="customer",
+                    status="active",
+                ),
+                UserModel(
+                    id=agent_id,
+                    external_id="audit-test-agent",
+                    role="support_agent",
+                    status="active",
+                ),
+            ]
         )
         session.flush()
 
@@ -72,7 +88,10 @@ def audit_context(
 
     return AuditTestContext(
         customer_id=customer_id,
+        agent_id=agent_id,
         conversation_id=conversation_id,
+        customer_principal=AuthenticatedPrincipal(user_id=customer_id, session_id=uuid7(), role=AuthRole.CUSTOMER),
+        agent_principal=AuthenticatedPrincipal(user_id=agent_id, session_id=uuid7(), role=AuthRole.SUPPORT_AGENT),
     )
 
 
@@ -98,10 +117,12 @@ def _create_ticket(
     return service.execute(
         CreateTicketCommand(
             conversation_id=context.conversation_id,
-            customer_id=context.customer_id,
-            source="customer",
             subject="Audit test ticket",
-            description="Verify transactional business auditing.",
+            description=(
+                "Verify transactional business auditing."
+            ),
+            principal=context.customer_principal,
+            trace_id=uuid7(),
             category="technical",
             priority="normal",
             metadata={"test": True},
@@ -137,6 +158,8 @@ class TestTicketBusinessAudit:
             UpdateTicketCommand(
                 ticket_id=created.ticket_id,
                 expected_row_version=initial_row_version,
+                principal=audit_context.agent_principal,
+                trace_id=uuid7(),
                 priority="high",
             )
         )
@@ -147,8 +170,8 @@ class TestTicketBusinessAudit:
         comment_result = comment_service.execute(
             AddTicketCommentCommand(
                 ticket_id=created.ticket_id,
-                author_role="customer",
-                author_id=audit_context.customer_id,
+                principal=audit_context.customer_principal,
+                trace_id=uuid7(),
                 visibility="customer",
                 content="Please investigate this issue.",
             )
@@ -191,10 +214,14 @@ class TestTicketBusinessAudit:
             creation_event.after_state["priority"]
             == "normal"
         )
+        assert creation_event.trace_id is not None
 
         update_event = events[1]
         assert update_event.before_state["priority"] == "normal"
         assert update_event.after_state["priority"] == "high"
+        assert update_event.actor_type == "agent"
+        assert update_event.actor_id == audit_context.agent_id
+        assert update_event.trace_id is not None
 
         comment_event = events[2]
         assert (
@@ -206,6 +233,12 @@ class TestTicketBusinessAudit:
             comment_event.metadata_["comment_length"]
             == len("Please investigate this issue.")
         )
+        assert comment_event.actor_type == "customer"
+        assert (
+            comment_event.actor_id
+            == audit_context.customer_id
+        )
+        assert comment_event.trace_id is not None
 
     def test_audit_failure_rolls_back_ticket_creation(
         self,
@@ -238,15 +271,11 @@ class TestTicketBusinessAudit:
         ):
             service.execute(
                 CreateTicketCommand(
-                    conversation_id=(
-                        audit_context.conversation_id
-                    ),
-                    customer_id=audit_context.customer_id,
-                    source="customer",
+                    conversation_id=audit_context.conversation_id,
                     subject="Must roll back",
-                    description=(
-                        "Ticket must not survive audit failure."
-                    ),
+                    description="Ticket must not survive audit failure.",
+                    principal=audit_context.customer_principal,
+                    trace_id=uuid7(),
                     category="technical",
                     priority="normal",
                 )
