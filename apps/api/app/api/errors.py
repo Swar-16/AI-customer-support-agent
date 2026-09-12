@@ -45,6 +45,7 @@ from packages.application.feedback.submit_feedback import FeedbackResponseMessag
 from packages.application.auth.exceptions import *
 from packages.application.escalations.get_customer_escalation_status import CustomerConversationNotAccessibleError, CustomerEscalationDoesNotExistError, CustomerEscalationStatusContractError
 from packages.application.tickets.create_ticket import TicketCreationAccessDeniedError
+from packages.application.feedback.submit_feedback import FeedbackSubmissionAccessDeniedError
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +153,7 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     for exception_type in (
         FeedbackConversationOwnershipError, FeedbackCustomerNotActiveError, FeedbackCustomerRoleError, FeedbackAccessDeniedError,
-        FeedbackRequesterNotActiveError, FeedbackRequesterRoleMismatchError, FeedbackReviewerNotAuthorizedError
+        FeedbackRequesterNotActiveError, FeedbackRequesterRoleMismatchError, FeedbackReviewerNotAuthorizedError, FeedbackSubmissionAccessDeniedError,
     ):
         app.add_exception_handler(exception_type, feedback_access_denied_handler)
 

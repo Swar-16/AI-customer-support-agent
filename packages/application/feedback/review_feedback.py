@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Final
 from sqlalchemy.orm.exc import StaleDataError
 
+from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
 from packages.database.models.support.feedback import FeedbackModel
 from packages.database.repositories.support.feedback_repository import FeedbackRepository
 from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
@@ -63,19 +64,27 @@ class FeedbackReviewPersistenceContractError(ReviewFeedbackError):
 @dataclass(frozen=True, slots=True)
 class ReviewFeedbackCommand:
     """
-    Apply a controlled dashboard review transition.
+    Apply an authenticated staff review transition.
 
-    `expected_row_version` prevents one dashboard operator from silently overwriting another operator's review.
+    The reviewer identity is derived from the verified principal. Optimistic concurrency prevents 
+    one reviewer from silently overwriting another review.
     """
     feedback_id: uuid.UUID
-    reviewer_id: uuid.UUID
     expected_row_version: int
     target_status: str
+    principal: AuthenticatedPrincipal
+    trace_id: uuid.UUID
     review_notes: str | None = None
 
     def __post_init__(self) -> None:
         self._validate_uuid(self.feedback_id, field_name="feedback_id")
-        self._validate_uuid(self.reviewer_id, field_name="reviewer_id")
+        self._validate_uuid(self.trace_id, field_name="trace_id")
+        if not isinstance(self.principal, AuthenticatedPrincipal):
+            raise TypeError("principal must be an AuthenticatedPrincipal")
+
+        if self.principal.role not in {AuthRole.SUPPORT_AGENT, AuthRole.ADMIN,}:
+            raise FeedbackReviewerNotAuthorizedError("Only support agents and administrators may review feedback")
+
         if isinstance(self.expected_row_version, bool) or not isinstance(self.expected_row_version, int):
             raise TypeError("expected_row_version must be an integer")
 
@@ -99,6 +108,11 @@ class ReviewFeedbackCommand:
 
         object.__setattr__(self, "target_status", normalized_target_status)
         object.__setattr__(self, "review_notes", normalized_review_notes)
+
+    @property
+    def reviewer_id(self) -> uuid.UUID:
+        """Return the trusted authenticated reviewer identity."""
+        return self.principal.user_id
 
     @staticmethod
     def _validate_uuid(value: uuid.UUID, *, field_name: str) -> None:
@@ -165,7 +179,7 @@ class ReviewFeedback:
         try:
             with self._uow_factory() as uow:
                 repository, audit_repository = self._require_repositories(uow)
-                reviewer_actor_type = self._validate_reviewer(reviewer_id=command.reviewer_id, uow=uow)
+                reviewer_actor_type = self._validate_reviewer(principal=command.principal, uow=uow)
                 feedback = repository.get_by_id_for_update(command.feedback_id)
                 if feedback is None:
                     raise ReviewFeedbackDoesNotExistError(command.feedback_id)
@@ -203,6 +217,7 @@ class ReviewFeedback:
                         entity_id=feedback.id,
                         action="reviewed",
                         actor=AuditActor(actor_type=reviewer_actor_type, actor_id=command.reviewer_id),
+                        trace_id=command.trace_id,
                         conversation_id=feedback.conversation_id,
                         ai_run_id=feedback.ai_run_id,
                         before_state=before_state,
@@ -239,24 +254,27 @@ class ReviewFeedback:
         return uow.feedback, uow.audit_events
 
     @staticmethod
-    def _validate_reviewer(*, reviewer_id: uuid.UUID, uow: SqlAlchemyUnitOfWork) -> AuditActorType:
+    def _validate_reviewer(*, principal: AuthenticatedPrincipal, uow: SqlAlchemyUnitOfWork) -> AuditActorType:
         if uow.users is None:
             raise FeedbackReviewPersistenceContractError("UserRepository unavailable")
 
-        reviewer = uow.users.get_by_id(reviewer_id)
+        reviewer = uow.users.get_by_id(principal.user_id)
         if reviewer is None:
-            raise FeedbackReviewerDoesNotExistError(reviewer_id)
+            raise FeedbackReviewerDoesNotExistError(principal.user_id)
 
         if reviewer.status != "active":
-            raise FeedbackReviewerNotAuthorizedError(f"Reviewer {reviewer_id} is not active: status={reviewer.status!r}")
+            raise FeedbackReviewerNotAuthorizedError(f"Reviewer {principal.user_id} is not active: status={reviewer.status!r}")
 
-        if reviewer.role == "support_agent":
+        if reviewer.role != principal.role.value:
+            raise FeedbackReviewerNotAuthorizedError(f"Authenticated role {principal.role.value!r} does not match persisted role {reviewer.role!r}")
+
+        if principal.role is AuthRole.SUPPORT_AGENT:
             return AuditActorType.AGENT
 
-        if reviewer.role == "admin":
+        if principal.role is AuthRole.ADMIN:
             return AuditActorType.ADMIN
 
-        raise FeedbackReviewerNotAuthorizedError(f"User {reviewer_id} cannot review feedback: role={reviewer.role!r}")
+        raise FeedbackReviewerNotAuthorizedError(f"User {principal.user_id} cannot review feedback: role={principal.role.value!r}")
     
     @staticmethod
     def _audit_state(feedback: FeedbackModel) -> dict[str, object]:

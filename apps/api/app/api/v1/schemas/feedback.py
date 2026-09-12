@@ -23,11 +23,10 @@ class FeedbackAPIModel(BaseModel):
 
 # Customer submission
 class SubmitFeedbackRequest(FeedbackAPIModel):
-    customer_id: uuid.UUID = Field(..., description="Customer submitting the feedback.")
     response_message_id: uuid.UUID = Field(..., description="Assistant message being evaluated.")
     ai_run_id: uuid.UUID = Field(..., description="AI run that generated the assistant response.")
     rating: int = Field(..., ge=1, le=5, description="Customer rating from 1 to 5.", examples=[4])
-    helpful: bool | None = Field(default=None, description="Optional explicit indication of whether the response was helpful.")
+    helpful: bool | None = Field(default=None, description="Whether the response was helpful.")
     comment: str | None = Field(default=None, max_length=5_000, description="Optional customer explanation.")
     reason_codes: list[FeedbackReasonCode] = Field(default_factory=list, max_length=10, description="Structured reasons for the rating.")
     metadata: dict[str, Any] = Field(default_factory=dict, description="Additional non-authoritative feedback context.")
@@ -62,7 +61,6 @@ class SubmitFeedbackResponse(FeedbackAPIModel):
 
 # Dashboard review
 class ReviewFeedbackRequest(FeedbackAPIModel):
-    reviewer_id: uuid.UUID = Field(..., description="Active support-agent or administrator performing the review.")
     expected_row_version: int = Field(..., ge=1, description="Feedback row version observed by the dashboard.")
     target_status: FeedbackReviewTargetStatus
     review_notes: str | None = Field(default=None, max_length=5_000)

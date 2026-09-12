@@ -7,12 +7,12 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Any, Mapping
 
+from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
 from packages.database.models.support.feedback import FeedbackModel
 from packages.database.repositories.support.feedback_repository import FeedbackRepository
 from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
-AUTHORIZED_REQUESTER_ROLES = frozenset({"customer", "support_agent", "admin",})
 VALID_FEEDBACK_STATUSES = frozenset({"pending", "reviewed", "actioned", "dismissed",})
 
 class FeedbackQueryError(RuntimeError):
@@ -72,30 +72,21 @@ class FeedbackView:
 @dataclass(frozen=True, slots=True)
 class GetFeedbackQuery:
     feedback_id: uuid.UUID
-    requester_id: uuid.UUID
-    requester_role: str
+    principal: AuthenticatedPrincipal
 
     def __post_init__(self) -> None:
         _validate_uuid(self.feedback_id, field_name="feedback_id")
-        _validate_uuid(self.requester_id, field_name="requester_id")
-        object.__setattr__(self, "requester_role", _normalize_requester_role(self.requester_role))
+        _validate_principal_type(self.principal)
 
 @dataclass(frozen=True, slots=True)
 class ListFeedbackQuery:
     """
-    List customer-owned feedback or the dashboard feedback queue.
+    List customer-owned feedback or the staff feedback queue.
 
-    Customer restrictions:
-    - results are restricted to requester_id;
-    - only conversation filtering is permitted;
-    - review metadata is hidden.
-
-    Agent/admin behavior:
-    - all dashboard filters are available;
-    - internal review fields and metadata are included.
+    Customers are restricted to their own feedback and cannot use internal dashboard filters. 
+    Agents and administrators can use all filters and receive internal review information.
     """
-    requester_id: uuid.UUID
-    requester_role: str
+    principal: AuthenticatedPrincipal
     status: str | None = None
     rating: int | None = None
     helpful: bool | None = None
@@ -108,8 +99,7 @@ class ListFeedbackQuery:
     offset: int = 0
 
     def __post_init__(self) -> None:
-        _validate_uuid(self.requester_id, field_name="requester_id")
-        requester_role = _normalize_requester_role(self.requester_role)
+        _validate_principal_type(self.principal)
         status = _normalize_optional_status(self.status)
         reason_code = _normalize_optional_reason_code(self.reason_code)
         if self.rating is not None:
@@ -126,10 +116,9 @@ class ListFeedbackQuery:
 
         _validate_datetime_range(created_from=self.created_from, created_to=self.created_to)
         _validate_pagination(limit=self.limit, offset=self.offset)
-        if requester_role == "customer":
+        if self.principal.role is AuthRole.CUSTOMER:
             self._validate_customer_filters(status=status, reason_code=reason_code)
 
-        object.__setattr__(self, "requester_role", requester_role)
         object.__setattr__(self, "status", status)
         object.__setattr__(self, "reason_code", reason_code)
 
@@ -146,12 +135,12 @@ class ListFeedbackQuery:
         if reason_code is not None:
             raise FeedbackAccessDeniedError("Customers cannot filter feedback by reason code")
 
-        if self.customer_id is not None and self.customer_id != self.requester_id:
+        if self.customer_id is not None and self.customer_id != self.principal.user_id:
             raise FeedbackAccessDeniedError("Customers cannot request another customer's feedback")
 
         if self.created_from is not None or self.created_to is not None:
             raise FeedbackAccessDeniedError("Customers cannot use dashboard time-range filters")
-
+            
 @dataclass(frozen=True, slots=True)
 class FeedbackPage:
     items: tuple[FeedbackView, ...]
@@ -174,13 +163,13 @@ class GetFeedback:
 
         with self._uow_factory() as uow:
             repository = _require_repositories(uow)
-            _validate_requester(requester_id=query.requester_id, requester_role=query.requester_role, uow=uow)
+            _validate_principal(principal=query.principal, uow=uow)
             feedback = repository.get_by_id(query.feedback_id)
             if feedback is None:
                 raise FeedbackDoesNotExistError(query.feedback_id)
 
-            _authorize_feedback_access(feedback=feedback, requester_id=query.requester_id, requester_role=query.requester_role)
-            include_internal = query.requester_role in {"support_agent", "admin"}
+            _authorize_feedback_access(feedback=feedback, principal=query.principal)
+            include_internal = query.principal.role in {AuthRole.SUPPORT_AGENT, AuthRole.ADMIN,}
 
             return _to_feedback_view(feedback, include_internal=include_internal)
 
@@ -196,11 +185,11 @@ class ListFeedback:
         fetch_limit = query.limit + 1
         with self._uow_factory() as uow:
             repository = _require_repositories(uow)
-            _validate_requester(requester_id=query.requester_id, requester_role=query.requester_role, uow=uow)
-            include_internal = query.requester_role in {"support_agent", "admin"}
-            if query.requester_role == "customer":
+            _validate_principal(principal=query.principal, uow=uow)
+            include_internal = query.principal.role in {AuthRole.SUPPORT_AGENT, AuthRole.ADMIN,}
+            if query.principal.role is AuthRole.CUSTOMER:
                 records = repository.list_recent(
-                    customer_id=query.requester_id,
+                    customer_id=query.principal.user_id,
                     conversation_id=query.conversation_id,
                     limit=fetch_limit,
                     offset=query.offset,
@@ -250,28 +239,37 @@ def _require_repositories(uow: SqlAlchemyUnitOfWork) -> FeedbackRepository:
 
     return uow.feedback
 
-def _validate_requester(*, requester_id: uuid.UUID, requester_role: str, uow: SqlAlchemyUnitOfWork) -> None:
+def _validate_principal_type(principal: AuthenticatedPrincipal)-> None:
+    if not isinstance(principal, AuthenticatedPrincipal):
+        raise TypeError("principal must be an AuthenticatedPrincipal")
+
+    if principal.role not in {AuthRole.CUSTOMER, AuthRole.SUPPORT_AGENT, AuthRole.ADMIN,}:
+        raise FeedbackAccessDeniedError("Authenticated role cannot access feedback")
+
+def _validate_principal(*, principal: AuthenticatedPrincipal, uow: SqlAlchemyUnitOfWork) -> None:
+    _validate_principal_type(principal)
     if uow.users is None:
         raise FeedbackQueryContractError("UserRepository unavailable")
 
-    requester = uow.users.get_by_id(requester_id)
+    requester = uow.users.get_by_id(principal.user_id)
     if requester is None:
-        raise FeedbackRequesterDoesNotExistError(requester_id)
+        raise FeedbackRequesterDoesNotExistError(principal.user_id)
 
     if requester.status != "active":
-        raise FeedbackRequesterNotActiveError(f"Requester {requester_id} is not active: status={requester.status!r}")
+        raise FeedbackRequesterNotActiveError(f"Requester {principal.user_id} is not active: status={requester.status!r}")
 
-    if requester.role != requester_role:
-        raise FeedbackRequesterRoleMismatchError(f"Declared requester role {requester_role!r} does not match persisted role {requester.role!r}")
+    if requester.role != principal.role.value:
+        raise FeedbackRequesterRoleMismatchError(f"Authenticated role {principal.role.value!r} does not match persisted role {requester.role!r}")
 
-def _authorize_feedback_access(*, feedback: FeedbackModel, requester_id: uuid.UUID, requester_role: str) -> None:
-    if requester_role in {"support_agent", "admin"}:
+def _authorize_feedback_access(*, feedback: FeedbackModel, principal: AuthenticatedPrincipal) -> None:
+    if principal.role in {AuthRole.SUPPORT_AGENT, AuthRole.ADMIN,}:
         return
 
-    if requester_role == "customer" and feedback.customer_id == requester_id:
+    if principal.role is AuthRole.CUSTOMER and feedback.customer_id == principal.user_id:
         return
 
-    raise FeedbackAccessDeniedError(f"Requester {requester_id} cannot access feedback {feedback.id}")
+    # Conceal another customer's feedback as a missing resource.
+    raise FeedbackDoesNotExistError(feedback.id)
 
 def _to_feedback_view(feedback: FeedbackModel, *, include_internal: bool) -> FeedbackView:
     if feedback.id is None:
@@ -300,20 +298,6 @@ def _to_feedback_view(feedback: FeedbackModel, *, include_internal: bool) -> Fee
 def _validate_uuid(value: uuid.UUID, *, field_name: str) -> None:
     if not isinstance(value, uuid.UUID):
         raise TypeError(f"{field_name} must be a UUID")
-
-def _normalize_requester_role(value: str) -> str:
-    if not isinstance(value, str):
-        raise TypeError("requester_role must be a string")
-
-    normalized = value.strip().lower()
-    if not normalized:
-        raise ValueError("requester_role cannot be blank")
-
-    if normalized not in AUTHORIZED_REQUESTER_ROLES:
-        expected = ", ".join(sorted(AUTHORIZED_REQUESTER_ROLES))
-        raise ValueError(f"requester_role must be one of: {expected}")
-
-    return normalized
 
 def _normalize_optional_status(value: str | None) -> str | None:
     if value is None:

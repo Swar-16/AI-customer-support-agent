@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Any, Final
 from sqlalchemy.exc import IntegrityError
 
+from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
 from packages.database.models.support.feedback import FeedbackModel
 from packages.database.repositories.support.feedback_repository import FeedbackRepository
 from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
@@ -29,6 +30,9 @@ UNIQUE_RESPONSE_CONSTRAINT: Final[str] = "uq_feedback_response_message"
 
 class SubmitFeedbackError(RuntimeError):
     """Base application error for feedback submission."""
+    
+class FeedbackSubmissionAccessDeniedError(SubmitFeedbackError):
+    """Raised when a non-customer attempts to submit feedback."""
 
 class FeedbackConversationDoesNotExistError(SubmitFeedbackError):
     def __init__(self, conversation_id: uuid.UUID) -> None:
@@ -74,15 +78,17 @@ class FeedbackPersistenceContractError(SubmitFeedbackError):
 @dataclass(frozen=True, slots=True)
 class SubmitFeedbackCommand:
     """
-    Submit customer feedback for one visible AI response.
+    Submit authenticated customer feedback for one AI response.
 
-    `ai_run_id` is supplied by the client from the message-processing response and is verified against persisted AI-run provenance.
+    Customer identity is derived exclusively from the verified principal. The AI run and response-message
+    provenance are verified against persisted records before feedback is accepted.
     """
     conversation_id: uuid.UUID
-    customer_id: uuid.UUID
     response_message_id: uuid.UUID
     ai_run_id: uuid.UUID
     rating: int
+    principal: AuthenticatedPrincipal
+    trace_id: uuid.UUID
     helpful: bool | None = None
     comment: str | None = None
     reason_codes: tuple[str, ...] = ()
@@ -90,9 +96,15 @@ class SubmitFeedbackCommand:
 
     def __post_init__(self) -> None:
         self._validate_uuid(self.conversation_id, field_name="conversation_id")
-        self._validate_uuid(self.customer_id, field_name="customer_id")
         self._validate_uuid(self.response_message_id, field_name="response_message_id")
         self._validate_uuid(self.ai_run_id, field_name="ai_run_id")
+        self._validate_uuid(self.trace_id, field_name="trace_id")
+        if not isinstance(self.principal, AuthenticatedPrincipal):
+            raise TypeError("principal must be an AuthenticatedPrincipal")
+
+        if self.principal.role is not AuthRole.CUSTOMER:
+            raise FeedbackSubmissionAccessDeniedError("Only customers may submit feedback")
+
         if isinstance(self.rating, bool) or not isinstance(self.rating, int):
             raise TypeError("rating must be an integer")
 
@@ -105,9 +117,15 @@ class SubmitFeedbackCommand:
         normalized_comment = self._normalize_optional_comment(self.comment)
         normalized_reason_codes = self._normalize_reason_codes(self.reason_codes)
         normalized_metadata = self._normalize_metadata(self.metadata)
+
         object.__setattr__(self, "comment", normalized_comment)
         object.__setattr__(self, "reason_codes", normalized_reason_codes)
         object.__setattr__(self, "metadata", MappingProxyType(normalized_metadata))
+
+    @property
+    def customer_id(self) -> uuid.UUID:
+        """Return the trusted authenticated customer identity."""
+        return self.principal.user_id
 
     @staticmethod
     def _validate_uuid(value: uuid.UUID, *, field_name: str) -> None:
@@ -274,7 +292,8 @@ class SubmitFeedback:
                         entity_type="feedback",
                         entity_id=feedback.id,
                         action="submitted",
-                        actor=AuditActor(actor_type=AuditActorType.CUSTOMER, actor_id=command.customer_id),
+                        actor=AuditActor(actor_type=AuditActorType.CUSTOMER, actor_id=command.principal.user_id),
+                        trace_id=command.trace_id,
                         conversation_id=feedback.conversation_id,
                         ai_run_id=feedback.ai_run_id,
                         before_state=None,

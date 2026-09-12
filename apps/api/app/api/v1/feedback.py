@@ -3,15 +3,16 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from typing import Any
-from fastapi import APIRouter, Path, Query, status
+from fastapi import APIRouter, Path, Query, status, Depends
 
-from apps.api.app.api.dependencies import ApplicationServicesDependency
+from apps.api.app.api.dependencies import ApplicationServicesDependency, CurrentPrincipalDependency, CustomerPrincipalDependency, TraceIdDependency, require_roles
 from apps.api.app.api.schemas.errors import APIErrorResponse
-from apps.api.app.api.v1.schemas.feedback import FeedbackListResponse, FeedbackReasonCode, FeedbackRequesterRole, FeedbackResponse
+from apps.api.app.api.v1.schemas.feedback import FeedbackListResponse, FeedbackReasonCode, FeedbackResponse
 from apps.api.app.api.v1.schemas.feedback import FeedbackStatus, ReviewFeedbackRequest, ReviewFeedbackResponse, SubmitFeedbackRequest, SubmitFeedbackResponse
 from packages.application.feedback.query_feedback import FeedbackPage, FeedbackView, GetFeedbackQuery, ListFeedbackQuery
 from packages.application.feedback.review_feedback import ReviewFeedbackCommand, ReviewFeedbackResult
 from packages.application.feedback.submit_feedback import SubmitFeedbackCommand, SubmitFeedbackResult
+from packages.application.auth.models import AuthRole
 
 router = APIRouter(tags=["feedback"])
 _COMMON_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
@@ -28,20 +29,23 @@ _COMMON_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     response_model=SubmitFeedbackResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Submit response feedback",
-    description="Submit customer feedback for one AI-generated assistant response.",
+    description="Submit authenticated customer feedback for one AI-generated assistant response.",
     responses=_COMMON_ERROR_RESPONSES,
 )
 def submit_feedback(
     payload: SubmitFeedbackRequest,
     services: ApplicationServicesDependency,
+    principal: CustomerPrincipalDependency,
+    trace_id: TraceIdDependency,
     conversation_id: uuid.UUID = Path(..., description="Conversation containing the assistant response."),
 ) -> SubmitFeedbackResponse:
     command = SubmitFeedbackCommand(
         conversation_id=conversation_id,
-        customer_id=payload.customer_id,
         response_message_id=payload.response_message_id,
         ai_run_id=payload.ai_run_id,
         rating=payload.rating,
+        principal=principal,
+        trace_id=trace_id,
         helpful=payload.helpful,
         comment=payload.comment,
         reason_codes=tuple(payload.reason_codes),
@@ -56,27 +60,22 @@ def submit_feedback(
     response_model=FeedbackListResponse,
     status_code=status.HTTP_200_OK,
     summary="List feedback",
-    description="Return customer-owned feedback or a filtered support dashboard queue.",
+    description="Return customer-owned feedback or a filtered staff feedback queue.",
     responses=_COMMON_ERROR_RESPONSES,
 )
-def list_feedback(
-    services: ApplicationServicesDependency,
-    requester_id: uuid.UUID = Query(..., description="Authenticated requester identity."),
-    requester_role: FeedbackRequesterRole = Query(..., description="Authenticated requester role."),
-    feedback_status: FeedbackStatus | None = Query(default=None, alias="status", description="Filter by feedback review status."),
-    rating: int | None = Query(default=None, ge=1, le=5, description="Filter by exact rating."),
-    helpful: bool | None = Query(default=None, description="Filter by explicit helpful value."),
-    reason_code: FeedbackReasonCode | None = Query(default=None, description="Filter by a structured feedback reason."),
-    customer_id: uuid.UUID | None = Query(default=None, description="Filter by customer."),
-    conversation_id: uuid.UUID | None = Query(default=None, description="Filter by conversation."),
-    created_from: datetime | None = Query(default=None, description="Inclusive feedback creation lower bound."),
-    created_to: datetime | None = Query(default=None, description="Inclusive feedback creation upper bound."),
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
+def list_feedback(services: ApplicationServicesDependency, principal: CurrentPrincipalDependency,
+                  feedback_status: FeedbackStatus | None = Query(default=None, alias="status", description="Filter by feedback review status."),
+                  rating: int | None = Query(default=None, ge=1, le=5, description="Filter by exact rating."),
+                  helpful: bool | None = Query(default=None, description="Filter by explicit helpful value."),
+                  reason_code: FeedbackReasonCode | None = Query(default=None, description="Filter by structured feedback reason."),
+                  customer_id: uuid.UUID | None = Query(default=None, description="Filter by customer."),
+                  conversation_id: uuid.UUID | None = Query(default=None, description="Filter by conversation."),
+                  created_from: datetime | None = Query(default=None, description="Inclusive creation-time lower bound."),
+                  created_to: datetime | None = Query(default=None, description="Inclusive creation-time upper bound."),
+                  limit: int = Query(default=50, ge=1, le=200), offset: int = Query(default=0, ge=0)
 ) -> FeedbackListResponse:
     query = ListFeedbackQuery(
-        requester_id=requester_id,
-        requester_role=requester_role,
+        principal=principal,
         status=feedback_status,
         rating=rating,
         helpful=helpful,
@@ -97,16 +96,13 @@ def list_feedback(
     response_model=FeedbackResponse,
     status_code=status.HTTP_200_OK,
     summary="Get feedback details",
-    description="Return one feedback record when the requester is authorized.",
+    description="Return one feedback record when the authenticated principal is authorized.",
     responses=_COMMON_ERROR_RESPONSES,
 )
-def get_feedback(
-    services: ApplicationServicesDependency,
-    feedback_id: uuid.UUID = Path(..., description="Feedback identifier."),
-    requester_id: uuid.UUID = Query(..., description="Authenticated requester identity."),
-    requester_role: FeedbackRequesterRole = Query(..., description="Authenticated requester role."),
+def get_feedback(services: ApplicationServicesDependency, principal: CurrentPrincipalDependency, 
+                 feedback_id: uuid.UUID = Path(..., description="Feedback identifier.")
 ) -> FeedbackResponse:
-    query = GetFeedbackQuery(feedback_id=feedback_id, requester_id=requester_id, requester_role=requester_role)
+    query = GetFeedbackQuery(feedback_id=feedback_id, principal=principal)
     result = services.get_feedback.execute(query)
     return _feedback_response(result)
 
@@ -115,19 +111,19 @@ def get_feedback(
     response_model=ReviewFeedbackResponse,
     status_code=status.HTTP_200_OK,
     summary="Review customer feedback",
-    description="Move feedback through its dashboard review lifecycle using optimistic concurrency control.",
+    description="Move feedback through its staff-review lifecycle using optimistic concurrency control.",
     responses=_COMMON_ERROR_RESPONSES,
+    dependencies=[Depends(require_roles(AuthRole.SUPPORT_AGENT, AuthRole.ADMIN,))]
 )
-def review_feedback(
-    payload: ReviewFeedbackRequest,
-    services: ApplicationServicesDependency,
-    feedback_id: uuid.UUID = Path(..., description="Feedback identifier."),
+def review_feedback(payload: ReviewFeedbackRequest, services: ApplicationServicesDependency, principal: CurrentPrincipalDependency,
+                    trace_id: TraceIdDependency, feedback_id: uuid.UUID = Path(..., description="Feedback identifier.")
 ) -> ReviewFeedbackResponse:
     command = ReviewFeedbackCommand(
         feedback_id=feedback_id,
-        reviewer_id=payload.reviewer_id,
         expected_row_version=payload.expected_row_version,
         target_status=payload.target_status,
+        principal=principal,
+        trace_id=trace_id,
         review_notes=payload.review_notes,
     )
 
