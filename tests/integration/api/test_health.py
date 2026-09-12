@@ -29,6 +29,7 @@ def make_application_services(*, provider_healthy: bool = True) -> ApplicationSe
         logout_user=Mock(),
         authenticate_access_token=Mock(),
         get_current_user=Mock(),
+        update_user_access=Mock(),
         
         get_dashboard_overview=Mock(),
         query_dashboard_traces=Mock(),

@@ -57,10 +57,16 @@ from packages.application.conversations.query_conversations import ConversationR
 from packages.application.conversations.close_conversation import ConversationCloseAccessDeniedError, ConversationCloserDoesNotExistError
 from packages.application.conversations.close_conversation import ConversationCloserNotActiveError, ConversationCloserRoleMismatchError
 from packages.application.conversations.close_conversation import ConversationClosePersistenceContractError, ConversationToCloseDoesNotExistError
+from packages.application.users.update_user_access import AccessManagerDoesNotExistError, AccessManagerNotActiveError, AccessManagerRoleMismatchError
+from packages.application.users.update_user_access import AdministratorSelfMutationError, DeletedUserAccessMutationError, FinalActiveAdministratorError
+from packages.application.users.update_user_access import ManagedUserDoesNotExistError, ProtectedSystemUserError, UserAccessDeniedError, UserAccessPersistenceContractError
 
 logger = logging.getLogger(__name__)
 
 # Public error codes
+ERROR_USER_NOT_FOUND = "USER_NOT_FOUND"
+ERROR_USER_ACCESS_DENIED = "USER_ACCESS_DENIED"
+ERROR_USER_ACCESS_CONFLICT = "USER_ACCESS_CONFLICT"
 ERROR_INVALID_REQUEST = "INVALID_REQUEST"
 ERROR_INVALID_TRACE_ID = "INVALID_TRACE_ID"
 ERROR_CONVERSATION_NOT_FOUND = "CONVERSATION_NOT_FOUND"
@@ -100,7 +106,18 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     Route handlers should generally allow known application exceptions to propagate here rather than duplicating try/except blocks.
     """
+    app.add_exception_handler(ManagedUserDoesNotExistError, managed_user_not_found_handler)
+    
+    for exception_type in (
+        UserAccessDeniedError, AccessManagerDoesNotExistError, AccessManagerNotActiveError, AccessManagerRoleMismatchError, ProtectedSystemUserError,
+    ):
+        app.add_exception_handler(exception_type, user_access_denied_handler)
 
+    for exception_type in (AdministratorSelfMutationError, FinalActiveAdministratorError, DeletedUserAccessMutationError,):
+        app.add_exception_handler(exception_type, user_access_conflict_handler)
+
+    app.add_exception_handler(UserAccessPersistenceContractError, user_access_internal_error_handler)
+    
     app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
     app.add_exception_handler(HTTPException, http_exception_handler)
     
@@ -228,6 +245,79 @@ def register_exception_handlers(app: FastAPI) -> None:
 
 
 # Application exception handlers
+async def managed_user_not_found_handler(request: Request, exc: ManagedUserDoesNotExistError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "managed_user_not_found",
+        extra={
+            "trace_id": str(trace_id),
+            "path": request.url.path,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_404_NOT_FOUND,
+        code=ERROR_USER_NOT_FOUND,
+        message="The requested user does not exist.",
+        trace_id=trace_id,
+    )
+
+async def user_access_denied_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.warning(
+        "user_access_denied",
+        extra={
+            "trace_id": str(trace_id),
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_403_FORBIDDEN,
+        code=ERROR_USER_ACCESS_DENIED,
+        message=(
+            "You are not permitted to perform this "
+            "user access operation."
+        ),
+        trace_id=trace_id,
+    )
+
+async def user_access_conflict_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "user_access_conflict",
+        extra={
+            "trace_id": str(trace_id),
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_409_CONFLICT,
+        code=ERROR_USER_ACCESS_CONFLICT,
+        message="The requested user access change conflicts with the current account state.",
+        trace_id=trace_id,
+    )
+
+async def user_access_internal_error_handler(request: Request, exc: UserAccessPersistenceContractError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.exception(
+        "user_access_persistence_failure",
+        extra={
+            "trace_id": str(trace_id),
+            "path": request.url.path,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        code=ERROR_INTERNAL,
+        message="An unexpected internal error occurred.",
+        trace_id=trace_id,
+    )
+    
 async def conversation_not_found_handler(request: Request, exc: ConversationDoesNotExistError) -> JSONResponse:
     trace_id = _resolve_trace_id(request)
     logger.info(

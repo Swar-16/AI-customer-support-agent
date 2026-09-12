@@ -21,6 +21,36 @@ from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 Clock = Callable[[], datetime]
 
+MINIMUM_PASSWORD_CHARACTERS = 10
+MAXIMUM_PASSWORD_BYTES = 1_024
+COMMON_PASSWORDS = frozenset({
+    "1234567890", "123456789", "qwerty123", "qwerty12345", "password", "password1", "password123", "admin123", "letmein123", "welcome123",
+})
+
+def validate_registration_password(*, password: str, email: str, display_name: str | None) -> None:
+    if len(password) < MINIMUM_PASSWORD_CHARACTERS:
+        raise RegistrationPasswordPolicyError(f"Password must contain at least {MINIMUM_PASSWORD_CHARACTERS} characters.")
+
+    if len(password.encode("utf-8")) > MAXIMUM_PASSWORD_BYTES:
+        raise RegistrationPasswordPolicyError("Password is too long.")
+
+    if "\x00" in password:
+        raise RegistrationPasswordPolicyError("Password contains an unsupported character.")
+
+    casefolded_password = password.casefold()
+    if casefolded_password in COMMON_PASSWORDS:
+        raise RegistrationPasswordPolicyError("Password is too common.")
+
+    email_local_part = email.split("@", maxsplit=1)[0]
+    if len(email_local_part) >= 4 and email_local_part.casefold() in casefolded_password:
+        raise RegistrationPasswordPolicyError("Password must not contain the email username.")
+
+    if display_name is not None:
+        compact_name = "".join(character for character in display_name.casefold() if character.isalnum())
+        compact_password = "".join(character for character in casefolded_password if character.isalnum())
+        if len(compact_name) >= 4 and compact_name in compact_password:
+            raise RegistrationPasswordPolicyError("Password must not contain the display name.")
+
 class RegisterUser:
     """
     Register a customer and establish the first authenticated session.
@@ -34,12 +64,6 @@ class RegisterUser:
 
     The raw refresh token and plaintext password are never persisted.
     """
-    _MINIMUM_PASSWORD_CHARACTERS = 10
-    _MAXIMUM_PASSWORD_BYTES = 1_024
-    _COMMON_PASSWORDS = frozenset({
-        "1234567890", "123456789", "qwerty123", "qwerty12345", "password", "password1", "password123", "admin123", "letmein123", "welcome123",
-    })
-
     def __init__(self, *, uow_factory: UnitOfWorkFactory, password_hasher: PasswordHasherContract, token_service: TokenService,
                  refresh_token_ttl: timedelta, clock: Clock | None = None) -> None:
         if uow_factory is None or not callable(uow_factory):
@@ -70,7 +94,7 @@ class RegisterUser:
         if not isinstance(command, RegisterCommand):
             raise TypeError("command must be a RegisterCommand")
 
-        self._validate_password(password=command.password, email=command.email, display_name=command.display_name)
+        validate_registration_password(password=command.password, email=command.email, display_name=command.display_name)
         occurred_at = self._utc_now()
 
         try:
@@ -194,30 +218,6 @@ class RegisterUser:
         )
 
         return AuthenticationResult(user=authenticated_user, tokens=tokens)
-
-    def _validate_password(self, *, password: str, email: str, display_name: str | None) -> None:
-        if len(password) < self._MINIMUM_PASSWORD_CHARACTERS:
-            raise RegistrationPasswordPolicyError(f"Password must contain at least {self._MINIMUM_PASSWORD_CHARACTERS} characters.")
-
-        if len(password.encode("utf-8")) > self._MAXIMUM_PASSWORD_BYTES:
-            raise RegistrationPasswordPolicyError("Password is too long.")
-
-        if "\x00" in password:
-            raise RegistrationPasswordPolicyError("Password contains an unsupported character.")
-
-        casefolded_password = password.casefold()
-        if casefolded_password in self._COMMON_PASSWORDS:
-            raise RegistrationPasswordPolicyError("Password is too common.")
-
-        email_local_part = email.split("@", maxsplit=1)[0]
-        if len(email_local_part) >= 4 and email_local_part.casefold() in casefolded_password:
-            raise RegistrationPasswordPolicyError("Password must not contain the email username.")
-
-        if display_name is not None:
-            compact_name = "".join(character for character in display_name.casefold() if character.isalnum())
-            compact_password = "".join(character for character in casefolded_password if character.isalnum())
-            if len(compact_name) >= 4 and compact_name in compact_password:
-                raise RegistrationPasswordPolicyError("Password must not contain the display name.")
 
     def _utc_now(self) -> datetime:
         value = self._clock()

@@ -48,6 +48,7 @@ from packages.application.auth.refresh_session import RefreshSession
 from packages.application.auth.register_user import RegisterUser
 from packages.application.auth.token_service import TokenService, TokenServiceConfig
 from packages.application.escalations.get_customer_escalation_status import GetCustomerEscalationStatus
+from packages.application.users.update_user_access import UpdateUserAccess
 
 SessionFactory = sessionmaker[Session]
 ProviderFactory = Callable[..., LLMProvider]
@@ -82,6 +83,7 @@ class ApplicationServices:
     logout_user: LogoutUser
     authenticate_access_token: AuthenticateAccessToken
     get_current_user: GetCurrentUser
+    update_user_access: UpdateUserAccess
     
     get_dashboard_overview: GetDashboardOverview
     query_dashboard_traces: QueryDashboardTraces
@@ -221,6 +223,7 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
     logout_user = LogoutUser(uow_factory=uow_factory)
     authenticate_access_token = AuthenticateAccessToken(uow_factory=uow_factory, token_service=token_service)
     get_current_user = GetCurrentUser(uow_factory=uow_factory)
+    update_user_access = UpdateUserAccess(uow_factory=uow_factory)
     record_api_request = RecordAPIRequest(uow_factory=uow_factory)
     get_dashboard_overview = GetDashboardOverview(uow_factory=uow_factory)
     query_dashboard_traces = QueryDashboardTraces(uow_factory=uow_factory)
@@ -262,6 +265,7 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         logout_user=logout_user,
         authenticate_access_token=authenticate_access_token,
         get_current_user=get_current_user,
+        update_user_access=update_user_access,
         get_dashboard_overview=get_dashboard_overview,
         query_dashboard_traces=query_dashboard_traces,
         get_dashboard_trace_detail=get_dashboard_trace_detail,
