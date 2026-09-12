@@ -2,7 +2,7 @@
 from __future__ import annotations
 import uuid
 from collections.abc import Sequence
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from packages.database.models.support.message import MessageModel
@@ -101,6 +101,37 @@ class MessageRepository:
 
         messages = tuple(self._session.scalars(statement))
         return tuple(reversed(messages))
+    
+    def list_visible_by_conversation(self, conversation_id: uuid.UUID, *, limit: int = 50, offset: int = 0) -> Sequence[MessageModel]:
+        """
+        Return customer-visible conversation messages chronologically.
+
+        System and tool messages are intentionally excluded because they may contain orchestration details,
+        provider payloads, or internal context.
+        """
+        self._validate_uuid(conversation_id, field_name="conversation_id")
+        self._validate_limit(limit)
+        self._validate_offset(offset)
+        statement = (select(MessageModel)
+                     .where(MessageModel.conversation_id == conversation_id,
+                            MessageModel.role.in_(("customer", "assistant", "support_agent",)))
+                     .order_by(MessageModel.sequence_number.asc(),
+                               MessageModel.id.asc())
+                     .limit(limit)
+                     .offset(offset)
+        )
+
+        return tuple(self._session.scalars(statement))
+
+    def count_visible_by_conversation(self, conversation_id: uuid.UUID) -> int:
+        """Count customer-visible messages belonging to a conversation."""
+        self._validate_uuid(conversation_id, field_name="conversation_id")
+        statement = (select(func.count(MessageModel.id))
+                     .where(MessageModel.conversation_id == conversation_id,
+                            MessageModel.role.in_(("customer", "assistant", "support_agent",)))
+        )
+
+        return int(self._session.scalar(statement) or 0)
 
     def get_latest(self, conversation_id: uuid.UUID) -> MessageModel | None:
         """
@@ -196,3 +227,16 @@ class MessageRepository:
             raise ValueError(f"{field_name} cannot be empty")
 
         return normalized
+    
+    @staticmethod
+    def _validate_offset(offset: int) -> None:
+        if isinstance(offset, bool) or not isinstance(offset, int):
+            raise TypeError("offset must be an integer")
+
+        if offset < 0:
+            raise ValueError("offset must not be negative")
+
+    @staticmethod
+    def _validate_uuid(value: uuid.UUID, *, field_name: str) -> None:
+        if not isinstance(value, uuid.UUID):
+            raise TypeError(f"{field_name} must be a UUID")

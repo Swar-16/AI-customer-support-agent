@@ -19,6 +19,7 @@ from packages.database.models.ai.reranker_call import (
 from packages.database.models.ai.retrieval_run import (
     RetrievalRunModel,
 )
+from packages.database.models.support.conversation import ConversationModel
 
 
 pytestmark = pytest.mark.integration
@@ -28,17 +29,40 @@ pytestmark = pytest.mark.integration
 def isolate_database(clean_database):
     """Keep retrieval dashboard assertions isolated."""
     yield
+    
+@pytest.fixture()
+def seeded_conversation(
+    test_session_factory,
+    customer_identity,
+) -> uuid.UUID:
+    conversation_id = uuid7()
+
+    with test_session_factory() as session:
+        session.add(
+            ConversationModel(
+                id=conversation_id,
+                user_id=customer_identity.user_id,
+                status="open",
+                channel="web",
+                title="Dashboard trace correlation test",
+            )
+        )
+        session.commit()
+
+    return conversation_id
 
 
 def _create_ai_run(
     *,
     admin_client: TestClient,
+    customer_auth_headers: dict[str, str],
     conversation_id: uuid.UUID,
     trace_id: uuid.UUID,
 ) -> dict[str, Any]:
     response = admin_client.post(
         f"/v1/conversations/{conversation_id}/messages",
         headers={
+            **customer_auth_headers,
             "X-Trace-ID": str(trace_id),
         },
         json={
@@ -56,6 +80,7 @@ def _seed_retrieval_run(
     admin_client: TestClient,
     test_session_factory,
     conversation_id: uuid.UUID,
+    customer_auth_headers: dict[str, str],
     trace_id: uuid.UUID | None = None,
     retrieval_mode: str = "hybrid",
     zero_result: bool = False,
@@ -65,6 +90,7 @@ def _seed_retrieval_run(
 
     ai_result = _create_ai_run(
         admin_client=admin_client,
+        customer_auth_headers=customer_auth_headers,
         conversation_id=conversation_id,
         trace_id=resolved_trace_id,
     )
@@ -196,11 +222,13 @@ class TestDashboardRetrievalRuns:
         admin_client: TestClient,
         test_session_factory,
         seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
     ) -> None:
         identifiers = _seed_retrieval_run(
             admin_client=admin_client,
             test_session_factory=test_session_factory,
             conversation_id=seeded_conversation,
+            customer_auth_headers=customer_auth_headers
         )
 
         response = admin_client.get(
@@ -276,11 +304,13 @@ class TestDashboardRetrievalRuns:
         admin_client: TestClient,
         test_session_factory,
         seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
     ) -> None:
         identifiers = _seed_retrieval_run(
             admin_client=admin_client,
             test_session_factory=test_session_factory,
             conversation_id=seeded_conversation,
+            customer_auth_headers=customer_auth_headers,
             retrieval_mode="hybrid",
             zero_result=False,
             reranker_used=True,
@@ -320,11 +350,13 @@ class TestDashboardRetrievalRuns:
         admin_client: TestClient,
         test_session_factory,
         seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
     ) -> None:
         identifiers = _seed_retrieval_run(
             admin_client=admin_client,
             test_session_factory=test_session_factory,
             conversation_id=seeded_conversation,
+            customer_auth_headers=customer_auth_headers,
             zero_result=True,
             reranker_used=False,
         )
@@ -358,11 +390,13 @@ class TestDashboardRetrievalRuns:
         admin_client: TestClient,
         test_session_factory,
         seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
     ) -> None:
         _seed_retrieval_run(
             admin_client=admin_client,
             test_session_factory=test_session_factory,
             conversation_id=seeded_conversation,
+            customer_auth_headers=customer_auth_headers,
         )
 
         response = admin_client.get(
@@ -387,16 +421,19 @@ class TestDashboardRetrievalRuns:
         admin_client: TestClient,
         test_session_factory,
         seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
     ) -> None:
         _seed_retrieval_run(
             admin_client=admin_client,
             test_session_factory=test_session_factory,
             conversation_id=seeded_conversation,
+            customer_auth_headers=customer_auth_headers
         )
         _seed_retrieval_run(
             admin_client=admin_client,
             test_session_factory=test_session_factory,
             conversation_id=seeded_conversation,
+            customer_auth_headers=customer_auth_headers
         )
 
         first_response = admin_client.get(
@@ -460,11 +497,13 @@ class TestDashboardRetrievalRuns:
         admin_client: TestClient,
         test_session_factory,
         seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
     ) -> None:
         identifiers = _seed_retrieval_run(
             admin_client=admin_client,
             test_session_factory=test_session_factory,
             conversation_id=seeded_conversation,
+            customer_auth_headers=customer_auth_headers
         )
 
         response = admin_client.get(

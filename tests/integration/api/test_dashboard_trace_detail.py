@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from uuid6 import uuid7
 
+from packages.database.models.support.conversation import ConversationModel
 
 pytestmark = pytest.mark.integration
 
@@ -18,18 +19,40 @@ pytestmark = pytest.mark.integration
 def isolate_database(clean_database):
     """Keep trace-detail assertions independent of other tests."""
     yield
+    
+@pytest.fixture()
+def seeded_conversation(
+    test_session_factory,
+    customer_identity,
+) -> uuid.UUID:
+    conversation_id = uuid7()
 
+    with test_session_factory() as session:
+        session.add(
+            ConversationModel(
+                id=conversation_id,
+                user_id=customer_identity.user_id,
+                status="open",
+                channel="web",
+                title="Dashboard trace correlation test",
+            )
+        )
+        session.commit()
+
+    return conversation_id
 
 def _create_customer_message_trace(
     *,
     admin_client: TestClient,
     conversation_id: uuid.UUID,
+    customer_auth_headers: dict[str, str],
     trace_id: uuid.UUID,
     customer_message: str = "Where is my order ORD-12345?",
 ) -> dict[str, Any]:
     response = admin_client.post(
         f"/v1/conversations/{conversation_id}/messages",
         headers={
+            **customer_auth_headers,
             "X-Trace-ID": str(trace_id),
         },
         json={
@@ -69,12 +92,14 @@ class TestDashboardTraceDetail:
         self,
         admin_client: TestClient,
         seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
     ) -> None:
         trace_id = uuid7()
 
         message_result = _create_customer_message_trace(
             admin_client=admin_client,
             conversation_id=seeded_conversation,
+            customer_auth_headers=customer_auth_headers,
             trace_id=trace_id,
         )
 
@@ -117,12 +142,14 @@ class TestDashboardTraceDetail:
         self,
         admin_client: TestClient,
         seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
     ) -> None:
         trace_id = uuid7()
 
         _create_customer_message_trace(
             admin_client=admin_client,
             conversation_id=seeded_conversation,
+            customer_auth_headers=customer_auth_headers,
             trace_id=trace_id,
         )
 
@@ -212,6 +239,7 @@ class TestDashboardTraceDetail:
         self,
         admin_client: TestClient,
         seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
     ) -> None:
         trace_id = uuid7()
         secret_customer_message = (
@@ -221,6 +249,7 @@ class TestDashboardTraceDetail:
         _create_customer_message_trace(
             admin_client=admin_client,
             conversation_id=seeded_conversation,
+            customer_auth_headers=customer_auth_headers,
             trace_id=trace_id,
             customer_message=secret_customer_message,
         )
@@ -270,12 +299,14 @@ class TestDashboardTraceDetail:
         self,
         admin_client: TestClient,
         seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
     ) -> None:
         trace_id = uuid7()
 
         _create_customer_message_trace(
             admin_client=admin_client,
             conversation_id=seeded_conversation,
+            customer_auth_headers=customer_auth_headers,
             trace_id=trace_id,
         )
 

@@ -56,6 +56,10 @@ from packages.knowledge.retrieval.profiles import RetrievalProfile
 from packages.database.models.ai.stage_event import AIStageEventModel
 from packages.database.models.ai.retrieval_run import RetrievalRunModel
 from packages.database.models.ai.reranker_call import RerankerCallModel
+from packages.application.auth.models import (
+    AuthenticatedPrincipal,
+    AuthRole,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -420,6 +424,15 @@ def service(
             grounding_context_budget
         ),
     )
+    
+def _customer_principal(
+    seeded_conversation: dict,
+) -> AuthenticatedPrincipal:
+    return AuthenticatedPrincipal(
+        user_id=seeded_conversation["user_id"],
+        session_id=uuid7(),
+        role=AuthRole.CUSTOMER,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -447,6 +460,7 @@ def test_customer_message_persists_complete_ai_trace_and_assistant_response(
         ProcessCustomerMessageCommand(
             conversation_id=conversation_id,
             customer_message=customer_text,
+            principal=_customer_principal(seeded_conversation),
             trace_id=trace_id,
         )
     )
@@ -907,6 +921,7 @@ def test_clarification_decision_completes_without_assistant_message(
         ProcessCustomerMessageCommand(
             conversation_id=conversation_id,
             customer_message="Can you help me with this?",
+            principal=_customer_principal(seeded_conversation),
         )
     )
 
@@ -995,6 +1010,7 @@ def test_provider_timeout_persists_failed_run_without_assistant_message(
         ProcessCustomerMessageCommand(
             conversation_id=conversation_id,
             customer_message="Where is my payment?",
+            principal=_customer_principal(seeded_conversation),
         )
     )
 

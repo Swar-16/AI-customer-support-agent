@@ -10,6 +10,7 @@ import uuid
 from uuid6 import uuid7
 
 from packages.database.models.audit.api_request import APIRequestModel
+from packages.database.models.support.conversation import ConversationModel
 
 
 pytestmark = pytest.mark.integration
@@ -34,6 +35,26 @@ def isolate_database(clean_database):
     """
     yield
 
+@pytest.fixture()
+def seeded_conversation(
+    test_session_factory,
+    customer_identity,
+) -> uuid.UUID:
+    conversation_id = uuid7()
+
+    with test_session_factory() as session:
+        session.add(
+            ConversationModel(
+                id=conversation_id,
+                user_id=customer_identity.user_id,
+                status="open",
+                channel="web",
+                title="Dashboard trace correlation test",
+            )
+        )
+        session.commit()
+
+    return conversation_id
 
 def _sections_by_key(
     response_body: dict,
@@ -115,6 +136,7 @@ class TestDashboardTraceQueries:
         self,
         admin_client: TestClient,
         seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
     ) -> None:
         trace_id = uuid7()
 
@@ -124,6 +146,7 @@ class TestDashboardTraceQueries:
                 f"{seeded_conversation}/messages"
             ),
             headers={
+                **customer_auth_headers,
                 "X-Trace-ID": str(trace_id),
             },
             json={

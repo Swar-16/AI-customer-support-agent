@@ -46,6 +46,17 @@ from packages.application.auth.exceptions import *
 from packages.application.escalations.get_customer_escalation_status import CustomerConversationNotAccessibleError, CustomerEscalationDoesNotExistError, CustomerEscalationStatusContractError
 from packages.application.tickets.create_ticket import TicketCreationAccessDeniedError
 from packages.application.feedback.submit_feedback import FeedbackSubmissionAccessDeniedError
+from packages.application.conversations.create_conversation import ConversationCreationAccessDeniedError, ConversationCreationPersistenceContractError
+from packages.application.conversations.create_conversation import ConversationCreatorDoesNotExistError, ConversationCreatorNotActiveError, ConversationCreatorRoleMismatchError
+from packages.application.conversations.query_conversations import ConversationQueryAccessDeniedError, ConversationQueryPersistenceContractError
+from packages.application.conversations.query_conversations import ConversationRequesterDoesNotExistError, ConversationRequesterNotActiveError
+from packages.application.conversations.query_conversations import ConversationRequesterRoleMismatchError, QueriedConversationDoesNotExistError
+from packages.application.conversations.query_conversations import ConversationQueryAccessDeniedError, ConversationQueryPersistenceContractError
+from packages.application.conversations.query_conversations import ConversationRequesterDoesNotExistError, ConversationRequesterNotActiveError
+from packages.application.conversations.query_conversations import ConversationRequesterRoleMismatchError, QueriedConversationDoesNotExistError
+from packages.application.conversations.close_conversation import ConversationCloseAccessDeniedError, ConversationCloserDoesNotExistError
+from packages.application.conversations.close_conversation import ConversationCloserNotActiveError, ConversationCloserRoleMismatchError
+from packages.application.conversations.close_conversation import ConversationClosePersistenceContractError, ConversationToCloseDoesNotExistError
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +64,8 @@ logger = logging.getLogger(__name__)
 ERROR_INVALID_REQUEST = "INVALID_REQUEST"
 ERROR_INVALID_TRACE_ID = "INVALID_TRACE_ID"
 ERROR_CONVERSATION_NOT_FOUND = "CONVERSATION_NOT_FOUND"
+ERROR_CONVERSATION_ACCESS_DENIED = "CONVERSATION_ACCESS_DENIED"
+ERROR_CONVERSATION_CREATOR_NOT_FOUND = "CONVERSATION_CREATOR_NOT_FOUND"
 ERROR_CONVERSATION_NOT_PROCESSABLE = "CONVERSATION_NOT_PROCESSABLE"
 ERROR_INVALID_CUSTOMER_MESSAGE = "INVALID_CUSTOMER_MESSAGE"
 ERROR_INTERNAL = "INTERNAL_ERROR"
@@ -90,8 +103,31 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
     app.add_exception_handler(HTTPException, http_exception_handler)
-    app.add_exception_handler(ConversationDoesNotExistError, conversation_not_found_handler)
+    
+    for exception_type in (ConversationDoesNotExistError, QueriedConversationDoesNotExistError, ConversationToCloseDoesNotExistError,):
+        app.add_exception_handler(exception_type, conversation_not_found_handler)
+    
     app.add_exception_handler(ConversationNotProcessableError, conversation_not_processable_handler)
+    
+    for exception_type in (
+        ConversationCreationAccessDeniedError, ConversationCreatorNotActiveError, ConversationCreatorRoleMismatchError,
+        ConversationQueryAccessDeniedError, ConversationRequesterNotActiveError, ConversationRequesterRoleMismatchError,
+        ConversationCloseAccessDeniedError, ConversationCloserNotActiveError, ConversationCloserRoleMismatchError,
+    ):
+        app.add_exception_handler(exception_type, conversation_access_denied_handler)
+        
+    for exception_type in (
+        ConversationCreatorDoesNotExistError, ConversationRequesterDoesNotExistError, ConversationCloserDoesNotExistError,
+    ):
+        app.add_exception_handler(exception_type, conversation_creator_not_found_handler)
+        
+    for exception_type in (
+        ConversationCreationPersistenceContractError, ConversationQueryPersistenceContractError, ConversationClosePersistenceContractError,
+    ):
+        app.add_exception_handler(exception_type, conversation_internal_contract_handler)
+    
+    app.add_exception_handler(QueriedConversationDoesNotExistError, conversation_not_found_handler)
+    
     app.add_exception_handler(CustomerMessageValidationError, customer_message_validation_handler)
     
     for exception_type in (QueriedEscalationDoesNotExistError, UpdatedEscalationDoesNotExistError):
@@ -206,6 +242,76 @@ async def conversation_not_found_handler(request: Request, exc: ConversationDoes
         status_code=status.HTTP_404_NOT_FOUND,
         code=ERROR_CONVERSATION_NOT_FOUND,
         message="The requested conversation does not exist.",
+        trace_id=trace_id,
+    )
+    
+async def conversation_access_denied_handler(
+    request: Request,
+    exc: Exception,
+) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+
+    logger.warning(
+        "conversation_access_denied",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_403_FORBIDDEN,
+        code=ERROR_CONVERSATION_ACCESS_DENIED,
+        message="You are not permitted to perform this conversation operation.",
+        trace_id=trace_id,
+    )
+    
+async def conversation_creator_not_found_handler(
+    request: Request,
+    exc: Exception,
+) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+
+    logger.info(
+        "conversation_creator_not_found",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_404_NOT_FOUND,
+        code=ERROR_CONVERSATION_CREATOR_NOT_FOUND,
+        message="The authenticated conversation user is unavailable.",
+        trace_id=trace_id,
+    )
+    
+async def conversation_internal_contract_handler(
+    request: Request,
+    exc: Exception,
+) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+
+    logger.exception(
+        "conversation_internal_contract_failure",
+        exc_info=exc,
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        code=ERROR_INTERNAL,
+        message="An unexpected internal error occurred.",
         trace_id=trace_id,
     )
 

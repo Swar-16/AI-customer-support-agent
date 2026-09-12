@@ -10,6 +10,10 @@ from packages.ai.telemetry.observer import TelemetryOrchestrationObserver
 from packages.application.composition.ai_pipeline_factory import AIPipelineFactory
 from packages.application.composition.provider_factory import create_llm_provider
 from packages.application.conversations.process_customer_message import ProcessCustomerMessage
+from packages.application.conversations.create_conversation import CreateConversation
+from packages.application.conversations.query_conversations import ListConversations, GetConversation
+from packages.application.conversations.get_conversation_messages import GetConversationMessages
+from packages.application.conversations.close_conversation import CloseConversation
 from packages.config.settings import Settings
 from packages.database.session import SessionLocal
 from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
@@ -64,7 +68,12 @@ class ApplicationServices:
 
     Those are created per request / per application transaction.
     """
+    create_conversation: CreateConversation
+    list_conversations: ListConversations
+    get_conversation: GetConversation
+    get_conversation_messages: GetConversationMessages
     process_customer_message: ProcessCustomerMessage
+    close_conversation: CloseConversation
     record_api_request: RecordAPIRequest
     
     register_user: RegisterUser
@@ -167,6 +176,10 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         """
         return SqlAlchemyUnitOfWork(session_factory=session_factory)
 
+    create_conversation = CreateConversation(uow_factory=uow_factory)
+    list_conversations = ListConversations(uow_factory=uow_factory)
+    get_conversation = GetConversation(uow_factory=uow_factory)
+    get_conversation_messages = GetConversationMessages(uow_factory=uow_factory)
     process_customer_message = ProcessCustomerMessage(
         uow_factory=uow_factory,
         pipeline_factory=pipeline_factory,
@@ -176,6 +189,7 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         grounding_context_budget=grounding_budget,
     )
     
+    close_conversation = CloseConversation(uow_factory=uow_factory)
     password_hasher = Argon2PasswordHasher()
     token_service = TokenService(
         TokenServiceConfig(
@@ -235,7 +249,12 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
     review_feedback = ReviewFeedback(uow_factory=uow_factory)
 
     return ApplicationServices(
+        create_conversation=create_conversation,
+        list_conversations=list_conversations,
+        get_conversation=get_conversation,
+        get_conversation_messages=get_conversation_messages,
         process_customer_message=process_customer_message,
+        close_conversation = close_conversation,
         record_api_request=record_api_request,
         register_user=register_user,
         login_user=login_user,

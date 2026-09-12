@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from uuid6 import uuid7
 
+from packages.database.models.support.conversation import ConversationModel
 
 pytestmark = pytest.mark.integration
 
@@ -18,10 +19,31 @@ def isolate_database(clean_database):
     """Keep LLM dashboard assertions independent of other tests."""
     yield
 
+@pytest.fixture()
+def seeded_conversation(
+    test_session_factory,
+    customer_identity,
+) -> uuid.UUID:
+    conversation_id = uuid7()
+
+    with test_session_factory() as session:
+        session.add(
+            ConversationModel(
+                id=conversation_id,
+                user_id=customer_identity.user_id,
+                status="open",
+                channel="web",
+                title="Dashboard LLM telemetry test",
+            )
+        )
+        session.commit()
+
+    return conversation_id
 
 def _create_llm_call(
     *,
     admin_client: TestClient,
+    customer_auth_headers: dict[str, str],
     conversation_id: uuid.UUID,
     trace_id: uuid.UUID,
     message: str = "Where is my order ORD-12345?",
@@ -29,6 +51,7 @@ def _create_llm_call(
     response = admin_client.post(
         f"/v1/conversations/{conversation_id}/messages",
         headers={
+            **customer_auth_headers,
             "X-Trace-ID": str(trace_id),
         },
         json={
@@ -36,7 +59,7 @@ def _create_llm_call(
         },
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
 
     return response.json()
 
@@ -46,11 +69,13 @@ class TestDashboardLLMCalls:
         self,
         admin_client: TestClient,
         seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
     ) -> None:
         trace_id = uuid7()
 
         message_result = _create_llm_call(
             admin_client=admin_client,
+            customer_auth_headers=customer_auth_headers,
             conversation_id=seeded_conversation,
             trace_id=trace_id,
         )
@@ -98,11 +123,13 @@ class TestDashboardLLMCalls:
         self,
         admin_client: TestClient,
         seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
     ) -> None:
         trace_id = uuid7()
 
         message_result = _create_llm_call(
             admin_client=admin_client,
+            customer_auth_headers=customer_auth_headers,
             conversation_id=seeded_conversation,
             trace_id=trace_id,
         )
@@ -133,11 +160,13 @@ class TestDashboardLLMCalls:
         self,
         admin_client: TestClient,
         seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
     ) -> None:
         trace_id = uuid7()
 
         _create_llm_call(
             admin_client=admin_client,
+            customer_auth_headers=customer_auth_headers,
             conversation_id=seeded_conversation,
             trace_id=trace_id,
         )
@@ -176,9 +205,11 @@ class TestDashboardLLMCalls:
         self,
         admin_client: TestClient,
         seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
     ) -> None:
         _create_llm_call(
             admin_client=admin_client,
+            customer_auth_headers=customer_auth_headers,
             conversation_id=seeded_conversation,
             trace_id=uuid7(),
         )
@@ -204,14 +235,17 @@ class TestDashboardLLMCalls:
         self,
         admin_client: TestClient,
         seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
     ) -> None:
         _create_llm_call(
             admin_client=admin_client,
+            customer_auth_headers=customer_auth_headers,
             conversation_id=seeded_conversation,
             trace_id=uuid7(),
         )
         _create_llm_call(
             admin_client=admin_client,
+            customer_auth_headers=customer_auth_headers,
             conversation_id=seeded_conversation,
             trace_id=uuid7(),
         )
@@ -284,6 +318,7 @@ class TestDashboardLLMCalls:
         self,
         admin_client: TestClient,
         seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
     ) -> None:
         secret_message = (
             "SECRET-LLM-INPUT-MUST-NOT-BE-RETURNED"
@@ -292,6 +327,7 @@ class TestDashboardLLMCalls:
 
         _create_llm_call(
             admin_client=admin_client,
+            customer_auth_headers=customer_auth_headers,
             conversation_id=seeded_conversation,
             trace_id=trace_id,
             message=secret_message,

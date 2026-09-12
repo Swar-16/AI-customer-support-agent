@@ -40,11 +40,16 @@ from packages.database.repositories.ai.retrieval_repository import RetrievalRepo
 from packages.ai.telemetry.reranker_recorder import RerankerTelemetryRecorder
 from packages.database.repositories.ai.reranker_call_repository import RerankerCallRepository
 from packages.database.repositories.ai.stage_event_repository import AIStageEventRepository
+from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
+from packages.application.conversations.query_conversations import ConversationQueryAccessDeniedError, ConversationRequesterDoesNotExistError
+from packages.application.conversations.query_conversations import ConversationRequesterNotActiveError, ConversationRequesterRoleMismatchError
+from packages.database.repositories.support.user_repository import UserRepository
 
 
 # Internal repository bundle
 @dataclass(frozen=True, slots=True)
 class _Repositories:
+    users: UserRepository
     conversations: ConversationRepository
     messages: MessageRepository
     escalations: EscalationRepository
@@ -82,16 +87,17 @@ class PersistenceContractError(ProcessCustomerMessageError):
 # Command / result contracts
 @dataclass(frozen=True, slots=True)
 class ProcessCustomerMessageCommand:
-    """
-    Input contract for processing one customer-authored message.
-    """
     conversation_id: uuid.UUID
     customer_message: str
+    principal: AuthenticatedPrincipal
     trace_id: uuid.UUID | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.conversation_id, uuid.UUID):
             raise TypeError("conversation_id must be UUID")
+
+        if not isinstance(self.principal, AuthenticatedPrincipal):
+            raise TypeError("principal must be an AuthenticatedPrincipal")
 
         if self.trace_id is not None and not isinstance(self.trace_id, uuid.UUID):
             raise TypeError("trace_id must be UUID or None")
@@ -224,12 +230,15 @@ class ProcessCustomerMessage:
         trace_id = command.trace_id if command.trace_id is not None else uuid7()
         with self._uow_factory() as uow:
             repositories = self._require_repositories(uow)
+            
+            self._validate_requester(principal=command.principal, repositories=repositories)
 
             # Load + validate conversation
             conversation = repositories.conversations.get_by_id(command.conversation_id)
             if conversation is None:
                 raise ConversationDoesNotExistError(command.conversation_id)
 
+            self._validate_conversation_ownership(conversation=conversation, principal=command.principal)
             self._validate_conversation_status(conversation.status)
 
             # Persist triggering customer message
@@ -239,7 +248,7 @@ class ProcessCustomerMessage:
                 role="customer",
                 content=normalized_message,
                 sequence_number=sequence_number,
-                metadata={},
+                metadata_={},
             )
 
             repositories.messages.add(customer_message)
@@ -488,7 +497,7 @@ class ProcessCustomerMessage:
             role="assistant",
             content=normalized_response,
             sequence_number=sequence_number,
-            metadata={},
+            metadata_={},
         )
 
         repositories.messages.add(assistant_message)
@@ -557,6 +566,27 @@ class ProcessCustomerMessage:
             raise CustomerMessageValidationError(f"customer_message exceeds {MAX_CUSTOMER_MESSAGE_LENGTH} characters")
 
         return normalized
+    
+    @staticmethod
+    def _validate_requester(*, principal: AuthenticatedPrincipal, repositories: _Repositories) -> None:
+        if principal.role is not AuthRole.CUSTOMER:
+            raise ConversationQueryAccessDeniedError("Only customers may submit customer messages")
+
+        requester = repositories.users.get_by_id(principal.user_id)
+        if requester is None:
+            raise ConversationRequesterDoesNotExistError(principal.user_id)
+
+        if requester.status != "active":
+            raise ConversationRequesterNotActiveError("Customer submitting the message is not active")
+
+        if requester.role != principal.role.value:
+            raise ConversationRequesterRoleMismatchError("Authenticated role does not match persisted role")
+
+    @staticmethod
+    def _validate_conversation_ownership(*, conversation: ConversationModel, principal: AuthenticatedPrincipal) -> None:
+        if conversation.user_id != principal.user_id:
+            # Deliberately conceal another customer's conversation.
+            raise ConversationDoesNotExistError(conversation.id)
 
     def _validate_conversation_status(self, status: str) -> None:
         if status not in self.PROCESSABLE_CONVERSATION_STATUSES:
@@ -577,6 +607,9 @@ class ProcessCustomerMessage:
         """
         if uow.session is None:
             raise PersistenceContractError("Active SQLAlchemy Session unavailable")
+        
+        if uow.users is None:
+            raise PersistenceContractError("UserRepository unavailable")
 
         if uow.conversations is None:
             raise PersistenceContractError("ConversationRepository unavailable")
@@ -615,6 +648,7 @@ class ProcessCustomerMessage:
             raise PersistenceContractError("AIDecisionRepository unavailable")
 
         return _Repositories(
+            users=uow.users,
             conversations=uow.conversations,
             messages=uow.messages,
             escalations=uow.escalations,
