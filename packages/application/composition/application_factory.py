@@ -17,6 +17,7 @@ from packages.application.conversations.close_conversation import CloseConversat
 from packages.config.settings import Settings
 from packages.database.session import SessionLocal
 from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
+from packages.database.unit_of_work.knowledge import SQLAlchemyKnowledgeUnitOfWork
 from packages.application.composition.knowledge_embedding_factory import create_knowledge_embedding_services
 from packages.knowledge.retrieval.context.models import GroundingContextBudget
 from packages.knowledge.retrieval.profiles import create_default_customer_support_profile
@@ -201,6 +202,14 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         """
         return SqlAlchemyUnitOfWork(session_factory=session_factory)
     
+    def knowledge_uow_factory() -> SQLAlchemyKnowledgeUnitOfWork:
+        """
+        Create a fresh knowledge-specific transactional boundary.
+
+        This UoW exposes documents, versions, chunks, embeddings, embedding_calls, and audit_events.
+        """
+        return SQLAlchemyKnowledgeUnitOfWork(session_factory=session_factory)
+    
     create_conversation = CreateConversation(uow_factory=uow_factory)
     list_conversations = ListConversations(uow_factory=uow_factory)
     get_conversation = GetConversation(uow_factory=uow_factory)
@@ -280,7 +289,7 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
     review_feedback = ReviewFeedback(uow_factory=uow_factory)
     
     knowledge_application = create_knowledge_application_components(
-        uow_factory=uow_factory,
+        uow_factory=knowledge_uow_factory,
         embedding_provider=embedding_services.provider,
         embedding_input_builder=embedding_input_builder,
         embedding_batch_size=settings.embedding_batch_size,
