@@ -7,8 +7,12 @@ from typing import Any
 from uuid import UUID
 from uuid6 import uuid7
 
+from packages.knowledge.application.exceptions import KnowledgeProcessingAccessDeniedError, KnowledgeProcessingDocumentDoesNotExistError
+from packages.knowledge.application.exceptions import KnowledgeProcessingDocumentNotActiveError, KnowledgeVersionNotFoundError
+from packages.knowledge.application.exceptions import KnowledgeVersionNotProcessableError, KnowledgeVersionProcessingConflictError
+from packages.knowledge.application.exceptions import KnowledgeProcessingContractError, KnowledgeProcessingPersistenceError
 from packages.knowledge.domain.chunk import KnowledgeChunk
-from packages.knowledge.domain.enums import KnowledgeIngestionStatus, KnowledgeSourceType, KnowledgeVersionStatus
+from packages.knowledge.domain.enums import KnowledgeDocumentStatus, KnowledgeIngestionStatus, KnowledgeSourceType, KnowledgeVersionStatus
 from packages.knowledge.domain.version import KnowledgeDocumentVersion
 from packages.knowledge.ingestion.chunking.base import DocumentChunkerResolver
 from packages.knowledge.ingestion.chunking.models import ChunkedDocument
@@ -16,48 +20,28 @@ from packages.knowledge.ingestion.models import IngestionSource, ParsedDocument
 from packages.knowledge.ingestion.normalization.base import DocumentNormalizerResolver
 from packages.knowledge.ingestion.normalization.models import NormalizedDocument
 from packages.knowledge.ingestion.parser.base import DocumentParserResolver
-from packages.knowledge.uow import KnowledgeUnitOfWork, KnowledgeUnitOfWorkFactory
+from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
 from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
 from packages.application.audit.recorder import AuditRecorder
-
-
-# Errors
-class ProcessKnowledgeVersionError(RuntimeError):
-    """
-    Base application-layer exception for ProcessKnowledgeVersion.
-
-    These errors represent use-case failures, not HTTP concerns and not persistence-provider-specific failures.
-    """
-
-class KnowledgeVersionNotFoundError(ProcessKnowledgeVersionError):
-    def __init__(self, version_id: UUID) -> None:
-        self.version_id = version_id
-        super().__init__(f"Knowledge version '{version_id}' does not exist.")
-
-class KnowledgeVersionNotProcessableError(ProcessKnowledgeVersionError):
-    def __init__(self, *, version_id: UUID, version_status: KnowledgeVersionStatus, ingestion_status: KnowledgeIngestionStatus) -> None:
-        self.version_id = version_id
-        self.version_status = version_status
-        self.ingestion_status = ingestion_status
-        super().__init__(
-            f"Knowledge version '{version_id}' cannot be processed while version_status='{version_status.value}' and ingestion_status='{ingestion_status.value}'."
-        )
-
-class KnowledgeVersionProcessingConflictError(ProcessKnowledgeVersionError):
-    """Raised when the version changed after it was claimed but before this processing attempt could complete."""
-
-class KnowledgeProcessingContractError(ProcessKnowledgeVersionError):
-    """Raised when parser/normalizer/chunker output violates cross-stage application invariants."""
-
-class KnowledgeProcessingPersistenceError(ProcessKnowledgeVersionError):
-    """Raised when persistence fails while completing or recording failure state."""
+from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
 
 # Command / result
 @dataclass(frozen=True, slots=True)
 class ProcessKnowledgeVersionCommand:
+    principal: AuthenticatedPrincipal
+    trace_id: UUID
     version_id: UUID
 
     def __post_init__(self) -> None:
+        if not isinstance(self.principal, AuthenticatedPrincipal):
+            raise TypeError("principal must be an AuthenticatedPrincipal.")
+
+        if self.principal.role is not AuthRole.ADMIN:
+            raise KnowledgeProcessingAccessDeniedError("Only administrators may process knowledge versions.")
+
+        if not isinstance(self.trace_id, UUID):
+            raise TypeError("trace_id must be a UUID.")
+
         if not isinstance(self.version_id, UUID):
             raise TypeError("version_id must be a UUID.")
 
@@ -120,6 +104,8 @@ class _ProcessingSnapshot:
     source_name: str | None
     source_uri: str | None
     metadata: Mapping[str, Any]
+    initiated_by_user_id: UUID
+    trace_id: UUID
 
 @dataclass(frozen=True, slots=True)
 class _ProcessingArtifacts:
@@ -173,8 +159,10 @@ class ProcessKnowledgeVersion:
         if not isinstance(command, ProcessKnowledgeVersionCommand):
             raise TypeError("command must be a ProcessKnowledgeVersionCommand.")
 
-        snapshot = self._claim_version(command.version_id)
+        if command.principal.role is not AuthRole.ADMIN:
+            raise KnowledgeProcessingAccessDeniedError("Only administrators may process knowledge versions.")
 
+        snapshot = self._claim_version(command)
         try:
             artifacts = self._process(snapshot)
             return self._complete(snapshot=snapshot, artifacts=artifacts)
@@ -184,43 +172,46 @@ class ProcessKnowledgeVersion:
             raise
 
     # Phase A: claim
-    def _claim_version(self, version_id: UUID) -> _ProcessingSnapshot:
+    def _claim_version(self, command: ProcessKnowledgeVersionCommand) -> _ProcessingSnapshot:
         """
-        Atomically claim a DRAFT/PENDING version for processing.
+        Claim a processable version in a short transaction.
 
-        PostgreSQL row locking prevents multiple workers from successfully claiming the same version.
+        The parent document is locked before the version, matching the lock ordering used by publication and archival.
         """
         with self._uow_factory() as uow:
-            version = uow.versions.get_by_id_for_update(version_id)
+            preliminary = uow.versions.get_by_id(command.version_id)
+            if preliminary is None:
+                raise KnowledgeVersionNotFoundError(command.version_id)
+
+            document = uow.documents.get_by_id_for_update(preliminary.document_id)
+            if document is None:
+                raise KnowledgeProcessingDocumentDoesNotExistError(preliminary.document_id)
+
+            if document.status is not KnowledgeDocumentStatus.ACTIVE:
+                raise KnowledgeProcessingDocumentNotActiveError(document_id=document.id, status=document.status)
+
+            version = uow.versions.get_by_id_for_update(command.version_id)
             if version is None:
-                raise KnowledgeVersionNotFoundError(version_id)
+                raise KnowledgeVersionNotFoundError(command.version_id)
+
+            if version.document_id != document.id:
+                raise KnowledgeVersionProcessingConflictError("Knowledge version no longer belongs to the locked document.")
 
             self._ensure_claimable(version)
             before_state = self._audit_state(version)
-            now = self._utc_now()
-            claimed = self._copy_version(
-                version,
-                status=KnowledgeVersionStatus.PROCESSING,
-                ingestion_status=KnowledgeIngestionStatus.RUNNING,
-                updated_at=now,
-                processing_started_at=now,
-                processing_completed_at=None,
-                ready_at=None,
-                failure_code=None,
-                failure_message=None,
-            )
-            
+            started_at = self._utc_now()
+            claimed = version.start_processing(occurred_at=started_at)
             uow.versions.save(claimed)
-            # Ensure state-transition constraints fail here rather than after the expensive ingestion work.
             uow.flush()
-            
+
             AuditRecorder(repository=uow.audit_events).record(
                 RecordAuditEventCommand(
                     event_type="knowledge_version.processing_started",
                     entity_type="knowledge_version",
                     entity_id=claimed.id,
                     action="processing_started",
-                    actor=AuditActor(actor_type=AuditActorType.SYSTEM),
+                    actor=AuditActor(actor_type=AuditActorType.ADMIN, actor_id=command.principal.user_id),
+                    trace_id=command.trace_id,
                     before_state=before_state,
                     after_state=self._audit_state(claimed),
                     metadata={
@@ -228,18 +219,20 @@ class ProcessKnowledgeVersion:
                         "version_number": claimed.version_number,
                         "source_type": claimed.source_type.value,
                     },
-                    occurred_at=now,
+                    occurred_at=started_at,
                 )
             )
 
-            snapshot = self._snapshot_from_version(claimed)
-            uow.commit()
+            snapshot = self._snapshot_from_version(claimed, initiated_by_user_id=command.principal.user_id, trace_id=command.trace_id)
 
+            uow.commit()
             return snapshot
 
     @staticmethod
     def _ensure_claimable(version: KnowledgeDocumentVersion) -> None:
-        if version.status is not KnowledgeVersionStatus.DRAFT or version.ingestion_status is not KnowledgeIngestionStatus.PENDING:
+        is_initial_attempt = version.status is KnowledgeVersionStatus.DRAFT and version.ingestion_status is KnowledgeIngestionStatus.PENDING
+        is_retry = version.status is KnowledgeVersionStatus.FAILED and version.ingestion_status is KnowledgeIngestionStatus.FAILED
+        if not is_initial_attempt and not is_retry:
             raise KnowledgeVersionNotProcessableError(
                 version_id=version.id,
                 version_status=version.status,
@@ -296,15 +289,8 @@ class ProcessKnowledgeVersion:
             uow.chunks.delete_for_version(snapshot.version_id)
             uow.chunks.add_many(persisted_chunks)
             completed_at = self._utc_now()
-            ready_version = self._copy_version(
-                version,
-                status=KnowledgeVersionStatus.READY,
-                ingestion_status=KnowledgeIngestionStatus.COMPLETED,
-                updated_at=completed_at,
-                processing_completed_at=completed_at,
-                ready_at=completed_at,
-                failure_code=None,
-                failure_message=None,
+            ready_version = version.mark_processing_completed(
+                occurred_at=completed_at
             )
 
             uow.versions.save(ready_version)
@@ -319,6 +305,7 @@ class ProcessKnowledgeVersion:
                     entity_id=ready_version.id,
                     action="processing_completed",
                     actor=AuditActor(actor_type=AuditActorType.SYSTEM),
+                    trace_id=snapshot.trace_id,
                     before_state=before_state,
                     after_state=self._audit_state(ready_version),
                     metadata={
@@ -328,6 +315,7 @@ class ProcessKnowledgeVersion:
                         "parser_identity": artifacts.parsed.parser_identity,
                         "normalizer_identity": artifacts.normalized.normalizer_identity,
                         "chunker_identity": artifacts.chunked.chunker_identity,
+                        "initiated_by_admin_id": str(snapshot.initiated_by_user_id),
                     },
                     occurred_at=completed_at,
                 )
@@ -379,15 +367,10 @@ class ProcessKnowledgeVersion:
 
             before_state = self._audit_state(version)
             completed_at = self._utc_now()
-            failed = self._copy_version(
-                version,
-                status=KnowledgeVersionStatus.FAILED,
-                ingestion_status=KnowledgeIngestionStatus.FAILED,
-                updated_at=completed_at,
-                processing_completed_at=completed_at,
-                ready_at=None,
+            failed = version.mark_processing_failed(
                 failure_code=failure_code,
                 failure_message=failure_message,
+                occurred_at=completed_at,
             )
 
             uow.versions.save(failed)
@@ -400,6 +383,7 @@ class ProcessKnowledgeVersion:
                     entity_id=failed.id,
                     action="processing_failed",
                     actor=AuditActor(actor_type=AuditActorType.SYSTEM),
+                    trace_id=snapshot.trace_id,
                     before_state=before_state,
                     after_state=self._audit_state(failed),
                     metadata={
@@ -407,6 +391,7 @@ class ProcessKnowledgeVersion:
                         "version_number": failed.version_number,
                         "failure_code": failure_code,
                         "exception_type": type(processing_error).__name__,
+                        "initiated_by_admin_id": str(snapshot.initiated_by_user_id),
                     },
                     occurred_at=completed_at,
                 )
@@ -550,7 +535,7 @@ class ProcessKnowledgeVersion:
             )
 
     @staticmethod
-    def _snapshot_from_version(version: KnowledgeDocumentVersion) -> _ProcessingSnapshot:
+    def _snapshot_from_version(version: KnowledgeDocumentVersion, *, initiated_by_user_id: UUID, trace_id: UUID) -> _ProcessingSnapshot:
         return _ProcessingSnapshot(
             version_id=version.id,
             document_id=version.document_id,
@@ -560,6 +545,8 @@ class ProcessKnowledgeVersion:
             source_name=version.source_name,
             source_uri=version.source_uri,
             metadata=dict(version.metadata),
+            initiated_by_user_id=initiated_by_user_id,
+            trace_id=trace_id,
         )
 
     @staticmethod
@@ -574,44 +561,6 @@ class ProcessKnowledgeVersion:
         )
 
         return metadata
-
-    # Domain version copying
-    @staticmethod
-    def _copy_version(version: KnowledgeDocumentVersion, *, status: KnowledgeVersionStatus, ingestion_status: KnowledgeIngestionStatus,
-                      updated_at: datetime, processing_started_at: datetime | None = None, processing_completed_at: datetime | None = None,
-                      ready_at: datetime | None = None, failure_code: str | None = None, failure_message: str | None = None
-    ) -> KnowledgeDocumentVersion:
-        """
-        Build a new domain entity containing the same immutable version
-        identity/source and updated lifecycle state.
-
-        This deliberately does not assume the domain entity is mutable.
-        It also aligns with update_version_model(), which persists only
-        lifecycle/mutable fields.
-        """
-        return KnowledgeDocumentVersion(
-            id=version.id,
-            document_id=version.document_id,
-            version_number=version.version_number,
-            source_type=version.source_type,
-            source_content=version.source_content,
-            content_hash=version.content_hash,
-            status=status,
-            ingestion_status=ingestion_status,
-            source_name=version.source_name,
-            source_uri=version.source_uri,
-            metadata=dict(version.metadata),
-            created_at=version.created_at,
-            updated_at=updated_at,
-            processing_started_at=(processing_started_at if processing_started_at is not None else version.processing_started_at),
-            processing_completed_at=processing_completed_at,
-            ready_at=ready_at,
-            published_at=version.published_at,
-            superseded_at=version.superseded_at,
-            archived_at=version.archived_at,
-            failure_code=failure_code,
-            failure_message=failure_message,
-        )
 
     # Safe failure persistence
     @staticmethod

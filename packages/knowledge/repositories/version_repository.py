@@ -2,9 +2,16 @@
 from __future__ import annotations
 from typing import Protocol
 from uuid import UUID
+from dataclasses import dataclass
 
 from packages.knowledge.domain.version import KnowledgeDocumentVersion
+from packages.knowledge.domain.enums import KnowledgeIngestionStatus, KnowledgeSourceType, KnowledgeVersionStatus
 
+@dataclass(frozen=True, slots=True)
+class KnowledgeVersionListFilter:
+    status: KnowledgeVersionStatus | None = None
+    ingestion_status: KnowledgeIngestionStatus | None = None
+    source_type: KnowledgeSourceType | None = None
 
 class KnowledgeVersionRepository(Protocol):
     """
@@ -59,4 +66,12 @@ class KnowledgeVersionRepository(Protocol):
 
         Only successfully ingested published versions are returned.
         """
+        ...
+
+    def list_page_for_document(self, document_id: UUID, *, filter_: KnowledgeVersionListFilter, limit: int, offset: int) -> list[KnowledgeDocumentVersion]:
+        """Return a filtered, paginated version history."""
+        ...
+
+    def count_for_document(self, document_id: UUID, *, filter_: KnowledgeVersionListFilter) -> int:
+        """Count versions matching the supplied document and filters."""
         ...

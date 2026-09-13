@@ -8,6 +8,7 @@ from packages.database.models.knowledge.document import KnowledgeDocumentModel
 from packages.database.models.knowledge.document_version import KnowledgeDocumentVersionModel
 from packages.database.repositories.knowledge.mappers import update_version_model, version_to_domain, version_to_model
 from packages.knowledge.domain.version import KnowledgeDocumentVersion
+from packages.knowledge.repositories.version_repository import KnowledgeVersionListFilter
 
 
 class SQLAlchemyKnowledgeVersionRepository:
@@ -136,3 +137,37 @@ class SQLAlchemyKnowledgeVersionRepository:
         models = self._session.scalars(statement).all()
 
         return [version_to_domain(model) for model in models]
+    
+    def list_page_for_document(self, document_id: UUID, *, filter_: KnowledgeVersionListFilter, limit: int, offset: int) -> list[KnowledgeDocumentVersion]:
+        statement = select(KnowledgeDocumentVersionModel).where(KnowledgeDocumentVersionModel.document_id == document_id)
+        statement = self._apply_list_filter(statement, filter_)
+        statement = (statement.order_by(KnowledgeDocumentVersionModel.version_number.desc(),
+                                        KnowledgeDocumentVersionModel.id.asc())
+                              .limit(limit)
+                              .offset(offset)
+        )
+
+        models = self._session.scalars(statement).all()
+        return [version_to_domain(model) for model in models]
+
+    def count_for_document(self, document_id: UUID, *, filter_: KnowledgeVersionListFilter) -> int:
+        statement = (select(func.count(KnowledgeDocumentVersionModel.id))
+                    .where(KnowledgeDocumentVersionModel.document_id == document_id)
+        )
+        
+        statement = self._apply_list_filter(statement, filter_)
+
+        return int(self._session.scalar(statement) or 0)
+    
+    @staticmethod
+    def _apply_list_filter(statement, filter_: KnowledgeVersionListFilter):
+        if filter_.status is not None:
+            statement = statement.where(KnowledgeDocumentVersionModel.status == filter_.status.value)
+
+        if filter_.ingestion_status is not None:
+            statement = statement.where(KnowledgeDocumentVersionModel.ingestion_status == filter_.ingestion_status.value)
+
+        if filter_.source_type is not None:
+            statement = statement.where(KnowledgeDocumentVersionModel.source_type == filter_.source_type.value)
+
+        return statement

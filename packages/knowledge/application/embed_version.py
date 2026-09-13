@@ -5,6 +5,8 @@ from typing import Sequence
 from uuid import UUID
 from uuid6 import uuid7
 
+from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
+from packages.knowledge.application.exceptions import EmbedKnowledgeVersionAccessDeniedError
 from packages.knowledge.domain.chunk import KnowledgeChunk
 from packages.knowledge.domain.embedding import KnowledgeChunkEmbedding
 from packages.knowledge.domain.enums import KnowledgeIngestionStatus, KnowledgeVersionStatus
@@ -25,19 +27,24 @@ from packages.knowledge.embeddings.provider.instrumented import EmbeddingCallCon
 @dataclass(frozen=True, slots=True)
 class EmbedKnowledgeVersionCommand:
     """
-    Request creation of embedding artifacts for one canonical knowledge document version.
+    Request embedding artifacts for one processed knowledge version.
 
-    The operation is intentionally idempotent:
-
-        same chunk
-        + same exact prepared input
-        + same input strategy
-        + same provider/model/revision
-        = same logical embedding artifact
+    Repeating the same operation with identical provider and input fingerprints remains idempotent.
     """
+    principal: AuthenticatedPrincipal
+    trace_id: UUID
     version_id: UUID
 
     def __post_init__(self) -> None:
+        if not isinstance(self.principal, AuthenticatedPrincipal):
+            raise TypeError("principal must be an AuthenticatedPrincipal.")
+
+        if self.principal.role is not AuthRole.ADMIN:
+            raise EmbedKnowledgeVersionAccessDeniedError("Only administrators may embed knowledge versions.")
+
+        if not isinstance(self.trace_id, UUID):
+            raise TypeError("trace_id must be a UUID.")
+
         if not isinstance(self.version_id, UUID):
             raise TypeError("version_id must be a UUID.")
 
@@ -186,6 +193,9 @@ class EmbedKnowledgeVersion:
     def execute(self, command: EmbedKnowledgeVersionCommand) -> EmbedKnowledgeVersionResult:
         if not isinstance(command, EmbedKnowledgeVersionCommand):
             raise TypeError("command must be an EmbedKnowledgeVersionCommand.")
+        
+        if command.principal.role is not AuthRole.ADMIN:
+            raise EmbedKnowledgeVersionAccessDeniedError("Only administrators may embed knowledge versions.")
 
         provider_descriptor = self._provider.descriptor
         input_descriptor = self._input_builder.descriptor
@@ -221,10 +231,12 @@ class EmbedKnowledgeVersion:
             recorder=self._embedding_telemetry_recorder,
             context=EmbeddingCallContext(
                 purpose="document_ingestion",
+                trace_id=command.trace_id,
                 knowledge_version_id=snapshot.version_id,
                 metadata={
                     "workflow": "knowledge_version_embedding",
                     "document_id": str(snapshot.document_id),
+                    "initiated_by_admin_id": str(command.principal.user_id),
                 },
             ),
         )
@@ -241,6 +253,8 @@ class EmbedKnowledgeVersion:
             generated=generated,
             provider_descriptor=provider_descriptor,
             input_descriptor=input_descriptor,
+            principal=command.principal,
+            trace_id=command.trace_id,
         )
 
         # Some artifacts may have appeared concurrently between our initial read and persistence re-check.
@@ -401,9 +415,21 @@ class EmbedKnowledgeVersion:
         return tuple(generated)
 
     # Phase B: persistence
-    def _persist_generated(self, *, version_id: UUID, generated: Sequence[KnowledgeChunkEmbedding],
-                           provider_descriptor: EmbeddingProviderDescriptor, input_descriptor: EmbeddingInputDescriptor
+    def _persist_generated(self, *, version_id: UUID, generated: Sequence[KnowledgeChunkEmbedding], provider_descriptor: EmbeddingProviderDescriptor,
+                           input_descriptor: EmbeddingInputDescriptor, principal: AuthenticatedPrincipal, trace_id: UUID
     ) -> int:
+        if not generated:
+            return 0
+        
+        if not isinstance(principal, AuthenticatedPrincipal):
+            raise TypeError("principal must be an AuthenticatedPrincipal.")
+
+        if principal.role is not AuthRole.ADMIN:
+            raise EmbedKnowledgeVersionAccessDeniedError("Only administrators may persist knowledge embeddings.")
+
+        if not isinstance(trace_id, UUID):
+            raise TypeError("trace_id must be a UUID.")
+
         if not generated:
             return 0
 
@@ -455,7 +481,8 @@ class EmbedKnowledgeVersion:
                         entity_type="knowledge_version",
                         entity_id=version.id,
                         action="embeddings_created",
-                        actor=AuditActor(actor_type=AuditActorType.SYSTEM),
+                        actor=AuditActor(actor_type=AuditActorType.ADMIN, actor_id=principal.user_id),
+                        trace_id=trace_id,
                         before_state=None,
                         after_state={
                             "created_count": created_count,

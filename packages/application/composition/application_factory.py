@@ -49,6 +49,17 @@ from packages.application.auth.register_user import RegisterUser
 from packages.application.auth.token_service import TokenService, TokenServiceConfig
 from packages.application.escalations.get_customer_escalation_status import GetCustomerEscalationStatus
 from packages.application.users.update_user_access import UpdateUserAccess
+from packages.application.composition.knowledge_application_factory import create_knowledge_application_components
+from packages.knowledge.application.archive_document import ArchiveKnowledgeDocument
+from packages.knowledge.application.create_document import CreateKnowledgeDocument
+from packages.knowledge.application.create_version import CreateKnowledgeVersion
+from packages.knowledge.application.embed_version import EmbedKnowledgeVersion
+from packages.knowledge.application.get_document import GetKnowledgeDocument
+from packages.knowledge.application.get_version import GetKnowledgeVersion
+from packages.knowledge.application.list_documents import ListKnowledgeDocuments
+from packages.knowledge.application.list_versions import ListKnowledgeVersions
+from packages.knowledge.application.process_version import ProcessKnowledgeVersion
+from packages.knowledge.application.publish_version import PublishKnowledgeVersion
 
 SessionFactory = sessionmaker[Session]
 ProviderFactory = Callable[..., LLMProvider]
@@ -118,6 +129,18 @@ class ApplicationServices:
     ai_pipeline_factory: AIPipelineFactory
     base_llm_provider: LLMProvider
     orchestration_observer: OrchestrationObserver
+    
+    list_knowledge_documents: ListKnowledgeDocuments
+    get_knowledge_document: GetKnowledgeDocument
+    list_knowledge_versions: ListKnowledgeVersions
+    get_knowledge_version: GetKnowledgeVersion
+
+    create_knowledge_document: CreateKnowledgeDocument
+    create_knowledge_version: CreateKnowledgeVersion
+    process_knowledge_version: ProcessKnowledgeVersion
+    embed_knowledge_version: EmbedKnowledgeVersion
+    publish_knowledge_version: PublishKnowledgeVersion
+    archive_knowledge_document: ArchiveKnowledgeDocument
 
 class ApplicationConfigurationError(RuntimeError):
     """
@@ -177,7 +200,7 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         No Session is opened until the UoW context manager is entered.
         """
         return SqlAlchemyUnitOfWork(session_factory=session_factory)
-
+    
     create_conversation = CreateConversation(uow_factory=uow_factory)
     list_conversations = ListConversations(uow_factory=uow_factory)
     get_conversation = GetConversation(uow_factory=uow_factory)
@@ -225,6 +248,7 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
     get_current_user = GetCurrentUser(uow_factory=uow_factory)
     update_user_access = UpdateUserAccess(uow_factory=uow_factory)
     record_api_request = RecordAPIRequest(uow_factory=uow_factory)
+    
     get_dashboard_overview = GetDashboardOverview(uow_factory=uow_factory)
     query_dashboard_traces = QueryDashboardTraces(uow_factory=uow_factory)
     get_dashboard_trace_detail = GetTraceDetail(uow_factory=uow_factory)
@@ -232,24 +256,35 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
     query_dashboard_retrieval_runs = QueryDashboardRetrievalRuns(uow_factory=uow_factory)
     query_dashboard_api_requests = QueryDashboardAPIRequests(uow_factory=uow_factory)
     query_dashboard_audit_events = QueryDashboardAuditEvents(uow_factory=uow_factory)
+    
     get_audit_event = GetAuditEvent(uow_factory=uow_factory)
     list_audit_events = ListAuditEvents(uow_factory=uow_factory)
     get_entity_audit_history = GetEntityAuditHistory(uow_factory=uow_factory)
     get_trace_audit_events = GetTraceAuditEvents(uow_factory=uow_factory)
+    
     get_escalation = GetEscalation(uow_factory=uow_factory)
     list_escalations = ListEscalations(uow_factory=uow_factory)
     list_conversation_escalations = ListConversationEscalations(uow_factory=uow_factory)
     get_customer_escalation_status = GetCustomerEscalationStatus(uow_factory=uow_factory)
     update_escalation = UpdateEscalation(uow_factory=uow_factory)
+    
     create_ticket = CreateTicket(uow_factory=uow_factory)
     add_ticket_comment = AddTicketComment(uow_factory=uow_factory)
     get_ticket = GetTicket(uow_factory=uow_factory)
     list_tickets = ListTickets(uow_factory=uow_factory)
     update_ticket = UpdateTicket(uow_factory=uow_factory)
+    
     submit_feedback = SubmitFeedback(uow_factory=uow_factory)
     get_feedback = GetFeedback(uow_factory=uow_factory)
     list_feedback = ListFeedback(uow_factory=uow_factory)
     review_feedback = ReviewFeedback(uow_factory=uow_factory)
+    
+    knowledge_application = create_knowledge_application_components(
+        uow_factory=uow_factory,
+        embedding_provider=embedding_services.provider,
+        embedding_input_builder=embedding_input_builder,
+        embedding_batch_size=settings.embedding_batch_size,
+    )
 
     return ApplicationServices(
         create_conversation=create_conversation,
@@ -294,6 +329,16 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         ai_pipeline_factory=pipeline_factory,
         base_llm_provider=resolved_provider,
         orchestration_observer=resolved_observer,
+        list_knowledge_documents=knowledge_application.list_documents,
+        get_knowledge_document=knowledge_application.get_document,
+        list_knowledge_versions=knowledge_application.list_versions,
+        get_knowledge_version=knowledge_application.get_version,
+        create_knowledge_document=knowledge_application.create_document,
+        create_knowledge_version=knowledge_application.create_version,
+        process_knowledge_version=knowledge_application.process_version,
+        embed_knowledge_version=knowledge_application.embed_version,
+        publish_knowledge_version=knowledge_application.publish_version,
+        archive_knowledge_document=knowledge_application.archive_document,
     )
 
 def _resolve_provider(*, settings: Settings, base_provider: LLMProvider | None) -> LLMProvider:
