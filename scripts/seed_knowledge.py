@@ -15,12 +15,9 @@ from packages.knowledge.application.publish_version import PublishKnowledgeVersi
 from packages.knowledge.domain.document import KnowledgeDocument
 from packages.knowledge.domain.enums import KnowledgeContentType, KnowledgeDocumentStatus, KnowledgeIngestionStatus, KnowledgeSourceType, KnowledgeVersionStatus, KnowledgeVisibility
 from packages.knowledge.domain.version import KnowledgeDocumentVersion
-from packages.knowledge.ingestion.parser.resolver import DefaultDocumentParserResolver
-from packages.knowledge.ingestion.normalization.resolver import DefaultDocumentNormalizerResolver
-from packages.knowledge.ingestion.chunking.resolver import DefaultDocumentChunkerResolver
-from packages.knowledge.ingestion.parser.markdown import MarkdownStructuralParser
-from packages.knowledge.ingestion.normalization.markdown import MarkdownNormalizer
-from packages.knowledge.ingestion.chunking.semantic_text import StructuralTextChunker
+from packages.application.composition.knowledge_ingestion_factory import KnowledgeIngestionComponents, create_knowledge_ingestion_components
+from packages.config.settings import get_settings
+from packages.knowledge.application.mutation_context import KnowledgeMutationContext
 
 # Paths / configuration
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -74,18 +71,15 @@ class SeedSummary:
 class KnowledgeBootstrapServices:
     processor: ProcessKnowledgeVersion
     publisher: PublishKnowledgeVersion
-    parser_resolver: DefaultDocumentParserResolver
-    normalizer_resolver: DefaultDocumentNormalizerResolver
-    chunker_resolver: DefaultDocumentChunkerResolver
-
+    ingestion: KnowledgeIngestionComponents
 
 # General helpers
 def normalize_source_content(content: str) -> str:
     """
-    Keep hashing consistent with the domain entity.
+    Apply the bootstrap script's canonical source representation.
 
-    KnowledgeDocumentVersion strips leading/trailing whitespace from source_content, so hashing 
-    the stripped representation prevents a trailing newline from creating a false content change.
+    Repository seed files are stripped before both hashing and storage,
+    ensuring trailing editor newlines do not create false revisions.
     """
     return content.strip()
 
@@ -169,7 +163,6 @@ def deterministic_document_id(seed_key: str) -> UUID:
     """
     return uuid5(KNOWLEDGE_SEED_NAMESPACE, seed_key) ## same UUID every time the seed script runs
 
-
 # Discovery
 def validate_knowledge_root() -> None:
     if not KNOWLEDGE_DATA_ROOT.exists():
@@ -209,32 +202,12 @@ def discover_knowledge_files() -> list[DiscoveredKnowledgeFile]:
 
     return discovered
 
-
 # Application composition
 def build_uow_factory():
     return lambda: SQLAlchemyKnowledgeUnitOfWork(SessionLocal)
 
-def build_process_version_service() -> ProcessKnowledgeVersion:
-    """
-    Bootstrap composition.
-
-    Later this should ideally be extracted into the application's knowledge composition module so the Admin API, workers, 
-    CLI and seed script all use exactly the same configured ingestion graph.
-    """
-    parser_resolver = DefaultDocumentParserResolver([MarkdownStructuralParser(),])
-    normalizer_resolver = DefaultDocumentNormalizerResolver([MarkdownNormalizer(),])
-    chunker_resolver = DefaultDocumentChunkerResolver([StructuralTextChunker(),])
-
-    return ProcessKnowledgeVersion(
-        uow_factory=build_uow_factory(),
-        parser_resolver=parser_resolver,
-        normalizer_resolver=normalizer_resolver,
-        chunker_resolver=chunker_resolver,
-    )
-
 def build_publish_version_service() -> PublishKnowledgeVersion:
     return PublishKnowledgeVersion(uow_factory=build_uow_factory())
-
 
 # Document/version preparation
 def create_document(*, item: DiscoveredKnowledgeFile, document_id: UUID) -> KnowledgeDocument:
@@ -252,7 +225,6 @@ def create_document(*, item: DiscoveredKnowledgeFile, document_id: UUID) -> Know
             "source_relative_path": item.relative_path.as_posix(),
         },
     )
-
 
 def create_version(*, document_id: UUID, version_number: int, content: str, content_hash: str, item: DiscoveredKnowledgeFile) -> KnowledgeDocumentVersion:
     return KnowledgeDocumentVersion(
@@ -421,12 +393,13 @@ def seed_one(item: DiscoveredKnowledgeFile, *, process_service: ProcessKnowledge
     if prepared.version_id is None:
         raise RuntimeError("Prepared knowledge version unexpectedly contains no version_id.")
 
+    context = KnowledgeMutationContext.for_system(trace_id=uuid7())
     process_result: ProcessKnowledgeVersionResult | None = None
     publish_result: PublishKnowledgeVersionResult | None = None
     if prepared.should_process:
         print(f"  [PROCESS] version={prepared.version_id}")
         
-        process_result = process_service.execute(ProcessKnowledgeVersionCommand(version_id=prepared.version_id))
+        process_result = process_service.execute(ProcessKnowledgeVersionCommand(context=context, version_id=prepared.version_id))
         summary.processed_versions += 1
         print(
             f"  [READY] chunks={process_result.chunk_count}, "
@@ -437,7 +410,7 @@ def seed_one(item: DiscoveredKnowledgeFile, *, process_service: ProcessKnowledge
 
     if prepared.should_publish:
         print(f"  [PUBLISH] version={prepared.version_id}")
-        publish_result = publish_service.execute(PublishKnowledgeVersionCommand(version_id=prepared.version_id))
+        publish_result = publish_service.execute(PublishKnowledgeVersionCommand(context=context, version_id=prepared.version_id))
         
         summary.published_versions += 1
         print(f"  [PUBLISHED] v{publish_result.version_number}")
@@ -446,51 +419,39 @@ def seed_one(item: DiscoveredKnowledgeFile, *, process_service: ProcessKnowledge
 
 # Preflight
 def preflight(*, services: KnowledgeBootstrapServices) -> None:
-    """
-    Fail before writing anything if the configured ingestion graph cannot handle Markdown.
-    """
-    for name, resolver in (
-        ("parser", services.parser_resolver),
-        ("normalizer", services.normalizer_resolver),
-        ("chunker", services.chunker_resolver),
-    ):
+    resolvers = (
+        ("parser", services.ingestion.parser_resolver),
+        ("normalizer", services.ingestion.normalizer_resolver),
+        ("chunker", services.ingestion.chunker_resolver),
+    )
+
+    for name, resolver in resolvers:
         if not resolver.supports(KnowledgeSourceType.MARKDOWN):
-            raise RuntimeError(f"Configured {name} resolver does not support markdown.")
+            raise RuntimeError(f"Configured {name} resolver does not support Markdown.")
         
 def build_services() -> KnowledgeBootstrapServices:
-    parser_resolver = DefaultDocumentParserResolver(
-        [MarkdownStructuralParser()]
-    )
-
-    normalizer_resolver = DefaultDocumentNormalizerResolver(
-        [MarkdownNormalizer()]
-    )
-
-    chunker_resolver = DefaultDocumentChunkerResolver(
-        [StructuralTextChunker()]
-    )
-
+    uow_factory = build_uow_factory()
+    ingestion = create_knowledge_ingestion_components()
     processor = ProcessKnowledgeVersion(
-        uow_factory=build_uow_factory(),
-        parser_resolver=parser_resolver,
-        normalizer_resolver=normalizer_resolver,
-        chunker_resolver=chunker_resolver,
+        uow_factory=uow_factory,
+        parser_resolver=ingestion.parser_resolver,
+        normalizer_resolver=ingestion.normalizer_resolver,
+        chunker_resolver=ingestion.chunker_resolver,
     )
-
-    publisher = PublishKnowledgeVersion(
-        uow_factory=build_uow_factory(),
-    )
+    publisher = PublishKnowledgeVersion(uow_factory=uow_factory)
 
     return KnowledgeBootstrapServices(
         processor=processor,
         publisher=publisher,
-        parser_resolver=parser_resolver,
-        normalizer_resolver=normalizer_resolver,
-        chunker_resolver=chunker_resolver,
+        ingestion=ingestion,
     )
             
 # Main
 def main() -> int:
+    settings = get_settings()
+    if settings.database_url.database != "support_ai":
+        raise RuntimeError(f"Knowledge bootstrap must target the 'support_ai' database; configured database is {settings.database_url.database!r}.")
+    
     print("=" * 72)
     print("Knowledge Bootstrap")
     print("=" * 72)
@@ -513,13 +474,8 @@ def main() -> int:
 
         except Exception as exc:
             summary.failed += 1
-            print(f"  [FAILED] {type(exc).__name__}: {exc}")
+            print(f"  [FAILED] {type(exc).__name__}: {exc}", file=sys.stderr)
             traceback.print_exc()
-            raise
-            # Continue with independent knowledge documents.
-
-            # A broken refund document should not prevent us from discovering whether shipping/payment/etc. 
-            # also contain ingestion problems.
             continue
 
     print()

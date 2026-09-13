@@ -7,10 +7,11 @@ from typing import Any
 from uuid import UUID
 from uuid6 import uuid7
 
-from packages.knowledge.application.exceptions import KnowledgeProcessingAccessDeniedError, KnowledgeProcessingDocumentDoesNotExistError
+from packages.knowledge.application.exceptions import KnowledgeProcessingDocumentDoesNotExistError
 from packages.knowledge.application.exceptions import KnowledgeProcessingDocumentNotActiveError, KnowledgeVersionNotFoundError
 from packages.knowledge.application.exceptions import KnowledgeVersionNotProcessableError, KnowledgeVersionProcessingConflictError
 from packages.knowledge.application.exceptions import KnowledgeProcessingContractError, KnowledgeProcessingPersistenceError
+from packages.knowledge.application.mutation_context import KnowledgeMutationContext
 from packages.knowledge.domain.chunk import KnowledgeChunk
 from packages.knowledge.domain.enums import KnowledgeDocumentStatus, KnowledgeIngestionStatus, KnowledgeSourceType, KnowledgeVersionStatus
 from packages.knowledge.domain.version import KnowledgeDocumentVersion
@@ -23,24 +24,16 @@ from packages.knowledge.ingestion.parser.base import DocumentParserResolver
 from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
 from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
 from packages.application.audit.recorder import AuditRecorder
-from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
 
 # Command / result
 @dataclass(frozen=True, slots=True)
 class ProcessKnowledgeVersionCommand:
-    principal: AuthenticatedPrincipal
-    trace_id: UUID
+    context: KnowledgeMutationContext
     version_id: UUID
 
     def __post_init__(self) -> None:
-        if not isinstance(self.principal, AuthenticatedPrincipal):
-            raise TypeError("principal must be an AuthenticatedPrincipal.")
-
-        if self.principal.role is not AuthRole.ADMIN:
-            raise KnowledgeProcessingAccessDeniedError("Only administrators may process knowledge versions.")
-
-        if not isinstance(self.trace_id, UUID):
-            raise TypeError("trace_id must be a UUID.")
+        if not isinstance(self.context, KnowledgeMutationContext):
+            raise TypeError("context must be a KnowledgeMutationContext.")
 
         if not isinstance(self.version_id, UUID):
             raise TypeError("version_id must be a UUID.")
@@ -104,7 +97,7 @@ class _ProcessingSnapshot:
     source_name: str | None
     source_uri: str | None
     metadata: Mapping[str, Any]
-    initiated_by_user_id: UUID
+    initiated_by_admin_id: UUID | None
     trace_id: UUID
 
 @dataclass(frozen=True, slots=True)
@@ -159,9 +152,6 @@ class ProcessKnowledgeVersion:
         if not isinstance(command, ProcessKnowledgeVersionCommand):
             raise TypeError("command must be a ProcessKnowledgeVersionCommand.")
 
-        if command.principal.role is not AuthRole.ADMIN:
-            raise KnowledgeProcessingAccessDeniedError("Only administrators may process knowledge versions.")
-
         snapshot = self._claim_version(command)
         try:
             artifacts = self._process(snapshot)
@@ -210,8 +200,8 @@ class ProcessKnowledgeVersion:
                     entity_type="knowledge_version",
                     entity_id=claimed.id,
                     action="processing_started",
-                    actor=AuditActor(actor_type=AuditActorType.ADMIN, actor_id=command.principal.user_id),
-                    trace_id=command.trace_id,
+                    actor=command.context.actor,
+                    trace_id=command.context.trace_id,
                     before_state=before_state,
                     after_state=self._audit_state(claimed),
                     metadata={
@@ -223,7 +213,7 @@ class ProcessKnowledgeVersion:
                 )
             )
 
-            snapshot = self._snapshot_from_version(claimed, initiated_by_user_id=command.principal.user_id, trace_id=command.trace_id)
+            snapshot = self._snapshot_from_version(claimed, initiated_by_admin_id=command.context.initiating_admin_id, trace_id=command.context.trace_id)
 
             uow.commit()
             return snapshot
@@ -315,7 +305,8 @@ class ProcessKnowledgeVersion:
                         "parser_identity": artifacts.parsed.parser_identity,
                         "normalizer_identity": artifacts.normalized.normalizer_identity,
                         "chunker_identity": artifacts.chunked.chunker_identity,
-                        "initiated_by_admin_id": str(snapshot.initiated_by_user_id),
+                        **({"initiated_by_admin_id": str(snapshot.initiated_by_admin_id)} 
+                           if snapshot.initiated_by_admin_id is not None else {}),
                     },
                     occurred_at=completed_at,
                 )
@@ -535,7 +526,7 @@ class ProcessKnowledgeVersion:
             )
 
     @staticmethod
-    def _snapshot_from_version(version: KnowledgeDocumentVersion, *, initiated_by_user_id: UUID, trace_id: UUID) -> _ProcessingSnapshot:
+    def _snapshot_from_version(version: KnowledgeDocumentVersion, *, initiated_by_admin_id: UUID | None, trace_id: UUID) -> _ProcessingSnapshot:
         return _ProcessingSnapshot(
             version_id=version.id,
             document_id=version.document_id,
@@ -545,7 +536,7 @@ class ProcessKnowledgeVersion:
             source_name=version.source_name,
             source_uri=version.source_uri,
             metadata=dict(version.metadata),
-            initiated_by_user_id=initiated_by_user_id,
+            initiated_by_admin_id=initiated_by_admin_id,
             trace_id=trace_id,
         )
 

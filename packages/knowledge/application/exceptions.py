@@ -4,20 +4,6 @@ from uuid import UUID
 
 from packages.knowledge.domain.enums import KnowledgeDocumentStatus, KnowledgeVersionStatus, KnowledgeIngestionStatus
 
-# Create Document
-class CreateKnowledgeDocumentError(RuntimeError):
-    """Base error for knowledge-document creation."""
-
-class KnowledgeDocumentCreationAccessDeniedError(CreateKnowledgeDocumentError):
-    """Raised when a non-administrator attempts document creation."""
-
-# List Document
-class ListKnowledgeDocumentsError(RuntimeError):
-    """Base error for knowledge-document listing."""
-
-class KnowledgeDocumentListAccessDeniedError(ListKnowledgeDocumentsError):
-    """Raised when the principal cannot list knowledge documents."""
-
 # Get Document
 class GetKnowledgeDocumentError(RuntimeError):
     """Base error for administrative document retrieval."""
@@ -26,9 +12,6 @@ class QueriedKnowledgeDocumentDoesNotExistError(GetKnowledgeDocumentError):
     def __init__(self, document_id: UUID) -> None:
         self.document_id = document_id
         super().__init__(f"Knowledge document does not exist: {document_id}")
-
-class KnowledgeDocumentReadAccessDeniedError(GetKnowledgeDocumentError):
-    """Raised when the principal cannot inspect knowledge documents."""
 
 # Archive Document
 class ArchiveKnowledgeDocumentError(RuntimeError):
@@ -39,21 +22,15 @@ class ArchiveKnowledgeDocumentDoesNotExistError(ArchiveKnowledgeDocumentError):
         self.document_id = document_id
         super().__init__(f"Knowledge document does not exist: {document_id}")
 
-class KnowledgeArchiveAccessDeniedError(ArchiveKnowledgeDocumentError):
-    """Raised when a non-administrator attempts archival."""
-
 class KnowledgeArchiveConflictError(ArchiveKnowledgeDocumentError):
     """Raised when persisted cross-entity state violates assumptions required for safe document archival."""
 
-# Create Version
+# Read Authorization
 class KnowledgeReadAccessDeniedError(RuntimeError):
     """Raised when a principal cannot inspect knowledge resources."""
-
-class CreateKnowledgeVersionError(RuntimeError):
-    """Base error for knowledge-version creation."""
-
-class KnowledgeVersionCreationAccessDeniedError(CreateKnowledgeVersionError):
-    """Raised when a non-administrator attempts version creation."""
+    
+class KnowledgeMutationAccessDeniedError(RuntimeError):
+    """Raised when a caller cannot initiate a KM mutation."""
 
 # Get Version
 class GetKnowledgeVersionError(RuntimeError):
@@ -78,9 +55,6 @@ class PublishKnowledgeDocumentDoesNotExistError(PublishKnowledgeVersionError):
         self.document_id = document_id
         super().__init__(f"Knowledge document does not exist: {document_id}")
 
-class KnowledgePublicationAccessDeniedError(PublishKnowledgeVersionError):
-    """Raised when a non-administrator attempts publication."""
-
 class KnowledgeDocumentNotPublishableError(PublishKnowledgeVersionError):
     def __init__(self, *, document_id: UUID, status: KnowledgeDocumentStatus) -> None:
         self.document_id = document_id
@@ -97,9 +71,6 @@ class ProcessKnowledgeVersionError(RuntimeError):
 
     These errors represent use-case failures, not HTTP concerns and not persistence-provider-specific failures.
     """
-
-class KnowledgeProcessingAccessDeniedError(ProcessKnowledgeVersionError):
-    """Raised when a non-administrator requests processing."""
 
 class KnowledgeProcessingDocumentDoesNotExistError(ProcessKnowledgeVersionError):
     def __init__(self, document_id: UUID) -> None:
@@ -134,7 +105,3 @@ class KnowledgeProcessingContractError(ProcessKnowledgeVersionError):
 
 class KnowledgeProcessingPersistenceError(ProcessKnowledgeVersionError):
     """Raised when persistence fails while completing or recording failure state."""
-
-# Embed Version
-class EmbedKnowledgeVersionAccessDeniedError(RuntimeError):
-    """Raised when a non-administrator requests embedding."""

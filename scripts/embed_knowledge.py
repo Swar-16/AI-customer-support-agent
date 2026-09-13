@@ -2,8 +2,8 @@
 from __future__ import annotations
 import argparse
 import sys
-import traceback
 from uuid import UUID
+from uuid6 import uuid7
 
 from packages.application.composition.knowledge_embedding_factory import create_knowledge_embedding_services
 from packages.config.settings import get_settings
@@ -11,7 +11,7 @@ from packages.database.session import create_session_factory
 from packages.database.unit_of_work.knowledge import SQLAlchemyKnowledgeUnitOfWork
 from packages.knowledge.application.embed_version import EmbedKnowledgeVersion, EmbedKnowledgeVersionCommand
 from packages.knowledge.embeddings.input.contextual import ContextualEmbeddingInputBuilder
-
+from packages.knowledge.application.mutation_context import KnowledgeMutationContext
 
 def parse_uuid(value: str) -> UUID:
     try:
@@ -26,7 +26,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version-id", type=parse_uuid, default=None,
                         help="Embed one specific version. If omitted, all eligible published versions are processed.")
 
-    parser.add_argument("--environment", choices=("development", "test"), default="development")
+    parser.add_argument("--environment", choices=("development", "production"), default="development",
+                        help="Configuration environment. The resolved database must be 'support_ai'.")
 
     return parser
 
@@ -34,6 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     settings = get_settings(args.environment)
+    database_name = settings.database_url.database
+
+    if database_name != "support_ai":
+        raise RuntimeError(f"Knowledge embedding backfill must target the 'support_ai' database; configured database is {database_name!r}.")
+    
     session_factory = create_session_factory(database_url=settings.database_url, echo=settings.database_echo)
 
     def uow_factory() -> SQLAlchemyKnowledgeUnitOfWork:
@@ -85,7 +91,8 @@ def main() -> int:
         print(f"[{index}/{len(version_ids)}] Version {version_id}")
 
         try:
-            result = service.execute(EmbedKnowledgeVersionCommand(version_id=version_id))
+            context = KnowledgeMutationContext.for_system(trace_id=uuid7())
+            result = service.execute(EmbedKnowledgeVersionCommand(context=context, version_id=version_id))
 
         except KeyboardInterrupt:
             print("\n[INTERRUPTED] Embedding backfill cancelled.", file=sys.stderr)
@@ -93,7 +100,7 @@ def main() -> int:
 
         except Exception as exc:
             failed += 1
-            print(f"  FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+            print(f"  FAILED: {type(exc).__name__}; trace_id={context.trace_id}", file=sys.stderr)
             # Continue with other independent versions.
             continue
 

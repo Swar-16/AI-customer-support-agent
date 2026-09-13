@@ -10,6 +10,7 @@ from apps.api.app.api.v1.feedback import router as feedback_router
 from apps.api.app.api.v1.dashboard import router as dashboard_router
 from apps.api.app.api.v1.auth import router as auth_router
 from apps.api.app.api.v1.users import router as user_router
+from apps.api.app.api.v1.knowledge import router as knowledge_router
 
 API_V1_PREFIX = "/v1"
 router = APIRouter(prefix=API_V1_PREFIX)
@@ -30,5 +31,6 @@ def register_v1_routes(api_router: APIRouter) -> None:
     api_router.include_router(feedback_router)
     api_router.include_router(dashboard_router)
     api_router.include_router(user_router)
+    api_router.include_router(knowledge_router)
 
 register_v1_routes(router)

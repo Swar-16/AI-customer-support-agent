@@ -7,10 +7,9 @@ from typing import Any, Mapping
 from uuid import UUID
 from uuid6 import uuid7
 
-from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
+from packages.application.audit.models import RecordAuditEventCommand
 from packages.application.audit.recorder import AuditRecorder
-from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
-from packages.knowledge.application.exceptions import KnowledgeVersionCreationAccessDeniedError
+from packages.knowledge.application.mutation_context import KnowledgeMutationContext
 from packages.knowledge.domain.enums import KnowledgeDocumentStatus, KnowledgeIngestionStatus, KnowledgeSourceType, KnowledgeVersionStatus
 from packages.knowledge.domain.errors import KnowledgeDocumentAlreadyArchivedError, KnowledgeDocumentDeletedError, KnowledgeDocumentNotFoundError
 from packages.knowledge.domain.version import KnowledgeDocumentVersion
@@ -18,8 +17,7 @@ from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
 
 @dataclass(frozen=True, slots=True)
 class CreateKnowledgeVersionCommand:
-    principal: AuthenticatedPrincipal
-    trace_id: UUID
+    context: KnowledgeMutationContext
     document_id: UUID
     source_type: KnowledgeSourceType
     source_content: str
@@ -28,14 +26,8 @@ class CreateKnowledgeVersionCommand:
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.principal, AuthenticatedPrincipal):
-            raise TypeError("principal must be an AuthenticatedPrincipal.")
-
-        if self.principal.role is not AuthRole.ADMIN:
-            raise KnowledgeVersionCreationAccessDeniedError("Only administrators may create knowledge versions.")
-
-        if not isinstance(self.trace_id, UUID):
-            raise TypeError("trace_id must be a UUID.")
+        if not isinstance(self.context, KnowledgeMutationContext):
+            raise TypeError("context must be a KnowledgeMutationContext.")
 
         if not isinstance(self.document_id, UUID):
             raise TypeError("document_id must be a UUID.")
@@ -45,6 +37,9 @@ class CreateKnowledgeVersionCommand:
 
         if not isinstance(self.source_content, str):
             raise TypeError("source_content must be a string.")
+
+        if not self.source_content.strip():
+            raise ValueError("source_content must contain non-whitespace text.")
 
         if self.source_name is not None and not isinstance(self.source_name, str):
             raise TypeError("source_name must be a string or None.")
@@ -86,9 +81,6 @@ class CreateKnowledgeVersion:
         if not isinstance(command, CreateKnowledgeVersionCommand):
             raise TypeError("command must be a CreateKnowledgeVersionCommand.")
 
-        if command.principal.role is not AuthRole.ADMIN:
-            raise KnowledgeVersionCreationAccessDeniedError("Only administrators may create knowledge versions.")
-
         with self._uow_factory() as uow:
             # Lock before checking lifecycle state. Archive and publication operations use the same parent-row lock.
             document = uow.documents.get_by_id_for_update(command.document_id)
@@ -127,8 +119,8 @@ class CreateKnowledgeVersion:
                     entity_type="knowledge_version",
                     entity_id=version.id,
                     action="created",
-                    actor=AuditActor(actor_type=AuditActorType.ADMIN, actor_id=command.principal.user_id),
-                    trace_id=command.trace_id,
+                    actor=command.context.actor,
+                    trace_id=command.context.trace_id,
                     before_state=None,
                     after_state={
                         "document_id": str(version.document_id),

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
-from packages.knowledge.application.exceptions import KnowledgeDocumentListAccessDeniedError
+from packages.knowledge.application.exceptions import KnowledgeReadAccessDeniedError
 from packages.knowledge.domain.document import KnowledgeDocument
 from packages.knowledge.domain.enums import KnowledgeContentType, KnowledgeDocumentStatus, KnowledgeVisibility
 from packages.knowledge.repositories.document_repository import KnowledgeDocumentListFilter
@@ -26,7 +26,7 @@ class ListKnowledgeDocumentsQuery:
             raise TypeError("principal must be an AuthenticatedPrincipal.")
 
         if self.principal.role is not AuthRole.ADMIN:
-            raise KnowledgeDocumentListAccessDeniedError("Only administrators may list knowledge documents.")
+            raise KnowledgeReadAccessDeniedError("Only administrators may list knowledge documents.")
 
         if self.status is not None and not isinstance(self.status, KnowledgeDocumentStatus):
             raise TypeError("status must be a KnowledgeDocumentStatus or None.")
@@ -104,7 +104,7 @@ class ListKnowledgeDocuments:
             raise TypeError("query must be a ListKnowledgeDocumentsQuery.")
 
         if query.principal.role is not AuthRole.ADMIN:
-            raise KnowledgeDocumentListAccessDeniedError("Only administrators may list knowledge documents.")
+            raise KnowledgeReadAccessDeniedError("Only administrators may list knowledge documents.")
 
         filter_ = KnowledgeDocumentListFilter(status=query.status, content_type=query.content_type, visibility=query.visibility)
 

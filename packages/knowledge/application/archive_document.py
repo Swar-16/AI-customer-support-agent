@@ -4,11 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
 
-from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
+from packages.application.audit.models import RecordAuditEventCommand
 from packages.application.audit.recorder import AuditRecorder
-from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
-from packages.knowledge.application.exceptions import ArchiveKnowledgeDocumentDoesNotExistError
-from packages.knowledge.application.exceptions import KnowledgeArchiveAccessDeniedError, KnowledgeArchiveConflictError
+from packages.knowledge.application.exceptions import ArchiveKnowledgeDocumentDoesNotExistError, KnowledgeArchiveConflictError
+from packages.knowledge.application.mutation_context import KnowledgeMutationContext
 from packages.knowledge.domain.document import KnowledgeDocument
 from packages.knowledge.domain.enums import KnowledgeDocumentStatus
 from packages.knowledge.domain.version import KnowledgeDocumentVersion
@@ -16,19 +15,12 @@ from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
 
 @dataclass(frozen=True, slots=True)
 class ArchiveKnowledgeDocumentCommand:
-    principal: AuthenticatedPrincipal
-    trace_id: UUID
+    context: KnowledgeMutationContext
     document_id: UUID
 
     def __post_init__(self) -> None:
-        if not isinstance(self.principal, AuthenticatedPrincipal):
-            raise TypeError("principal must be an AuthenticatedPrincipal.")
-
-        if self.principal.role is not AuthRole.ADMIN:
-            raise KnowledgeArchiveAccessDeniedError("Only administrators may archive knowledge documents.")
-
-        if not isinstance(self.trace_id, UUID):
-            raise TypeError("trace_id must be a UUID.")
+        if not isinstance(self.context, KnowledgeMutationContext):
+            raise TypeError("context must be a KnowledgeMutationContext.")
 
         if not isinstance(self.document_id, UUID):
             raise TypeError("document_id must be a UUID.")
@@ -56,9 +48,6 @@ class ArchiveKnowledgeDocument:
     def execute(self, command: ArchiveKnowledgeDocumentCommand) -> ArchiveKnowledgeDocumentResult:
         if not isinstance(command, ArchiveKnowledgeDocumentCommand):
             raise TypeError("command must be an ArchiveKnowledgeDocumentCommand.")
-
-        if command.principal.role is not AuthRole.ADMIN:
-            raise KnowledgeArchiveAccessDeniedError("Only administrators may archive knowledge documents.")
 
         with self._uow_factory() as uow:
             # Publication and version creation lock the same parent row, serializing all aggregate lifecycle mutations.
@@ -99,8 +88,8 @@ class ArchiveKnowledgeDocument:
                     entity_type="knowledge_document",
                     entity_id=archived.id,
                     action="archived",
-                    actor=AuditActor(actor_type=AuditActorType.ADMIN, actor_id=command.principal.user_id),
-                    trace_id=command.trace_id,
+                    actor=command.context.actor,
+                    trace_id=command.context.trace_id,
                     before_state=before_state,
                     after_state={
                         "status": archived.status.value,

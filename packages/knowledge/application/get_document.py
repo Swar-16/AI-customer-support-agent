@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
-from packages.knowledge.application.exceptions import QueriedKnowledgeDocumentDoesNotExistError, KnowledgeDocumentReadAccessDeniedError
+from packages.knowledge.application.exceptions import QueriedKnowledgeDocumentDoesNotExistError, KnowledgeReadAccessDeniedError
 from packages.knowledge.domain.document import KnowledgeDocument
 from packages.knowledge.repositories.version_repository import KnowledgeVersionListFilter
 from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
@@ -19,7 +19,7 @@ class GetKnowledgeDocumentQuery:
             raise TypeError("principal must be an AuthenticatedPrincipal.")
 
         if self.principal.role is not AuthRole.ADMIN:
-            raise KnowledgeDocumentReadAccessDeniedError("Only administrators may inspect knowledge documents.")
+            raise KnowledgeReadAccessDeniedError("Only administrators may inspect knowledge documents.")
 
         if not isinstance(self.document_id, UUID):
             raise TypeError("document_id must be a UUID.")
@@ -61,7 +61,7 @@ class GetKnowledgeDocument:
             raise TypeError("query must be a GetKnowledgeDocumentQuery.")
 
         if query.principal.role is not AuthRole.ADMIN:
-            raise KnowledgeDocumentReadAccessDeniedError("Only administrators may inspect knowledge documents.")
+            raise KnowledgeReadAccessDeniedError("Only administrators may inspect knowledge documents.")
 
         with self._uow_factory() as uow:
             document = uow.documents.get_by_id(query.document_id)

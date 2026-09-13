@@ -60,6 +60,20 @@ from packages.application.conversations.close_conversation import ConversationCl
 from packages.application.users.update_user_access import AccessManagerDoesNotExistError, AccessManagerNotActiveError, AccessManagerRoleMismatchError
 from packages.application.users.update_user_access import AdministratorSelfMutationError, DeletedUserAccessMutationError, FinalActiveAdministratorError
 from packages.application.users.update_user_access import ManagedUserDoesNotExistError, ProtectedSystemUserError, UserAccessDeniedError, UserAccessPersistenceContractError
+from packages.knowledge.application.exceptions import ArchiveKnowledgeDocumentDoesNotExistError, KnowledgeArchiveConflictError, KnowledgeDocumentNotPublishableError
+from packages.knowledge.application.exceptions import KnowledgeMutationAccessDeniedError, KnowledgeProcessingContractError, KnowledgeProcessingDocumentDoesNotExistError
+from packages.knowledge.application.exceptions import KnowledgeProcessingDocumentNotActiveError, KnowledgeProcessingPersistenceError, KnowledgePublicationConflictError
+from packages.knowledge.application.exceptions import KnowledgeReadAccessDeniedError, KnowledgeVersionNotFoundError as ProcessedKnowledgeVersionNotFoundError
+from packages.knowledge.application.exceptions import KnowledgeVersionNotProcessableError, KnowledgeVersionProcessingConflictError, PublishKnowledgeDocumentDoesNotExistError
+from packages.knowledge.application.exceptions import PublishKnowledgeVersionDoesNotExistError, QueriedKnowledgeDocumentDoesNotExistError, QueriedKnowledgeVersionDoesNotExistError
+from packages.knowledge.domain.errors import InvalidKnowledgeDocumentError, InvalidKnowledgeVersionError, InvalidKnowledgeVersionNumberError,KnowledgeDocumentAlreadyArchivedError
+from packages.knowledge.domain.errors import KnowledgeDocumentDeletedError, KnowledgeDocumentNotFoundError, KnowledgeDocumentTitleError, KnowledgeStateTransitionError
+from packages.knowledge.domain.errors import KnowledgeVersionAlreadyPublishedError, KnowledgeVersionConflictError, KnowledgeVersionContentError, KnowledgeVersionHasNoChunksError
+from packages.knowledge.domain.errors import KnowledgeVersionNotFoundError as DomainKnowledgeVersionNotFoundError, KnowledgeVersionNotReadyError, KnowledgeVersionProcessingFailedError
+from packages.knowledge.domain.errors import PublishedVersionConflictError
+from packages.knowledge.embeddings.errors import EmbeddingArtifactConflictError, EmbeddingBatchConfigurationError, EmbeddingProviderIdentityMismatchError
+from packages.knowledge.embeddings.errors import EmbeddingResponseCardinalityError, EmbeddingResponseOrderingError, EmbeddingVersionError
+from packages.knowledge.embeddings.errors import EmbeddingVersionHasNoChunksError, EmbeddingVersionNotFoundError, EmbeddingVersionNotReadyError
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +110,10 @@ ERROR_PASSWORD_POLICY_VIOLATION = "PASSWORD_POLICY_VIOLATION"
 ERROR_INVALID_CREDENTIALS = "INVALID_CREDENTIALS"
 ERROR_INVALID_REFRESH_TOKEN = "INVALID_REFRESH_TOKEN"
 ERROR_UNAUTHENTICATED = "UNAUTHENTICATED"
+ERROR_KNOWLEDGE_NOT_FOUND = "KNOWLEDGE_NOT_FOUND"
+ERROR_KNOWLEDGE_ACCESS_DENIED = "KNOWLEDGE_ACCESS_DENIED"
+ERROR_INVALID_KNOWLEDGE_OPERATION = "INVALID_KNOWLEDGE_OPERATION"
+ERROR_KNOWLEDGE_CONFLICT = "KNOWLEDGE_CONFLICT"
 
 # Registration
 def register_exception_handlers(app: FastAPI) -> None:
@@ -239,6 +257,41 @@ def register_exception_handlers(app: FastAPI) -> None:
         AccessAuthenticationConfigurationError, AccessAuthenticationPersistenceError,
     ):
         app.add_exception_handler(exception_type, authentication_internal_error_handler)
+        
+    # Knowledge Management errors
+    for exception_type in (
+        QueriedKnowledgeDocumentDoesNotExistError, QueriedKnowledgeVersionDoesNotExistError, ArchiveKnowledgeDocumentDoesNotExistError,
+        PublishKnowledgeDocumentDoesNotExistError, PublishKnowledgeVersionDoesNotExistError, KnowledgeProcessingDocumentDoesNotExistError,
+        ProcessedKnowledgeVersionNotFoundError, KnowledgeDocumentNotFoundError, DomainKnowledgeVersionNotFoundError, EmbeddingVersionNotFoundError,
+    ):
+        app.add_exception_handler(exception_type, knowledge_not_found_handler)
+
+    for exception_type in (KnowledgeReadAccessDeniedError, KnowledgeMutationAccessDeniedError):
+        app.add_exception_handler(exception_type, knowledge_access_denied_handler)
+
+    for exception_type in (
+        KnowledgeDocumentAlreadyArchivedError, KnowledgeDocumentDeletedError, KnowledgeVersionConflictError, KnowledgeStateTransitionError,
+        KnowledgeVersionNotReadyError, KnowledgeVersionAlreadyPublishedError, PublishedVersionConflictError, KnowledgeVersionHasNoChunksError,
+        KnowledgeVersionProcessingFailedError, KnowledgeArchiveConflictError, KnowledgeDocumentNotPublishableError, KnowledgePublicationConflictError,
+        KnowledgeProcessingDocumentNotActiveError, KnowledgeVersionNotProcessableError, KnowledgeVersionProcessingConflictError,
+        EmbeddingVersionNotReadyError, EmbeddingVersionHasNoChunksError
+    ):
+        app.add_exception_handler(exception_type, knowledge_conflict_handler)
+
+    for exception_type in (
+        KnowledgeDocumentTitleError, InvalidKnowledgeDocumentError, InvalidKnowledgeVersionNumberError, 
+        KnowledgeVersionContentError, InvalidKnowledgeVersionError,
+    ):
+        app.add_exception_handler(exception_type, invalid_knowledge_operation_handler)
+
+    for exception_type in (
+        KnowledgeProcessingContractError, KnowledgeProcessingPersistenceError, EmbeddingArtifactConflictError, EmbeddingBatchConfigurationError,
+        EmbeddingProviderIdentityMismatchError, EmbeddingResponseCardinalityError, EmbeddingResponseOrderingError, EmbeddingVersionError,
+    ):
+        app.add_exception_handler(
+            exception_type,
+            knowledge_internal_error_handler,
+        )
 
     # Must remain last conceptually: this is the safety net for unexpected failures.
     app.add_exception_handler(Exception, unhandled_exception_handler)
@@ -1060,3 +1113,99 @@ def _resolve_trace_id(request: Request) -> uuid.UUID:
     trace_id = uuid7()
     request.state.trace_id = trace_id
     return trace_id
+
+async def knowledge_not_found_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "knowledge_resource_not_found",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_404_NOT_FOUND,
+        code=ERROR_KNOWLEDGE_NOT_FOUND,
+        message="The requested knowledge resource does not exist.",
+        trace_id=trace_id,
+    )
+
+async def knowledge_access_denied_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.warning(
+        "knowledge_access_denied",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_403_FORBIDDEN,
+        code=ERROR_KNOWLEDGE_ACCESS_DENIED,
+        message="You are not permitted to perform this knowledge operation.",
+        trace_id=trace_id,
+    )
+
+async def invalid_knowledge_operation_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "invalid_knowledge_operation",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        code=ERROR_INVALID_KNOWLEDGE_OPERATION,
+        message="The supplied knowledge data is invalid.",
+        trace_id=trace_id,
+    )
+
+async def knowledge_conflict_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "knowledge_lifecycle_conflict",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_409_CONFLICT,
+        code=ERROR_KNOWLEDGE_CONFLICT,
+        message="The requested operation conflicts with the current knowledge-resource state.",
+        trace_id=trace_id,
+    )
+
+async def knowledge_internal_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.exception(
+        "knowledge_internal_failure",
+        exc_info=exc,
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        code=ERROR_INTERNAL,
+        message="An unexpected internal error occurred.",
+        trace_id=trace_id,
+    )

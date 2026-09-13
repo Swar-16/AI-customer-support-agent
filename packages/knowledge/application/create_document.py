@@ -6,18 +6,16 @@ from typing import Any, Mapping
 from uuid import UUID
 from uuid6 import uuid7
 
-from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
+from packages.application.audit.models import RecordAuditEventCommand
 from packages.application.audit.recorder import AuditRecorder
-from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
-from packages.knowledge.application.exceptions import KnowledgeDocumentCreationAccessDeniedError
+from packages.knowledge.application.mutation_context import KnowledgeMutationContext
 from packages.knowledge.domain.document import KnowledgeDocument
 from packages.knowledge.domain.enums import KnowledgeContentType, KnowledgeDocumentStatus, KnowledgeVisibility
 from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
 
 @dataclass(frozen=True, slots=True)
 class CreateKnowledgeDocumentCommand:
-    principal: AuthenticatedPrincipal
-    trace_id: UUID
+    context: KnowledgeMutationContext
     title: str
     content_type: KnowledgeContentType
     visibility: KnowledgeVisibility
@@ -25,15 +23,9 @@ class CreateKnowledgeDocumentCommand:
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.principal, AuthenticatedPrincipal):
-            raise TypeError("principal must be an AuthenticatedPrincipal.")
-
-        if self.principal.role is not AuthRole.ADMIN:
-            raise KnowledgeDocumentCreationAccessDeniedError("Only administrators may create knowledge documents.")
-
-        if not isinstance(self.trace_id, UUID):
-            raise TypeError("trace_id must be a UUID.")
-
+        if not isinstance(self.context, KnowledgeMutationContext):
+            raise TypeError("context must be a KnowledgeMutationContext.")
+        
         if not isinstance(self.content_type, KnowledgeContentType):
             raise TypeError("content_type must be a KnowledgeContentType.")
 
@@ -72,10 +64,6 @@ class CreateKnowledgeDocument:
         if not isinstance(command, CreateKnowledgeDocumentCommand):
             raise TypeError("command must be a CreateKnowledgeDocumentCommand.")
 
-        # Retain application-layer authorization even though the API endpoint will also use AdminPrincipalDependency.
-        if command.principal.role is not AuthRole.ADMIN:
-            raise KnowledgeDocumentCreationAccessDeniedError("Only administrators may create knowledge documents.")
-
         occurred_at = datetime.now(timezone.utc)
         document = KnowledgeDocument(
             id=uuid7(),
@@ -98,8 +86,8 @@ class CreateKnowledgeDocument:
                     entity_type="knowledge_document",
                     entity_id=document.id,
                     action="created",
-                    actor=AuditActor(actor_type=AuditActorType.ADMIN, actor_id=command.principal.user_id),
-                    trace_id=command.trace_id,
+                    actor=command.context.actor,
+                    trace_id=command.context.trace_id,
                     before_state=None,
                     after_state={
                         "title": document.title,

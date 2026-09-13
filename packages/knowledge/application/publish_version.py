@@ -4,12 +4,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
 
-from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
+from packages.application.audit.models import RecordAuditEventCommand
 from packages.application.audit.recorder import AuditRecorder
-from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
-from packages.knowledge.application.exceptions import PublishKnowledgeVersionDoesNotExistError, PublishKnowledgeDocumentDoesNotExistError
-from packages.knowledge.application.exceptions import KnowledgePublicationAccessDeniedError, KnowledgePublicationAccessDeniedError
 from packages.knowledge.application.exceptions import KnowledgeDocumentNotPublishableError, KnowledgePublicationConflictError
+from packages.knowledge.application.exceptions import PublishKnowledgeDocumentDoesNotExistError, PublishKnowledgeVersionDoesNotExistError
+from packages.knowledge.application.mutation_context import KnowledgeMutationContext
 from packages.knowledge.domain.enums import KnowledgeDocumentStatus, KnowledgeVersionStatus
 from packages.knowledge.domain.errors import KnowledgeVersionHasNoChunksError
 from packages.knowledge.domain.version import KnowledgeDocumentVersion
@@ -17,19 +16,12 @@ from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
 
 @dataclass(frozen=True, slots=True)
 class PublishKnowledgeVersionCommand:
-    principal: AuthenticatedPrincipal
-    trace_id: UUID
+    context: KnowledgeMutationContext
     version_id: UUID
 
     def __post_init__(self) -> None:
-        if not isinstance(self.principal, AuthenticatedPrincipal):
-            raise TypeError("principal must be an AuthenticatedPrincipal.")
-
-        if self.principal.role is not AuthRole.ADMIN:
-            raise KnowledgePublicationAccessDeniedError("Only administrators may publish knowledge versions.")
-
-        if not isinstance(self.trace_id, UUID):
-            raise TypeError("trace_id must be a UUID.")
+        if not isinstance(self.context, KnowledgeMutationContext):
+            raise TypeError("context must be a KnowledgeMutationContext.")
 
         if not isinstance(self.version_id, UUID):
             raise TypeError("version_id must be a UUID.")
@@ -47,8 +39,9 @@ class PublishKnowledgeVersion:
     """
     Atomically publish one ready knowledge version.
 
-    The parent document lock serializes publication, archival and version creation for the same logical document.
-    Any existing publication is superseded before the target is published.
+    The parent document lock serializes publication, archival, and version creation for the same logical document.
+
+    Any currently published version is superseded before the target version is published.
     """
     def __init__(self, *, uow_factory: KnowledgeUnitOfWorkFactory) -> None:
         if not callable(uow_factory):
@@ -60,11 +53,8 @@ class PublishKnowledgeVersion:
         if not isinstance(command, PublishKnowledgeVersionCommand):
             raise TypeError("command must be a PublishKnowledgeVersionCommand.")
 
-        if command.principal.role is not AuthRole.ADMIN:
-            raise KnowledgePublicationAccessDeniedError("Only administrators may publish knowledge versions.")
-
         with self._uow_factory() as uow:
-            # Preliminary read is used only to discover the parent ID.
+            # This preliminary read discovers the parent document ID. The target is reloaded under a lock after the parent is locked.
             preliminary_target = uow.versions.get_by_id(command.version_id)
             if preliminary_target is None:
                 raise PublishKnowledgeVersionDoesNotExistError(command.version_id)
@@ -76,7 +66,7 @@ class PublishKnowledgeVersion:
             if document.status is not KnowledgeDocumentStatus.ACTIVE:
                 raise KnowledgeDocumentNotPublishableError(document_id=document.id, status=document.status)
 
-            # Reload and lock the target after acquiring the aggregate lock.
+            # Lock and reload the target after locking its parent aggregate.
             target = uow.versions.get_by_id_for_update(command.version_id)
             if target is None:
                 raise PublishKnowledgeVersionDoesNotExistError(command.version_id)
@@ -88,7 +78,7 @@ class PublishKnowledgeVersion:
             if current_published is not None and current_published.id == target.id:
                 raise KnowledgePublicationConflictError("Target version is already the published version for this document.")
 
-            # A ready version without derived chunks is not usable by either lexical or vector retrieval.
+            # A version without chunks cannot participate in lexical or vector retrieval.
             chunks = uow.chunks.list_for_version(target.id)
             if not chunks:
                 raise KnowledgeVersionHasNoChunksError(target.id)
@@ -107,7 +97,8 @@ class PublishKnowledgeVersion:
                 superseded = current_published.supersede(occurred_at=occurred_at)
                 uow.versions.save(superseded)
 
-                # PostgreSQL checks the partial unique index during statement execution, so materialize supersession first.
+                # Materialize supersession before publishing the target.
+                # PostgreSQL checks the partial unique index during statement execution.
                 uow.flush()
                 superseded_version_id = superseded.id
 
@@ -125,8 +116,8 @@ class PublishKnowledgeVersion:
                     entity_type="knowledge_version",
                     entity_id=published.id,
                     action="published",
-                    actor=AuditActor(actor_type=AuditActorType.ADMIN, actor_id=command.principal.user_id),
-                    trace_id=command.trace_id,
+                    actor=command.context.actor,
+                    trace_id=command.context.trace_id,
                     before_state=before_state,
                     after_state={
                         "status": published.status.value,
