@@ -74,6 +74,12 @@ class KnowledgeDocumentVersionModel(Base):
             "document_id",
         ),
         Index(
+            "ix_knowledge_document_versions_document_content_hash",
+            "document_id",
+            "source_type",
+            "content_hash",
+        ),
+        Index(
             "ix_knowledge_document_versions_status",
             "status",
         ),

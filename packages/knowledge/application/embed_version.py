@@ -5,6 +5,7 @@ from typing import Sequence
 from uuid import UUID
 from uuid6 import uuid7
 
+from packages.knowledge.application.mutation_context import KnowledgeMutationContext
 from packages.knowledge.domain.chunk import KnowledgeChunk
 from packages.knowledge.domain.embedding import KnowledgeChunkEmbedding
 from packages.knowledge.domain.enums import KnowledgeIngestionStatus, KnowledgeVersionStatus
@@ -15,7 +16,7 @@ from packages.knowledge.embeddings.models import EmbeddingInputDescriptor, Embed
 from packages.knowledge.embeddings import EmbeddingInputBuilder, EmbeddingProvider
 from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
 from packages.knowledge.embeddings import EmbeddingSourceChunk
-from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
+from packages.application.audit.models import RecordAuditEventCommand
 from packages.application.audit.recorder import AuditRecorder
 from packages.ai.telemetry.embedding_recorder import EmbeddingTelemetryRecorder
 from packages.knowledge.embeddings.provider.instrumented import EmbeddingCallContext, InstrumentedEmbeddingProvider
@@ -25,19 +26,17 @@ from packages.knowledge.embeddings.provider.instrumented import EmbeddingCallCon
 @dataclass(frozen=True, slots=True)
 class EmbedKnowledgeVersionCommand:
     """
-    Request creation of embedding artifacts for one canonical knowledge document version.
+    Request embedding artifacts for one processed knowledge version.
 
-    The operation is intentionally idempotent:
-
-        same chunk
-        + same exact prepared input
-        + same input strategy
-        + same provider/model/revision
-        = same logical embedding artifact
+    Repeating the same operation with identical provider and input fingerprints remains idempotent.
     """
+    context: KnowledgeMutationContext
     version_id: UUID
 
     def __post_init__(self) -> None:
+        if not isinstance(self.context, KnowledgeMutationContext):
+            raise TypeError("context must be a KnowledgeMutationContext.")
+
         if not isinstance(self.version_id, UUID):
             raise TypeError("version_id must be a UUID.")
 
@@ -221,10 +220,14 @@ class EmbedKnowledgeVersion:
             recorder=self._embedding_telemetry_recorder,
             context=EmbeddingCallContext(
                 purpose="document_ingestion",
+                trace_id=command.context.trace_id,
                 knowledge_version_id=snapshot.version_id,
                 metadata={
                     "workflow": "knowledge_version_embedding",
                     "document_id": str(snapshot.document_id),
+                    **({"initiated_by_admin_id": str(command.context.initiating_admin_id)}
+                        if command.context.initiating_admin_id is not None else {}
+                    ),
                 },
             ),
         )
@@ -241,6 +244,7 @@ class EmbedKnowledgeVersion:
             generated=generated,
             provider_descriptor=provider_descriptor,
             input_descriptor=input_descriptor,
+            context=command.context,
         )
 
         # Some artifacts may have appeared concurrently between our initial read and persistence re-check.
@@ -401,23 +405,24 @@ class EmbedKnowledgeVersion:
         return tuple(generated)
 
     # Phase B: persistence
-    def _persist_generated(self, *, version_id: UUID, generated: Sequence[KnowledgeChunkEmbedding],
-                           provider_descriptor: EmbeddingProviderDescriptor, input_descriptor: EmbeddingInputDescriptor
+    def _persist_generated(self, *, version_id: UUID, generated: Sequence[KnowledgeChunkEmbedding], provider_descriptor: EmbeddingProviderDescriptor,
+                           input_descriptor: EmbeddingInputDescriptor, context: KnowledgeMutationContext,
     ) -> int:
+        if not isinstance(context, KnowledgeMutationContext):
+            raise TypeError("context must be a KnowledgeMutationContext.")
+
         if not generated:
             return 0
 
         chunk_ids = [artifact.chunk_id for artifact in generated]
         with self._uow_factory() as uow:
-            # Re-read version before writing.
-
-            # We do not want to persist embeddings against a version that became invalid while the external provider call was running.
+            # Do not persist embeddings if the version became invalid while the external provider request was running.
             version = uow.versions.get_by_id(version_id)
             if version is None:
                 raise EmbeddingVersionNotFoundError(version_id=version_id)
 
             self._ensure_version_embeddable(version)
-            # Re-read existing artifacts because another worker may have embedded the same chunks while we were calling the provider.
+            # Another worker may have created some or all artifacts while this worker was waiting for the provider.
             existing = uow.embeddings.list_for_chunks(
                 chunk_ids,
                 provider=provider_descriptor,
@@ -440,42 +445,42 @@ class EmbedKnowledgeVersion:
                 return 0
 
             created_count = uow.embeddings.add_many_if_absent(list(to_persist))
-
-            # Force PostgreSQL to validate:
-            # - chunk FK,
-            # - dimensions constraint,
-            # - exact-artifact uniqueness,
-            # before commit.
+            # Force FK, dimensionality, and uniqueness validation before recording the audit event and committing.
             uow.flush()
 
             if created_count > 0:
+                metadata = {
+                    "document_id": str(version.document_id),
+                    "version_number": version.version_number,
+                    "version_status": version.status.value,
+                    "ingestion_status": version.ingestion_status.value,
+                    "generated_count": len(generated),
+                    "eligible_count": len(to_persist),
+                    "existing_count_before_insert": len(existing),
+                }
+
+                if context.initiating_admin_id is not None:
+                    metadata["initiated_by_admin_id"] = str(context.initiating_admin_id)
+
                 AuditRecorder(repository=uow.audit_events).record(
                     RecordAuditEventCommand(
                         event_type="knowledge_version.embeddings_created",
                         entity_type="knowledge_version",
                         entity_id=version.id,
                         action="embeddings_created",
-                        actor=AuditActor(actor_type=AuditActorType.SYSTEM),
+                        actor=context.actor,
+                        trace_id=context.trace_id,
                         before_state=None,
                         after_state={
                             "created_count": created_count,
                             "provider_identity": provider_descriptor.identity,
                             "input_strategy_identity": input_descriptor.identity,
                         },
-                        metadata={
-                            "document_id": str(version.document_id),
-                            "version_number": version.version_number,
-                            "version_status": version.status.value,
-                            "ingestion_status": version.ingestion_status.value,
-                            "generated_count": len(generated),
-                            "eligible_count": len(to_persist),
-                            "existing_count_before_insert": len(existing),
-                        },
+                        metadata=metadata,
                     )
                 )
 
             uow.commit()
-
             return created_count
 
     # Validation helpers

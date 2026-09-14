@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from uuid import UUID, uuid4
+from uuid import UUID
+from uuid6 import uuid7
 
 import pytest
 from sqlalchemy import select
@@ -30,6 +31,16 @@ from packages.knowledge.domain.enums import (
 from packages.knowledge.domain.errors import (
     KnowledgeVersionNotReadyError,
 )
+from packages.application.auth.models import (
+    AuthenticatedPrincipal,
+    AuthRole,
+)
+from packages.knowledge.application.mutation_context import (
+    KnowledgeMutationContext,
+)
+from packages.database.models.knowledge.chunk import (
+    KnowledgeChunkModel,
+)
 
 
 UTC = timezone.utc
@@ -49,7 +60,7 @@ def seed_document(
     *,
     status: str = "active",
 ) -> UUID:
-    document_id = uuid4()
+    document_id = uuid7()
     now = utc_now()
 
     archived_at = (
@@ -94,7 +105,7 @@ def seed_ready_version(
     document_id: UUID,
     version_number: int,
 ) -> UUID:
-    version_id = uuid4()
+    version_id = uuid7()
 
     now = utc_now()
     created_at = now - timedelta(seconds=5)
@@ -141,6 +152,8 @@ def seed_ready_version(
         )
 
         session.commit()
+        
+    seed_chunk(session_factory, version_id=version_id)
 
     return version_id
 
@@ -151,7 +164,7 @@ def seed_published_version(
     document_id: UUID,
     version_number: int,
 ) -> UUID:
-    version_id = uuid4()
+    version_id = uuid7()
 
     now = utc_now()
     created_at = now - timedelta(seconds=10)
@@ -200,7 +213,40 @@ def seed_published_version(
 
         session.commit()
 
+    seed_chunk(session_factory, version_id=version_id)
+
     return version_id
+
+def seed_chunk(
+    session_factory: sessionmaker[Session],
+    *,
+    version_id: UUID,
+) -> UUID:
+    chunk_id = uuid7()
+    now = utc_now()
+    content = "Customers may request a refund within fourteen days."
+
+    with session_factory() as session:
+        session.add(
+            KnowledgeChunkModel(
+                id=chunk_id,
+                version_id=version_id,
+                chunk_index=0,
+                content=content,
+                section_title="Refund policy",
+                start_offset=0,
+                end_offset=len(content),
+                token_count=8,
+                metadata_={
+                    "integration_test": True,
+                },
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.commit()
+
+    return chunk_id
 
 
 def build_service(
@@ -210,6 +256,24 @@ def build_service(
         uow_factory=lambda: SQLAlchemyKnowledgeUnitOfWork(
             session_factory
         )
+    )
+
+
+def publish_command(
+    version_id: UUID,
+) -> PublishKnowledgeVersionCommand:
+    principal = AuthenticatedPrincipal(
+        user_id=uuid7(),
+        session_id=uuid7(),
+        role=AuthRole.ADMIN,
+    )
+
+    return PublishKnowledgeVersionCommand(
+        context=KnowledgeMutationContext.from_admin(
+            principal=principal,
+            trace_id=uuid7(),
+        ),
+        version_id=version_id,
     )
 
 
@@ -239,9 +303,7 @@ class TestFirstPublication:
         )
 
         result = service.execute(
-            PublishKnowledgeVersionCommand(
-                version_id=version_id
-            )
+            publish_command(version_id)
         )
 
         assert result.version_id == version_id
@@ -292,9 +354,7 @@ class TestFirstPublication:
         )
 
         service.execute(
-            PublishKnowledgeVersionCommand(
-                version_id=version_id
-            )
+            publish_command(version_id)
         )
 
         with SQLAlchemyKnowledgeUnitOfWork(
@@ -342,9 +402,7 @@ class TestReplacementPublication:
         )
 
         result = service.execute(
-            PublishKnowledgeVersionCommand(
-                version_id=new_version_id
-            )
+            publish_command(new_version_id)
         )
 
         assert result.version_id == new_version_id
@@ -405,9 +463,7 @@ class TestReplacementPublication:
         )
 
         service.execute(
-            PublishKnowledgeVersionCommand(
-                version_id=new_version_id
-            )
+            publish_command(new_version_id)
         )
 
         with test_session_factory() as session:
@@ -469,9 +525,7 @@ class TestReplacementPublication:
         )
 
         service.execute(
-            PublishKnowledgeVersionCommand(
-                version_id=new_version_id
-            )
+            publish_command(new_version_id)
         )
 
         with test_session_factory() as session:
@@ -528,9 +582,7 @@ class TestDocumentLifecycle:
             KnowledgeDocumentNotPublishableError
         ):
             service.execute(
-                PublishKnowledgeVersionCommand(
-                    version_id=version_id
-                )
+                publish_command(version_id)
             )
 
         with test_session_factory() as session:
@@ -561,7 +613,7 @@ class TestInvalidTargetLifecycle:
             test_session_factory
         )
 
-        version_id = uuid4()
+        version_id = uuid7()
         now = utc_now()
 
         with test_session_factory() as session:
@@ -601,9 +653,7 @@ class TestInvalidTargetLifecycle:
             KnowledgeVersionNotReadyError
         ):
             service.execute(
-                PublishKnowledgeVersionCommand(
-                    version_id=version_id
-                )
+                publish_command(version_id)
             )
 
         with test_session_factory() as session:
@@ -650,7 +700,7 @@ class TestSinglePublishedVersionDatabaseConstraint:
         )
 
         now = utc_now()
-        second_id = uuid4()
+        second_id = uuid7()
 
         with pytest.raises(IntegrityError):
             with test_session_factory() as session:
@@ -771,9 +821,7 @@ class TestPublishedRepositoryLookup:
         )
 
         service.execute(
-            PublishKnowledgeVersionCommand(
-                version_id=version_id
-            )
+            publish_command(version_id)
         )
 
         with SQLAlchemyKnowledgeUnitOfWork(
@@ -816,9 +864,7 @@ class TestPublishedRepositoryLookup:
         )
 
         service.execute(
-            PublishKnowledgeVersionCommand(
-                version_id=new_id
-            )
+            publish_command(new_id)
         )
 
         with SQLAlchemyKnowledgeUnitOfWork(

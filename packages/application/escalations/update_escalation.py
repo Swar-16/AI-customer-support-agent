@@ -12,6 +12,7 @@ from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
 from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
 from packages.application.audit.recorder import AuditRecorder
 from packages.database.repositories.audit.audit_event_repository import AuditEventRepository
+from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork,]
 Clock = Callable[[], datetime]
@@ -46,14 +47,11 @@ class EscalationPersistenceContractError(UpdateEscalationError):
 
 @dataclass(frozen=True, slots=True)
 class UpdateEscalationCommand:
-    """
-    Request to move one escalation to another lifecycle state.
-
-    The actor information will later be persisted through the audit-event subsystem. It receiving no actor fields here
-    avoids accepting that an unauthenticated caller has already been authorized.
-    """
+    """Request an authenticated staff member to move an escalation through its controlled lifecycle."""
     escalation_id: uuid.UUID
     target_status: str
+    principal: AuthenticatedPrincipal
+    trace_id: uuid.UUID | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.escalation_id, uuid.UUID):
@@ -61,6 +59,15 @@ class UpdateEscalationCommand:
 
         if not isinstance(self.target_status, str):
             raise TypeError("target_status must be a string")
+
+        if not isinstance(self.principal, AuthenticatedPrincipal):
+            raise TypeError("principal must be an AuthenticatedPrincipal")
+
+        if self.principal.role not in {AuthRole.SUPPORT_AGENT, AuthRole.ADMIN,}:
+            raise ValueError("Only support agents and administrators may update escalations.")
+
+        if self.trace_id is not None and not isinstance(self.trace_id, uuid.UUID):
+            raise TypeError("trace_id must be a UUID or None")
 
         normalized_target = self.target_status.strip().lower()
         if not normalized_target:
@@ -135,7 +142,8 @@ class UpdateEscalation:
                     entity_type="escalation",
                     entity_id=escalation.id,
                     action="updated",
-                    actor=AuditActor(actor_type=AuditActorType.SYSTEM),
+                    actor=AuditActor(actor_type=self._audit_actor_type(command.principal.role), actor_id=command.principal.user_id),
+                    trace_id=command.trace_id,
                     conversation_id=escalation.conversation_id,
                     ai_run_id=escalation.ai_run_id,
                     before_state=before_state,
@@ -175,6 +183,16 @@ class UpdateEscalation:
             "resolved_at": escalation.resolved_at.isoformat() if escalation.resolved_at is not None else None,
             "updated_at": escalation.updated_at.isoformat() if escalation.updated_at is not None else None,
         }
+        
+    @staticmethod
+    def _audit_actor_type(role: AuthRole) -> AuditActorType:
+        if role is AuthRole.SUPPORT_AGENT:
+            return AuditActorType.AGENT
+
+        if role is AuthRole.ADMIN:
+            return AuditActorType.ADMIN
+
+        raise ValueError("Only support agents and administrators may update escalations.")
 
     @staticmethod
     def _validate_transition(*, escalation_id: uuid.UUID, current_status: str, target_status: str) -> None:

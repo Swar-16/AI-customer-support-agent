@@ -28,7 +28,7 @@ from packages.application.tickets.query_tickets import TicketAccessDeniedError, 
 from packages.application.tickets.query_tickets import TicketQueryContractError, TicketQueryError, TicketRequesterDoesNotExistError
 from packages.application.tickets.query_tickets import TicketRequesterNotActiveError, TicketRequesterRoleMismatchError
 from packages.application.tickets.update_ticket import ClosedTicketMutationError, InvalidTicketTransitionError, TicketAgentDoesNotExistError
-from packages.application.tickets.update_ticket import TicketAgentNotAssignableError, TicketConcurrencyError, UpdateTicketError
+from packages.application.tickets.update_ticket import TicketAgentNotAssignableError, TicketConcurrencyError, UpdateTicketError, TicketUpdateAccessDeniedError
 from packages.application.tickets.update_ticket import TicketDoesNotExistError as UpdatedTicketDoesNotExistError
 from packages.application.tickets.update_ticket import TicketPersistenceContractError as UpdateTicketPersistenceContractError
 from packages.application.feedback.query_feedback import FeedbackAccessDeniedError, FeedbackDoesNotExistError, FeedbackQueryContractError
@@ -42,19 +42,60 @@ from packages.application.feedback.submit_feedback import FeedbackConversationOw
 from packages.application.feedback.submit_feedback import FeedbackCustomerNotActiveError, FeedbackCustomerRoleError, SubmitFeedbackError
 from packages.application.feedback.submit_feedback import FeedbackPersistenceContractError, FeedbackResponseMessageDoesNotExistError
 from packages.application.feedback.submit_feedback import FeedbackResponseMessageMismatchError, FeedbackSubmissionConflictError
+from packages.application.auth.exceptions import *
+from packages.application.escalations.get_customer_escalation_status import CustomerConversationNotAccessibleError, CustomerEscalationDoesNotExistError, CustomerEscalationStatusContractError
+from packages.application.tickets.create_ticket import TicketCreationAccessDeniedError
+from packages.application.feedback.submit_feedback import FeedbackSubmissionAccessDeniedError
+from packages.application.conversations.create_conversation import ConversationCreationAccessDeniedError, ConversationCreationPersistenceContractError
+from packages.application.conversations.create_conversation import ConversationCreatorDoesNotExistError, ConversationCreatorNotActiveError, ConversationCreatorRoleMismatchError
+from packages.application.conversations.query_conversations import ConversationQueryAccessDeniedError, ConversationQueryPersistenceContractError
+from packages.application.conversations.query_conversations import ConversationRequesterDoesNotExistError, ConversationRequesterNotActiveError
+from packages.application.conversations.query_conversations import ConversationRequesterRoleMismatchError, QueriedConversationDoesNotExistError
+from packages.application.conversations.query_conversations import ConversationQueryAccessDeniedError, ConversationQueryPersistenceContractError
+from packages.application.conversations.query_conversations import ConversationRequesterDoesNotExistError, ConversationRequesterNotActiveError
+from packages.application.conversations.query_conversations import ConversationRequesterRoleMismatchError, QueriedConversationDoesNotExistError
+from packages.application.conversations.close_conversation import ConversationCloseAccessDeniedError, ConversationCloserDoesNotExistError
+from packages.application.conversations.close_conversation import ConversationCloserNotActiveError, ConversationCloserRoleMismatchError
+from packages.application.conversations.close_conversation import ConversationClosePersistenceContractError, ConversationToCloseDoesNotExistError
+from packages.application.users.update_user_access import AccessManagerDoesNotExistError, AccessManagerNotActiveError, AccessManagerRoleMismatchError
+from packages.application.users.update_user_access import AdministratorSelfMutationError, DeletedUserAccessMutationError, FinalActiveAdministratorError
+from packages.application.users.update_user_access import ManagedUserDoesNotExistError, ProtectedSystemUserError, UserAccessDeniedError, UserAccessPersistenceContractError
+from packages.knowledge.application.exceptions import ArchiveKnowledgeDocumentDoesNotExistError, KnowledgeArchiveConflictError, KnowledgeDocumentNotPublishableError
+from packages.knowledge.application.exceptions import KnowledgeMutationAccessDeniedError, KnowledgeProcessingContractError, KnowledgeProcessingDocumentDoesNotExistError
+from packages.knowledge.application.exceptions import KnowledgeProcessingDocumentNotActiveError, KnowledgeProcessingPersistenceError, KnowledgePublicationConflictError
+from packages.knowledge.application.exceptions import KnowledgeReadAccessDeniedError, KnowledgeVersionNotFoundError as ProcessedKnowledgeVersionNotFoundError
+from packages.knowledge.application.exceptions import KnowledgeVersionNotProcessableError, KnowledgeVersionProcessingConflictError, PublishKnowledgeDocumentDoesNotExistError
+from packages.knowledge.application.exceptions import PublishKnowledgeVersionDoesNotExistError, QueriedKnowledgeDocumentDoesNotExistError, QueriedKnowledgeVersionDoesNotExistError
+from packages.knowledge.application.exceptions import EmptyKnowledgeUploadError, InvalidKnowledgeUploadEncodingError, InvalidKnowledgeUploadFilenameError
+from packages.knowledge.application.exceptions import KnowledgeUploadConfigurationError, KnowledgeUploadTooLargeError, UnsafeKnowledgeUploadContentError
+from packages.knowledge.application.exceptions import UnsupportedKnowledgeUploadMediaTypeError, UnsupportedKnowledgeUploadTypeError
+from packages.knowledge.domain.errors import InvalidKnowledgeDocumentError, InvalidKnowledgeVersionError, InvalidKnowledgeVersionNumberError,KnowledgeDocumentAlreadyArchivedError
+from packages.knowledge.domain.errors import KnowledgeDocumentDeletedError, KnowledgeDocumentNotFoundError, KnowledgeDocumentTitleError, KnowledgeStateTransitionError
+from packages.knowledge.domain.errors import KnowledgeVersionAlreadyPublishedError, KnowledgeVersionConflictError, KnowledgeVersionContentError, KnowledgeVersionHasNoChunksError
+from packages.knowledge.domain.errors import KnowledgeVersionNotFoundError as DomainKnowledgeVersionNotFoundError, KnowledgeVersionNotReadyError, KnowledgeVersionProcessingFailedError
+from packages.knowledge.domain.errors import PublishedVersionConflictError
+from packages.knowledge.embeddings.errors import EmbeddingArtifactConflictError, EmbeddingBatchConfigurationError, EmbeddingProviderIdentityMismatchError
+from packages.knowledge.embeddings.errors import EmbeddingResponseCardinalityError, EmbeddingResponseOrderingError, EmbeddingVersionError
+from packages.knowledge.embeddings.errors import EmbeddingVersionHasNoChunksError, EmbeddingVersionNotFoundError, EmbeddingVersionNotReadyError
 
 logger = logging.getLogger(__name__)
 
 # Public error codes
+ERROR_USER_NOT_FOUND = "USER_NOT_FOUND"
+ERROR_USER_ACCESS_DENIED = "USER_ACCESS_DENIED"
+ERROR_USER_ACCESS_CONFLICT = "USER_ACCESS_CONFLICT"
 ERROR_INVALID_REQUEST = "INVALID_REQUEST"
 ERROR_INVALID_TRACE_ID = "INVALID_TRACE_ID"
 ERROR_CONVERSATION_NOT_FOUND = "CONVERSATION_NOT_FOUND"
+ERROR_CONVERSATION_ACCESS_DENIED = "CONVERSATION_ACCESS_DENIED"
+ERROR_CONVERSATION_CREATOR_NOT_FOUND = "CONVERSATION_CREATOR_NOT_FOUND"
 ERROR_CONVERSATION_NOT_PROCESSABLE = "CONVERSATION_NOT_PROCESSABLE"
 ERROR_INVALID_CUSTOMER_MESSAGE = "INVALID_CUSTOMER_MESSAGE"
 ERROR_INTERNAL = "INTERNAL_ERROR"
 ERROR_ESCALATION_NOT_FOUND = "ESCALATION_NOT_FOUND"
 ERROR_INVALID_ESCALATION_OPERATION = "INVALID_ESCALATION_OPERATION"
 ERROR_ESCALATION_CONFLICT = "ESCALATION_CONFLICT"
+ERROR_CUSTOMER_ESCALATION_STATUS_NOT_FOUND = "CUSTOMER_ESCALATION_STATUS_NOT_FOUND"
 ERROR_TICKET_NOT_FOUND = "TICKET_NOT_FOUND"
 ERROR_TICKET_RELATED_RESOURCE_NOT_FOUND = "TICKET_RELATED_RESOURCE_NOT_FOUND"
 ERROR_TICKET_ACCESS_DENIED = "TICKET_ACCESS_DENIED"
@@ -67,6 +108,18 @@ ERROR_FEEDBACK_ACCESS_DENIED = "FEEDBACK_ACCESS_DENIED"
 ERROR_INVALID_FEEDBACK_OPERATION = "INVALID_FEEDBACK_OPERATION"
 ERROR_FEEDBACK_CONFLICT = "FEEDBACK_CONFLICT"
 ERROR_FEEDBACK_CONCURRENT_UPDATE = "FEEDBACK_CONCURRENT_UPDATE"
+ERROR_EMAIL_ALREADY_REGISTERED = "EMAIL_ALREADY_REGISTERED"
+ERROR_PASSWORD_POLICY_VIOLATION = "PASSWORD_POLICY_VIOLATION"
+ERROR_INVALID_CREDENTIALS = "INVALID_CREDENTIALS"
+ERROR_INVALID_REFRESH_TOKEN = "INVALID_REFRESH_TOKEN"
+ERROR_UNAUTHENTICATED = "UNAUTHENTICATED"
+ERROR_KNOWLEDGE_NOT_FOUND = "KNOWLEDGE_NOT_FOUND"
+ERROR_KNOWLEDGE_ACCESS_DENIED = "KNOWLEDGE_ACCESS_DENIED"
+ERROR_INVALID_KNOWLEDGE_OPERATION = "INVALID_KNOWLEDGE_OPERATION"
+ERROR_KNOWLEDGE_CONFLICT = "KNOWLEDGE_CONFLICT"
+ERROR_INVALID_KNOWLEDGE_UPLOAD = "INVALID_KNOWLEDGE_UPLOAD"
+ERROR_KNOWLEDGE_UPLOAD_TOO_LARGE = "KNOWLEDGE_UPLOAD_TOO_LARGE"
+ERROR_UNSUPPORTED_KNOWLEDGE_UPLOAD = "UNSUPPORTED_KNOWLEDGE_UPLOAD"
 
 # Registration
 def register_exception_handlers(app: FastAPI) -> None:
@@ -77,11 +130,45 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     Route handlers should generally allow known application exceptions to propagate here rather than duplicating try/except blocks.
     """
+    app.add_exception_handler(ManagedUserDoesNotExistError, managed_user_not_found_handler)
+    
+    for exception_type in (
+        UserAccessDeniedError, AccessManagerDoesNotExistError, AccessManagerNotActiveError, AccessManagerRoleMismatchError, ProtectedSystemUserError,
+    ):
+        app.add_exception_handler(exception_type, user_access_denied_handler)
 
+    for exception_type in (AdministratorSelfMutationError, FinalActiveAdministratorError, DeletedUserAccessMutationError,):
+        app.add_exception_handler(exception_type, user_access_conflict_handler)
+
+    app.add_exception_handler(UserAccessPersistenceContractError, user_access_internal_error_handler)
+    
     app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
     app.add_exception_handler(HTTPException, http_exception_handler)
-    app.add_exception_handler(ConversationDoesNotExistError, conversation_not_found_handler)
+    
+    for exception_type in (ConversationDoesNotExistError, QueriedConversationDoesNotExistError, ConversationToCloseDoesNotExistError,):
+        app.add_exception_handler(exception_type, conversation_not_found_handler)
+    
     app.add_exception_handler(ConversationNotProcessableError, conversation_not_processable_handler)
+    
+    for exception_type in (
+        ConversationCreationAccessDeniedError, ConversationCreatorNotActiveError, ConversationCreatorRoleMismatchError,
+        ConversationQueryAccessDeniedError, ConversationRequesterNotActiveError, ConversationRequesterRoleMismatchError,
+        ConversationCloseAccessDeniedError, ConversationCloserNotActiveError, ConversationCloserRoleMismatchError,
+    ):
+        app.add_exception_handler(exception_type, conversation_access_denied_handler)
+        
+    for exception_type in (
+        ConversationCreatorDoesNotExistError, ConversationRequesterDoesNotExistError, ConversationCloserDoesNotExistError,
+    ):
+        app.add_exception_handler(exception_type, conversation_creator_not_found_handler)
+        
+    for exception_type in (
+        ConversationCreationPersistenceContractError, ConversationQueryPersistenceContractError, ConversationClosePersistenceContractError,
+    ):
+        app.add_exception_handler(exception_type, conversation_internal_contract_handler)
+    
+    app.add_exception_handler(QueriedConversationDoesNotExistError, conversation_not_found_handler)
+    
     app.add_exception_handler(CustomerMessageValidationError, customer_message_validation_handler)
     
     for exception_type in (QueriedEscalationDoesNotExistError, UpdatedEscalationDoesNotExistError):
@@ -95,6 +182,11 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     for exception_type in (CreateEscalationContractError, EscalationQueryContractError, EscalationPersistenceContractError):
         app.add_exception_handler(exception_type, escalation_internal_contract_handler)
+        
+    for exception_type in (CustomerConversationNotAccessibleError, CustomerEscalationDoesNotExistError):
+        app.add_exception_handler(exception_type, customer_escalation_status_not_found_handler)
+
+    app.add_exception_handler(CustomerEscalationStatusContractError, escalation_internal_contract_handler)
     
     for exception_type in (QueriedTicketDoesNotExistError, UpdatedTicketDoesNotExistError, CommentTicketDoesNotExistError):
         app.add_exception_handler(exception_type, ticket_not_found_handler)
@@ -106,8 +198,8 @@ def register_exception_handlers(app: FastAPI) -> None:
         app.add_exception_handler(exception_type, ticket_related_resource_not_found_handler)
 
     for exception_type in (
-        TicketConversationOwnershipError, TicketCustomerNotActiveError, TicketCommentOwnershipError, CustomerInternalCommentError,
-        CommentAuthorNotActiveError, CommentAuthorRoleMismatchError, TicketAccessDeniedError, TicketRequesterNotActiveError, TicketRequesterRoleMismatchError
+        TicketConversationOwnershipError, TicketCustomerNotActiveError, TicketCommentOwnershipError, CustomerInternalCommentError, TicketUpdateAccessDeniedError,
+        CommentAuthorNotActiveError, CommentAuthorRoleMismatchError, TicketAccessDeniedError, TicketRequesterNotActiveError, TicketRequesterRoleMismatchError, TicketCreationAccessDeniedError,
     ):
         app.add_exception_handler(exception_type, ticket_access_denied_handler)
 
@@ -138,7 +230,7 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     for exception_type in (
         FeedbackConversationOwnershipError, FeedbackCustomerNotActiveError, FeedbackCustomerRoleError, FeedbackAccessDeniedError,
-        FeedbackRequesterNotActiveError, FeedbackRequesterRoleMismatchError, FeedbackReviewerNotAuthorizedError
+        FeedbackRequesterNotActiveError, FeedbackRequesterRoleMismatchError, FeedbackReviewerNotAuthorizedError, FeedbackSubmissionAccessDeniedError,
     ):
         app.add_exception_handler(exception_type, feedback_access_denied_handler)
 
@@ -154,12 +246,145 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     for exception_type in (FeedbackPersistenceContractError, FeedbackQueryContractError, FeedbackReviewPersistenceContractError):
         app.add_exception_handler(exception_type, feedback_internal_contract_handler)
+        
+    # Authentication errors
+    app.add_exception_handler(RegistrationConflictError, registration_conflict_handler)
+    app.add_exception_handler(RegistrationPasswordPolicyError, registration_password_policy_handler)
+    app.add_exception_handler(InvalidCredentialsError, invalid_credentials_handler)
+    app.add_exception_handler(InvalidRefreshTokenError, invalid_refresh_token_handler)
+
+    for exception_type in (CurrentUserUnavailableError, CurrentUserStateConflictError):
+        app.add_exception_handler(exception_type, current_user_unavailable_handler)
+
+    for exception_type in (
+        RegistrationConfigurationError, RegistrationPasswordHashingError, RegistrationPersistenceError, LoginConfigurationError,
+        LoginPasswordHashingError,LoginPersistenceError, RefreshSessionConfigurationError, RefreshSessionPersistenceError,
+        LogoutConfigurationError, LogoutPersistenceError, LogoutSessionOwnershipError, GetCurrentUserPersistenceError,
+        AccessAuthenticationConfigurationError, AccessAuthenticationPersistenceError,
+    ):
+        app.add_exception_handler(exception_type, authentication_internal_error_handler)
+        
+    # Knowledge Management errors
+    for exception_type in (
+        QueriedKnowledgeDocumentDoesNotExistError, QueriedKnowledgeVersionDoesNotExistError, ArchiveKnowledgeDocumentDoesNotExistError,
+        PublishKnowledgeDocumentDoesNotExistError, PublishKnowledgeVersionDoesNotExistError, KnowledgeProcessingDocumentDoesNotExistError,
+        ProcessedKnowledgeVersionNotFoundError, KnowledgeDocumentNotFoundError, DomainKnowledgeVersionNotFoundError, EmbeddingVersionNotFoundError,
+    ):
+        app.add_exception_handler(exception_type, knowledge_not_found_handler)
+
+    for exception_type in (KnowledgeReadAccessDeniedError, KnowledgeMutationAccessDeniedError):
+        app.add_exception_handler(exception_type, knowledge_access_denied_handler)
+
+    for exception_type in (
+        KnowledgeDocumentAlreadyArchivedError, KnowledgeDocumentDeletedError, KnowledgeVersionConflictError, KnowledgeStateTransitionError,
+        KnowledgeVersionNotReadyError, KnowledgeVersionAlreadyPublishedError, PublishedVersionConflictError, KnowledgeVersionHasNoChunksError,
+        KnowledgeVersionProcessingFailedError, KnowledgeArchiveConflictError, KnowledgeDocumentNotPublishableError, KnowledgePublicationConflictError,
+        KnowledgeProcessingDocumentNotActiveError, KnowledgeVersionNotProcessableError, KnowledgeVersionProcessingConflictError,
+        EmbeddingVersionNotReadyError, EmbeddingVersionHasNoChunksError
+    ):
+        app.add_exception_handler(exception_type, knowledge_conflict_handler)
+
+    for exception_type in (
+        KnowledgeDocumentTitleError, InvalidKnowledgeDocumentError, InvalidKnowledgeVersionNumberError, 
+        KnowledgeVersionContentError, InvalidKnowledgeVersionError,
+    ):
+        app.add_exception_handler(exception_type, invalid_knowledge_operation_handler)
+
+    for exception_type in (
+        KnowledgeProcessingContractError, KnowledgeProcessingPersistenceError, EmbeddingArtifactConflictError, EmbeddingBatchConfigurationError,
+        EmbeddingProviderIdentityMismatchError, EmbeddingResponseCardinalityError, EmbeddingResponseOrderingError, EmbeddingVersionError,
+        KnowledgeUploadConfigurationError,
+    ):
+        app.add_exception_handler(exception_type, knowledge_internal_error_handler)
+
+    for exception_type in (
+        EmptyKnowledgeUploadError, InvalidKnowledgeUploadEncodingError, InvalidKnowledgeUploadFilenameError, UnsafeKnowledgeUploadContentError,
+    ):
+        app.add_exception_handler(exception_type, invalid_knowledge_upload_handler)
+
+    app.add_exception_handler(KnowledgeUploadTooLargeError, knowledge_upload_too_large_handler)
+
+    for exception_type in (UnsupportedKnowledgeUploadTypeError, UnsupportedKnowledgeUploadMediaTypeError):
+        app.add_exception_handler(exception_type, unsupported_knowledge_upload_handler)
 
     # Must remain last conceptually: this is the safety net for unexpected failures.
     app.add_exception_handler(Exception, unhandled_exception_handler)
 
 
 # Application exception handlers
+async def managed_user_not_found_handler(request: Request, exc: ManagedUserDoesNotExistError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "managed_user_not_found",
+        extra={
+            "trace_id": str(trace_id),
+            "path": request.url.path,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_404_NOT_FOUND,
+        code=ERROR_USER_NOT_FOUND,
+        message="The requested user does not exist.",
+        trace_id=trace_id,
+    )
+
+async def user_access_denied_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.warning(
+        "user_access_denied",
+        extra={
+            "trace_id": str(trace_id),
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_403_FORBIDDEN,
+        code=ERROR_USER_ACCESS_DENIED,
+        message=(
+            "You are not permitted to perform this "
+            "user access operation."
+        ),
+        trace_id=trace_id,
+    )
+
+async def user_access_conflict_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "user_access_conflict",
+        extra={
+            "trace_id": str(trace_id),
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_409_CONFLICT,
+        code=ERROR_USER_ACCESS_CONFLICT,
+        message="The requested user access change conflicts with the current account state.",
+        trace_id=trace_id,
+    )
+
+async def user_access_internal_error_handler(request: Request, exc: UserAccessPersistenceContractError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.exception(
+        "user_access_persistence_failure",
+        extra={
+            "trace_id": str(trace_id),
+            "path": request.url.path,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        code=ERROR_INTERNAL,
+        message="An unexpected internal error occurred.",
+        trace_id=trace_id,
+    )
+    
 async def conversation_not_found_handler(request: Request, exc: ConversationDoesNotExistError) -> JSONResponse:
     trace_id = _resolve_trace_id(request)
     logger.info(
@@ -174,6 +399,76 @@ async def conversation_not_found_handler(request: Request, exc: ConversationDoes
         status_code=status.HTTP_404_NOT_FOUND,
         code=ERROR_CONVERSATION_NOT_FOUND,
         message="The requested conversation does not exist.",
+        trace_id=trace_id,
+    )
+    
+async def conversation_access_denied_handler(
+    request: Request,
+    exc: Exception,
+) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+
+    logger.warning(
+        "conversation_access_denied",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_403_FORBIDDEN,
+        code=ERROR_CONVERSATION_ACCESS_DENIED,
+        message="You are not permitted to perform this conversation operation.",
+        trace_id=trace_id,
+    )
+    
+async def conversation_creator_not_found_handler(
+    request: Request,
+    exc: Exception,
+) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+
+    logger.info(
+        "conversation_creator_not_found",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_404_NOT_FOUND,
+        code=ERROR_CONVERSATION_CREATOR_NOT_FOUND,
+        message="The authenticated conversation user is unavailable.",
+        trace_id=trace_id,
+    )
+    
+async def conversation_internal_contract_handler(
+    request: Request,
+    exc: Exception,
+) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+
+    logger.exception(
+        "conversation_internal_contract_failure",
+        exc_info=exc,
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        code=ERROR_INTERNAL,
+        message="An unexpected internal error occurred.",
         trace_id=trace_id,
     )
 
@@ -286,6 +581,25 @@ async def escalation_internal_contract_handler(request: Request, exc: Exception)
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         code=ERROR_INTERNAL,
         message="An unexpected internal error occurred.",
+        trace_id=trace_id,
+    )
+    
+async def customer_escalation_status_not_found_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "customer_escalation_status_unavailable",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_404_NOT_FOUND,
+        code=ERROR_CUSTOMER_ESCALATION_STATUS_NOT_FOUND,
+        message="Escalation status is unavailable for the requested conversation.",
         trace_id=trace_id,
     )
     
@@ -557,6 +871,122 @@ async def feedback_internal_contract_handler(request: Request, exc: Exception) -
         message="An unexpected internal error occurred.",
         trace_id=trace_id,
     )
+    
+# Authentication exception handlers
+async def registration_conflict_handler(request: Request, exc: RegistrationConflictError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "registration_conflict",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_409_CONFLICT,
+        code=ERROR_EMAIL_ALREADY_REGISTERED,
+        message="An account already exists for this email address.",
+        trace_id=trace_id,
+    )
+
+async def registration_password_policy_handler(request: Request, exc: RegistrationPasswordPolicyError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "registration_password_policy_rejected",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        code=ERROR_PASSWORD_POLICY_VIOLATION,
+        message="The supplied password does not satisfy the password policy.",
+        trace_id=trace_id,
+    )
+
+async def invalid_credentials_handler(request: Request, exc: InvalidCredentialsError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "login_rejected",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        code=ERROR_INVALID_CREDENTIALS,
+        message="The email or password is invalid.",
+        trace_id=trace_id,
+        headers={"WWW-Authenticate": "Bearer",},
+    )
+
+async def invalid_refresh_token_handler(request: Request, exc: InvalidRefreshTokenError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "refresh_token_rejected",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        code=ERROR_INVALID_REFRESH_TOKEN,
+        message="The refresh token is invalid or expired.",
+        trace_id=trace_id,
+        headers={"WWW-Authenticate": "Bearer",},
+    )
+
+async def current_user_unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "current_user_unavailable",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        code=ERROR_UNAUTHENTICATED,
+        message="Valid authentication credentials are required.",
+        trace_id=trace_id,
+        headers={"WWW-Authenticate": "Bearer",},
+    )
+
+
+async def authentication_internal_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.exception(
+        "authentication_internal_failure",
+        exc_info=exc,
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        code=ERROR_INTERNAL,
+        message="An unexpected internal error occurred.",
+        trace_id=trace_id,
+    )
 
 # FastAPI / HTTP exception handlers
 async def request_validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -697,3 +1127,157 @@ def _resolve_trace_id(request: Request) -> uuid.UUID:
     trace_id = uuid7()
     request.state.trace_id = trace_id
     return trace_id
+
+async def knowledge_not_found_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "knowledge_resource_not_found",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_404_NOT_FOUND,
+        code=ERROR_KNOWLEDGE_NOT_FOUND,
+        message="The requested knowledge resource does not exist.",
+        trace_id=trace_id,
+    )
+
+async def knowledge_access_denied_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.warning(
+        "knowledge_access_denied",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_403_FORBIDDEN,
+        code=ERROR_KNOWLEDGE_ACCESS_DENIED,
+        message="You are not permitted to perform this knowledge operation.",
+        trace_id=trace_id,
+    )
+
+async def invalid_knowledge_operation_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "invalid_knowledge_operation",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        code=ERROR_INVALID_KNOWLEDGE_OPERATION,
+        message="The supplied knowledge data is invalid.",
+        trace_id=trace_id,
+    )
+
+async def knowledge_conflict_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "knowledge_lifecycle_conflict",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_409_CONFLICT,
+        code=ERROR_KNOWLEDGE_CONFLICT,
+        message="The requested operation conflicts with the current knowledge-resource state.",
+        trace_id=trace_id,
+    )
+
+async def knowledge_internal_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.exception(
+        "knowledge_internal_failure",
+        exc_info=exc,
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        code=ERROR_INTERNAL,
+        message="An unexpected internal error occurred.",
+        trace_id=trace_id,
+    )
+
+async def invalid_knowledge_upload_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "invalid_knowledge_upload",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        code=ERROR_INVALID_KNOWLEDGE_UPLOAD,
+        message="The uploaded knowledge file is invalid.",
+        trace_id=trace_id,
+    )
+
+async def knowledge_upload_too_large_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "knowledge_upload_too_large",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+        # status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        code=ERROR_KNOWLEDGE_UPLOAD_TOO_LARGE,
+        message="The uploaded knowledge file exceeds the permitted size.",
+        trace_id=trace_id,
+    )
+
+async def unsupported_knowledge_upload_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "unsupported_knowledge_upload",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+        code=ERROR_UNSUPPORTED_KNOWLEDGE_UPLOAD,
+        message="Only supported UTF-8 knowledge-file formats may be uploaded.",
+        trace_id=trace_id,
+    )

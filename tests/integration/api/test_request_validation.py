@@ -3,6 +3,42 @@ from __future__ import annotations
 import uuid
 import pytest
 from fastapi.testclient import TestClient
+from uuid6 import uuid7
+
+from packages.database.models.support.conversation import ConversationModel
+
+@pytest.fixture(autouse=True)
+def authenticate_validation_requests(
+    client: TestClient,
+    customer_auth_headers: dict[str, str],
+) -> None:
+    """
+    Validation tests require valid authentication so request validation,
+    rather than the authentication boundary, determines the response.
+    """
+    client.headers.update(customer_auth_headers)
+
+
+@pytest.fixture()
+def seeded_conversation(
+    test_session_factory,
+    customer_identity,
+) -> uuid.UUID:
+    conversation_id = uuid7()
+
+    with test_session_factory() as session:
+        session.add(
+            ConversationModel(
+                id=conversation_id,
+                user_id=customer_identity.user_id,
+                status="open",
+                channel="web",
+                title="Request validation test",
+            )
+        )
+        session.commit()
+
+    return conversation_id
 
 class TestRequestValidation:
     def test_rejects_empty_message(self, client: TestClient, seeded_conversation: uuid.UUID) -> None:

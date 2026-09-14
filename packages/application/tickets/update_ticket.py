@@ -8,6 +8,7 @@ from typing import Final
 from sqlalchemy.orm.exc import StaleDataError
 from typing import Any
 
+from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
 from packages.database.models.support.ticket import TicketModel
 from packages.database.repositories.support.ticket_repository import TicketRepository
 from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
@@ -29,6 +30,7 @@ ALLOWED_TICKET_TRANSITIONS: Final[dict[str, frozenset[str]]] = {
     "reopened": frozenset({"in_progress", "waiting_for_customer", "resolved",}),
 }
 MAX_RESOLUTION_SUMMARY_LENGTH: Final[int] = 5_000
+TICKET_UPDATE_ROLES: Final[frozenset[AuthRole]] = frozenset({AuthRole.SUPPORT_AGENT, AuthRole.ADMIN,})
 
 class UpdateTicketError(RuntimeError):
     """Base application error for ticket mutations."""
@@ -37,6 +39,9 @@ class TicketDoesNotExistError(UpdateTicketError):
     def __init__(self, ticket_id: uuid.UUID) -> None:
         self.ticket_id = ticket_id
         super().__init__(f"Ticket does not exist: {ticket_id}")
+        
+class TicketUpdateAccessDeniedError(UpdateTicketError):
+    """Raised when the authenticated principal cannot update tickets."""
 
 class InvalidTicketTransitionError(UpdateTicketError):
     def __init__(self, *, ticket_id: uuid.UUID, current_status: str, target_status: str) -> None:
@@ -88,6 +93,8 @@ class UpdateTicketCommand:
     """
     ticket_id: uuid.UUID
     expected_row_version: int
+    principal: AuthenticatedPrincipal
+    trace_id: uuid.UUID
     target_status: str | None = None
     priority: str | None = None
     category: str | None = None
@@ -98,6 +105,15 @@ class UpdateTicketCommand:
     def __post_init__(self) -> None:
         if not isinstance(self.ticket_id, uuid.UUID):
             raise TypeError("ticket_id must be a UUID")
+        
+        if not isinstance(self.principal, AuthenticatedPrincipal):
+            raise TypeError("principal must be an AuthenticatedPrincipal")
+
+        if self.principal.role not in TICKET_UPDATE_ROLES:
+            raise TicketUpdateAccessDeniedError("Only support agents and administrators may update tickets")
+
+        if not isinstance(self.trace_id, uuid.UUID):
+            raise TypeError("trace_id must be a UUID")
 
         if isinstance(self.expected_row_version, bool) or not isinstance(self.expected_row_version, int):
             raise TypeError("expected_row_version must be an integer")
@@ -241,19 +257,20 @@ class UpdateTicket:
 
                     AuditRecorder(repository=audit_repository).record(
                         RecordAuditEventCommand(
-                        event_type="ticket.updated",
-                        entity_type="ticket",
-                        entity_id=ticket.id,
-                        action="updated",
-                        actor=AuditActor(actor_type=AuditActorType.SYSTEM),
-                        conversation_id=ticket.conversation_id,
-                        before_state=before_state,
-                        after_state=self._audit_state(ticket),
-                        metadata={
-                            "ticket_number": ticket.ticket_number,
-                            "expected_row_version": command.expected_row_version,
-                        },
-                        occurred_at=occurred_at,
+                            event_type="ticket.updated",
+                            entity_type="ticket",
+                            entity_id=ticket.id,
+                            action="updated",
+                            actor=AuditActor(actor_type=self._audit_actor_type(command.principal.role), actor_id=command.principal.user_id),
+                            trace_id=command.trace_id,
+                            conversation_id=ticket.conversation_id,
+                            before_state=before_state,
+                            after_state=self._audit_state(ticket),
+                            metadata={
+                                "ticket_number": ticket.ticket_number,
+                                "expected_row_version": command.expected_row_version,
+                            },
+                            occurred_at=occurred_at,
                         )
                     )
 
@@ -392,6 +409,16 @@ class UpdateTicket:
             raise TicketPersistenceContractError("AuditEventRepository unavailable")
 
         return uow.tickets, uow.audit_events
+    
+    @staticmethod
+    def _audit_actor_type(role: AuthRole) -> AuditActorType:
+        if role is AuthRole.SUPPORT_AGENT:
+            return AuditActorType.AGENT
+
+        if role is AuthRole.ADMIN:
+            return AuditActorType.ADMIN
+
+        raise TicketUpdateAccessDeniedError("Only support agents and administrators may update tickets")
     
     @staticmethod
     def _audit_state(ticket: TicketModel) -> dict[str, Any]:

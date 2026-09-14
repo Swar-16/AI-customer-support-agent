@@ -10,9 +10,14 @@ from packages.ai.telemetry.observer import TelemetryOrchestrationObserver
 from packages.application.composition.ai_pipeline_factory import AIPipelineFactory
 from packages.application.composition.provider_factory import create_llm_provider
 from packages.application.conversations.process_customer_message import ProcessCustomerMessage
+from packages.application.conversations.create_conversation import CreateConversation
+from packages.application.conversations.query_conversations import ListConversations, GetConversation
+from packages.application.conversations.get_conversation_messages import GetConversationMessages
+from packages.application.conversations.close_conversation import CloseConversation
 from packages.config.settings import Settings
 from packages.database.session import SessionLocal
 from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
+from packages.database.unit_of_work.knowledge import SQLAlchemyKnowledgeUnitOfWork
 from packages.application.composition.knowledge_embedding_factory import create_knowledge_embedding_services
 from packages.knowledge.retrieval.context.models import GroundingContextBudget
 from packages.knowledge.retrieval.profiles import create_default_customer_support_profile
@@ -35,6 +40,29 @@ from packages.application.dashboard.query_llm_calls import QueryDashboardLLMCall
 from packages.application.dashboard.query_retrieval_runs import QueryDashboardRetrievalRuns
 from packages.application.dashboard.query_api_requests import QueryDashboardAPIRequests
 from packages.application.dashboard.query_audit_events import QueryDashboardAuditEvents
+from packages.application.auth.authenticate_access_token import AuthenticateAccessToken
+from packages.application.auth.get_current_user import GetCurrentUser
+from packages.application.auth.login_user import LoginUser
+from packages.application.auth.logout_user import LogoutUser
+from packages.application.auth.password_hasher import Argon2PasswordHasher
+from packages.application.auth.refresh_session import RefreshSession
+from packages.application.auth.register_user import RegisterUser
+from packages.application.auth.token_service import TokenService, TokenServiceConfig
+from packages.application.escalations.get_customer_escalation_status import GetCustomerEscalationStatus
+from packages.application.users.update_user_access import UpdateUserAccess
+from packages.application.composition.knowledge_application_factory import create_knowledge_application_components
+from packages.knowledge.application.archive_document import ArchiveKnowledgeDocument
+from packages.knowledge.application.create_document import CreateKnowledgeDocument
+from packages.knowledge.application.create_version import CreateKnowledgeVersion
+from packages.knowledge.application.embed_version import EmbedKnowledgeVersion
+from packages.knowledge.application.get_document import GetKnowledgeDocument
+from packages.knowledge.application.get_version import GetKnowledgeVersion
+from packages.knowledge.application.list_documents import ListKnowledgeDocuments
+from packages.knowledge.application.list_versions import ListKnowledgeVersions
+from packages.knowledge.application.process_version import ProcessKnowledgeVersion
+from packages.knowledge.application.publish_version import PublishKnowledgeVersion
+from packages.knowledge.application.upload_document import UploadKnowledgeDocument
+from packages.knowledge.application.upload_version import UploadKnowledgeVersion
 
 SessionFactory = sessionmaker[Session]
 ProviderFactory = Callable[..., LLMProvider]
@@ -55,8 +83,22 @@ class ApplicationServices:
 
     Those are created per request / per application transaction.
     """
+    create_conversation: CreateConversation
+    list_conversations: ListConversations
+    get_conversation: GetConversation
+    get_conversation_messages: GetConversationMessages
     process_customer_message: ProcessCustomerMessage
+    close_conversation: CloseConversation
     record_api_request: RecordAPIRequest
+    
+    register_user: RegisterUser
+    login_user: LoginUser
+    refresh_session: RefreshSession
+    logout_user: LogoutUser
+    authenticate_access_token: AuthenticateAccessToken
+    get_current_user: GetCurrentUser
+    update_user_access: UpdateUserAccess
+    
     get_dashboard_overview: GetDashboardOverview
     query_dashboard_traces: QueryDashboardTraces
     get_dashboard_trace_detail: GetTraceDetail
@@ -64,26 +106,46 @@ class ApplicationServices:
     query_dashboard_retrieval_runs: QueryDashboardRetrievalRuns
     query_dashboard_api_requests: QueryDashboardAPIRequests
     query_dashboard_audit_events: QueryDashboardAuditEvents
+    
     get_audit_event: GetAuditEvent
     list_audit_events: ListAuditEvents
     get_entity_audit_history: GetEntityAuditHistory
     get_trace_audit_events: GetTraceAuditEvents
+    
     get_escalation: GetEscalation
     list_escalations: ListEscalations
     list_conversation_escalations: ListConversationEscalations
+    get_customer_escalation_status: GetCustomerEscalationStatus
     update_escalation: UpdateEscalation
+    
     create_ticket: CreateTicket
     add_ticket_comment: AddTicketComment
     get_ticket: GetTicket
     list_tickets: ListTickets
     update_ticket: UpdateTicket
+    
     submit_feedback: SubmitFeedback
     get_feedback: GetFeedback
     list_feedback: ListFeedback
     review_feedback: ReviewFeedback
+    
     ai_pipeline_factory: AIPipelineFactory
     base_llm_provider: LLMProvider
     orchestration_observer: OrchestrationObserver
+    
+    list_knowledge_documents: ListKnowledgeDocuments
+    get_knowledge_document: GetKnowledgeDocument
+    list_knowledge_versions: ListKnowledgeVersions
+    get_knowledge_version: GetKnowledgeVersion
+
+    create_knowledge_document: CreateKnowledgeDocument
+    create_knowledge_version: CreateKnowledgeVersion
+    process_knowledge_version: ProcessKnowledgeVersion
+    embed_knowledge_version: EmbedKnowledgeVersion
+    publish_knowledge_version: PublishKnowledgeVersion
+    archive_knowledge_document: ArchiveKnowledgeDocument
+    upload_knowledge_document: UploadKnowledgeDocument
+    upload_knowledge_version: UploadKnowledgeVersion
 
 class ApplicationConfigurationError(RuntimeError):
     """
@@ -143,17 +205,55 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         No Session is opened until the UoW context manager is entered.
         """
         return SqlAlchemyUnitOfWork(session_factory=session_factory)
-
-    process_customer_message = ProcessCustomerMessage(
-        uow_factory=uow_factory,
-        pipeline_factory=pipeline_factory,
-        embedding_provider=embedding_services.provider,
-        embedding_input_descriptor=embedding_input_builder.descriptor,
-        retrieval_profile=retrieval_profile,
-        grounding_context_budget=grounding_budget,
-    )
     
+    def knowledge_uow_factory() -> SQLAlchemyKnowledgeUnitOfWork:
+        """
+        Create a fresh knowledge-specific transactional boundary.
+
+        This UoW exposes documents, versions, chunks, embeddings, embedding_calls, and audit_events.
+        """
+        return SQLAlchemyKnowledgeUnitOfWork(session_factory=session_factory)
+    
+    create_conversation = CreateConversation(uow_factory=uow_factory)
+    list_conversations = ListConversations(uow_factory=uow_factory)
+    get_conversation = GetConversation(uow_factory=uow_factory)
+    get_conversation_messages = GetConversationMessages(uow_factory=uow_factory)
+    
+    close_conversation = CloseConversation(uow_factory=uow_factory)
+    password_hasher = Argon2PasswordHasher()
+    token_service = TokenService(
+        TokenServiceConfig(
+            secret_key=settings.auth_jwt_secret,
+            issuer=settings.auth_jwt_issuer,
+            audience=settings.auth_jwt_audience,
+            access_token_ttl=settings.auth_access_token_ttl,
+            clock_skew_seconds=settings.auth_clock_skew_seconds,
+        )
+    )
+
+    register_user = RegisterUser(
+        uow_factory=uow_factory,
+        password_hasher=password_hasher,
+        token_service=token_service,
+        refresh_token_ttl=settings.auth_refresh_token_ttl,
+    )
+
+    login_user = LoginUser(
+        uow_factory=uow_factory,
+        password_hasher=password_hasher,
+        token_service=token_service,
+        refresh_token_ttl=settings.auth_refresh_token_ttl,
+        maximum_failed_attempts=settings.auth_login_max_failed_attempts,
+        lockout_duration=settings.auth_login_lockout_duration,
+    )
+
+    refresh_session = RefreshSession(uow_factory=uow_factory, token_service=token_service)
+    logout_user = LogoutUser(uow_factory=uow_factory)
+    authenticate_access_token = AuthenticateAccessToken(uow_factory=uow_factory, token_service=token_service)
+    get_current_user = GetCurrentUser(uow_factory=uow_factory)
+    update_user_access = UpdateUserAccess(uow_factory=uow_factory)
     record_api_request = RecordAPIRequest(uow_factory=uow_factory)
+    
     get_dashboard_overview = GetDashboardOverview(uow_factory=uow_factory)
     query_dashboard_traces = QueryDashboardTraces(uow_factory=uow_factory)
     get_dashboard_trace_detail = GetTraceDetail(uow_factory=uow_factory)
@@ -161,27 +261,62 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
     query_dashboard_retrieval_runs = QueryDashboardRetrievalRuns(uow_factory=uow_factory)
     query_dashboard_api_requests = QueryDashboardAPIRequests(uow_factory=uow_factory)
     query_dashboard_audit_events = QueryDashboardAuditEvents(uow_factory=uow_factory)
+    
     get_audit_event = GetAuditEvent(uow_factory=uow_factory)
     list_audit_events = ListAuditEvents(uow_factory=uow_factory)
     get_entity_audit_history = GetEntityAuditHistory(uow_factory=uow_factory)
     get_trace_audit_events = GetTraceAuditEvents(uow_factory=uow_factory)
+    
     get_escalation = GetEscalation(uow_factory=uow_factory)
     list_escalations = ListEscalations(uow_factory=uow_factory)
     list_conversation_escalations = ListConversationEscalations(uow_factory=uow_factory)
+    get_customer_escalation_status = GetCustomerEscalationStatus(uow_factory=uow_factory)
     update_escalation = UpdateEscalation(uow_factory=uow_factory)
+    
     create_ticket = CreateTicket(uow_factory=uow_factory)
     add_ticket_comment = AddTicketComment(uow_factory=uow_factory)
     get_ticket = GetTicket(uow_factory=uow_factory)
     list_tickets = ListTickets(uow_factory=uow_factory)
     update_ticket = UpdateTicket(uow_factory=uow_factory)
+    
     submit_feedback = SubmitFeedback(uow_factory=uow_factory)
     get_feedback = GetFeedback(uow_factory=uow_factory)
     list_feedback = ListFeedback(uow_factory=uow_factory)
     review_feedback = ReviewFeedback(uow_factory=uow_factory)
+    
+    knowledge_application = create_knowledge_application_components(
+        uow_factory=knowledge_uow_factory,
+        embedding_provider=embedding_services.provider,
+        embedding_input_builder=embedding_input_builder,
+        embedding_batch_size=settings.embedding_batch_size,
+        knowledge_upload_max_bytes=settings.knowledge_upload_max_bytes,
+    )
+    
+    process_customer_message = ProcessCustomerMessage(
+        uow_factory=uow_factory,
+        pipeline_factory=pipeline_factory,
+        embedding_provider=embedding_services.provider,
+        embedding_input_descriptor=embedding_input_builder.descriptor,
+        retrieval_profile=retrieval_profile,
+        grounding_context_budget=grounding_budget,
+        knowledge_application=knowledge_application,
+    )
 
     return ApplicationServices(
+        create_conversation=create_conversation,
+        list_conversations=list_conversations,
+        get_conversation=get_conversation,
+        get_conversation_messages=get_conversation_messages,
         process_customer_message=process_customer_message,
+        close_conversation = close_conversation,
         record_api_request=record_api_request,
+        register_user=register_user,
+        login_user=login_user,
+        refresh_session=refresh_session,
+        logout_user=logout_user,
+        authenticate_access_token=authenticate_access_token,
+        get_current_user=get_current_user,
+        update_user_access=update_user_access,
         get_dashboard_overview=get_dashboard_overview,
         query_dashboard_traces=query_dashboard_traces,
         get_dashboard_trace_detail=get_dashboard_trace_detail,
@@ -196,6 +331,7 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         get_escalation=get_escalation,
         list_escalations=list_escalations,
         list_conversation_escalations=list_conversation_escalations,
+        get_customer_escalation_status=get_customer_escalation_status,
         update_escalation=update_escalation,
         create_ticket=create_ticket,
         add_ticket_comment=add_ticket_comment,
@@ -209,6 +345,18 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         ai_pipeline_factory=pipeline_factory,
         base_llm_provider=resolved_provider,
         orchestration_observer=resolved_observer,
+        list_knowledge_documents=knowledge_application.list_documents,
+        get_knowledge_document=knowledge_application.get_document,
+        list_knowledge_versions=knowledge_application.list_versions,
+        get_knowledge_version=knowledge_application.get_version,
+        create_knowledge_document=knowledge_application.create_document,
+        create_knowledge_version=knowledge_application.create_version,
+        process_knowledge_version=knowledge_application.process_version,
+        embed_knowledge_version=knowledge_application.embed_version,
+        publish_knowledge_version=knowledge_application.publish_version,
+        archive_knowledge_document=knowledge_application.archive_document,
+        upload_knowledge_document=knowledge_application.upload_document,
+        upload_knowledge_version=knowledge_application.upload_version,
     )
 
 def _resolve_provider(*, settings: Settings, base_provider: LLMProvider | None) -> LLMProvider:

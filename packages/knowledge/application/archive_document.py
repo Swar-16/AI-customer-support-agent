@@ -4,35 +4,24 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
 
+from packages.application.audit.models import RecordAuditEventCommand
+from packages.application.audit.recorder import AuditRecorder
+from packages.knowledge.application.exceptions import ArchiveKnowledgeDocumentDoesNotExistError, KnowledgeArchiveConflictError
+from packages.knowledge.application.mutation_context import KnowledgeMutationContext
 from packages.knowledge.domain.document import KnowledgeDocument
 from packages.knowledge.domain.enums import KnowledgeDocumentStatus
 from packages.knowledge.domain.version import KnowledgeDocumentVersion
 from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
-from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
-from packages.application.audit.recorder import AuditRecorder
 
-
-# Application errors
-class ArchiveKnowledgeDocumentError(RuntimeError):
-    """Base application error for document archival coordination."""
-
-class KnowledgeDocumentDoesNotExistError(ArchiveKnowledgeDocumentError):
-    def __init__(self, document_id: UUID) -> None:
-        self.document_id = document_id
-        super().__init__(f"Knowledge document does not exist: {document_id}")
-
-class KnowledgeArchiveConflictError(ArchiveKnowledgeDocumentError):
-    """
-    Raised when persisted cross-entity state violates assumptions required to archive a logical knowledge document safely.
-    """
-
-
-# Contracts
 @dataclass(frozen=True, slots=True)
 class ArchiveKnowledgeDocumentCommand:
+    context: KnowledgeMutationContext
     document_id: UUID
 
     def __post_init__(self) -> None:
+        if not isinstance(self.context, KnowledgeMutationContext):
+            raise TypeError("context must be a KnowledgeMutationContext.")
+
         if not isinstance(self.document_id, UUID):
             raise TypeError("document_id must be a UUID.")
 
@@ -43,16 +32,12 @@ class ArchiveKnowledgeDocumentResult:
     archived_at: datetime
     superseded_version_id: UUID | None
 
-
-# Application service
 class ArchiveKnowledgeDocument:
     """
     Archive a logical knowledge document atomically.
 
-    If the document currently has a published version, that version is superseded within the same
-    transaction before the parent document becomes archived.
-
-    The application service coordinates the aggregate while the domain entities continue to own their individual lifecycle transitions.
+    A currently published version is superseded in the same transaction. The document mutation, 
+    version supersession and immutable audit event either all commit or all roll back.
     """
     def __init__(self, *, uow_factory: KnowledgeUnitOfWorkFactory) -> None:
         if not callable(uow_factory):
@@ -65,39 +50,36 @@ class ArchiveKnowledgeDocument:
             raise TypeError("command must be an ArchiveKnowledgeDocumentCommand.")
 
         with self._uow_factory() as uow:
-            # 1. Lock aggregate root.
-            # Publication also locks this same document row, which means publication and archival are serialized against one another.
+            # Publication and version creation lock the same parent row, serializing all aggregate lifecycle mutations.
             document = uow.documents.get_by_id_for_update(command.document_id)
             if document is None:
-                raise KnowledgeDocumentDoesNotExistError(command.document_id)
+                raise ArchiveKnowledgeDocumentDoesNotExistError(command.document_id)
 
             occurred_at = datetime.now(timezone.utc)
-            
+            published = uow.versions.get_published_for_document(document.id)
+            published_version_id = published.id if published is not None else None
+            superseded_version_id: UUID | None = None
             before_state = {
                 "status": document.status.value,
                 "archived_at": document.archived_at.isoformat() if document.archived_at is not None else None,
+                "published_version_id": str(published_version_id) if published_version_id is not None else None,
             }
-            
-            # 2. Resolve current active publication.
-            published = (uow.versions.get_published_for_document(document.id))
-            superseded_version_id: UUID | None = None
 
-            # 3. Remove published child from active retrieval state first.
             if published is not None:
                 self._validate_published_version(document=document, version=published)
                 superseded = published.supersede(occurred_at=occurred_at)
                 uow.versions.save(superseded)
-                # Make the supersession visible to subsequent statements within the transaction before archiving the parent.
                 uow.flush()
-                superseded_version_id = published.id
 
-            # 4. Delegate parent lifecycle validation to domain.
-            # archive() itself handles:  deleted documents, already archived documents, transition validity
+                superseded_version_id = superseded.id
+
+            # Domain rules reject deleted or already archived documents.
             archived = document.archive(occurred_at=occurred_at)
             uow.documents.save(archived)
             uow.flush()
-            
-            if archived.archived_at is None:
+
+            archived_at = archived.archived_at
+            if archived_at is None:
                 raise KnowledgeArchiveConflictError("Archived document did not contain archived_at.")
 
             AuditRecorder(repository=uow.audit_events).record(
@@ -106,27 +88,29 @@ class ArchiveKnowledgeDocument:
                     entity_type="knowledge_document",
                     entity_id=archived.id,
                     action="archived",
-                    actor=AuditActor(actor_type=AuditActorType.SYSTEM),
+                    actor=command.context.actor,
+                    trace_id=command.context.trace_id,
                     before_state=before_state,
                     after_state={
                         "status": archived.status.value,
-                        "archived_at": archived.archived_at.isoformat(),
+                        "archived_at": archived_at.isoformat(),
+                        "published_version_id": None,
                     },
-                    metadata={
-                        "superseded_version_id": str(superseded_version_id) if superseded_version_id is not None else None,
-                    },
+                    metadata={"superseded_version_id": str(superseded_version_id) if superseded_version_id is not None else None,},
                     occurred_at=occurred_at,
                 )
             )
-            
+
+            result = ArchiveKnowledgeDocumentResult(
+                document_id=archived.id,
+                status=archived.status,
+                archived_at=archived_at,
+                superseded_version_id=superseded_version_id,
+            )
+
             uow.commit()
 
-        return ArchiveKnowledgeDocumentResult(
-            document_id=archived.id,
-            status=archived.status,
-            archived_at=archived.archived_at,
-            superseded_version_id=superseded_version_id,
-        )
+        return result
 
     @staticmethod
     def _validate_published_version(*, document: KnowledgeDocument, version: KnowledgeDocumentVersion) -> None:

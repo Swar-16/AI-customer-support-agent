@@ -24,6 +24,7 @@ from packages.database.repositories.ai.reranker_call_repository import RerankerC
 from packages.database.repositories.dashboard import DashboardOverviewRepository, DashboardTraceDetailRepository, DashboardTraceRepository
 from packages.database.repositories.dashboard import DashboardLLMCallRepository, DashboardRetrievalRunRepository, DashboardAPIRequestRepository
 from packages.database.repositories.dashboard import DashboardAuditEventRepository
+from packages.database.repositories.support.auth_repository import AuthRepository
 from packages.database.session import SessionLocal
 
 SessionFactory: TypeAlias = sessionmaker[Session]
@@ -55,6 +56,7 @@ class SqlAlchemyUnitOfWork:
         self.audit_events: AuditEventRepository | None = None
         
         self.users: UserRepository | None = None
+        self.auth: AuthRepository | None = None
         self.conversations: ConversationRepository | None = None
         self.messages: MessageRepository | None = None
         self.escalations: EscalationRepository | None = None
@@ -93,6 +95,7 @@ class SqlAlchemyUnitOfWork:
         self.audit_events = AuditEventRepository(self.session)
 
         self.users = UserRepository(self.session)
+        self.auth = AuthRepository(self.session)
         self.conversations = ConversationRepository(self.session)
         self.messages = MessageRepository(self.session)
         self.escalations = EscalationRepository(self.session)
@@ -183,6 +186,7 @@ class SqlAlchemyUnitOfWork:
         self.audit_events = None
         
         self.users = None
+        self.auth = None
         self.conversations = None
         self.messages = None
         self.escalations = None

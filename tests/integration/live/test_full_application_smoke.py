@@ -15,6 +15,7 @@ from packages.database.models.support.conversation import ConversationModel
 from packages.database.models.support.message import MessageModel
 from packages.database.models.support.user import UserModel
 from packages.database.session import create_session_factory
+from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
 
 
 pytestmark = [
@@ -160,12 +161,19 @@ def test_full_application_with_real_groq_and_postgres(live_settings, live_sessio
     services = create_application(settings=smoke_settings, session_factory=live_session_factory)
     conversation_id = live_conversation["conversation_id"]
     trace_id = uuid7()
+    
+    principal = AuthenticatedPrincipal(
+        user_id=live_conversation["user_id"],
+        session_id=uuid7(),
+        role=AuthRole.CUSTOMER,
+    )
 
     # Execute real application workflow
     result = services.process_customer_message.execute(
         ProcessCustomerMessageCommand(
             conversation_id=conversation_id,
             customer_message="I was charged twice for order ORD-123. Please help me understand what happened.",
+            principal=principal,
             trace_id=trace_id,
         )
     )

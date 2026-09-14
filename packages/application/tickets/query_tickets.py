@@ -7,6 +7,7 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Any, Mapping
 
+from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
 from packages.database.models.support.ticket import TicketModel
 from packages.database.models.support.ticket_comment import TicketCommentModel
 from packages.database.repositories.support.ticket_comment_repository import TicketCommentRepository
@@ -14,7 +15,6 @@ from packages.database.repositories.support.ticket_repository import TicketRepos
 from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork,]
-AUTHORIZED_REQUESTER_ROLES = frozenset({"customer", "support_agent", "admin",})
 
 class TicketQueryError(RuntimeError):
     """Base application error for ticket queries."""
@@ -98,31 +98,29 @@ class TicketDetail:
 
 @dataclass(frozen=True, slots=True)
 class GetTicketQuery:
-    """Retrieve one ticket for an authenticated requester."""
+    """Retrieve one ticket for an authenticated principal."""
     ticket_id: uuid.UUID
-    requester_id: uuid.UUID
-    requester_role: str
+    principal: AuthenticatedPrincipal
+
     def __post_init__(self) -> None:
         _validate_uuid(self.ticket_id, field_name="ticket_id")
-        _validate_uuid(self.requester_id, field_name="requester_id")
-        object.__setattr__(self, "requester_role", _normalize_requester_role(self.requester_role))
+        if not isinstance(self.principal, AuthenticatedPrincipal):
+            raise TypeError("principal must be an AuthenticatedPrincipal")
 
 @dataclass(frozen=True, slots=True)
 class ListTicketsQuery:
     """
-    Retrieve customer-owned tickets or an agent/admin queue.
+    Retrieve customer-owned tickets or a staff queue.
 
-    Customer behavior:
-    - results are always restricted to requester_id;
-    - assignment filters are prohibited;
-    - internal metadata is excluded.
+    Customer:
+    - always restricted to principal.user_id;
+    - cannot request queue or assignment filters;
+    - never receives internal metadata.
 
-    Agent/admin behavior:
-    - active_only=True returns priority-ordered work;
-    - active_only=False returns recent ticket history.
+    Support agent/admin:
+    - may inspect operational queues and history.
     """
-    requester_id: uuid.UUID
-    requester_role: str
+    principal: AuthenticatedPrincipal
     active_only: bool = False
     status: str | None = None
     priority: str | None = None
@@ -133,8 +131,9 @@ class ListTicketsQuery:
     offset: int = 0
 
     def __post_init__(self) -> None:
-        _validate_uuid(self.requester_id, field_name="requester_id")
-        requester_role = _normalize_requester_role(self.requester_role)
+        if not isinstance(self.principal, AuthenticatedPrincipal):
+            raise TypeError("principal must be an AuthenticatedPrincipal")
+
         if not isinstance(self.active_only, bool):
             raise TypeError("active_only must be a boolean")
 
@@ -162,32 +161,31 @@ class ListTicketsQuery:
         if self.offset < 0:
             raise ValueError("offset must not be negative")
 
-        status = _normalize_optional_text(self.status, field_name="status")
-        priority = _normalize_optional_text(self.priority, field_name="priority")
-        category = _normalize_optional_text(self.category, field_name="category")
-        if self.active_only and status is not None:
+        normalized_status = _normalize_optional_text(self.status, field_name="status")
+        normalized_priority = _normalize_optional_text(self.priority, field_name="priority")
+        normalized_category = _normalize_optional_text(self.category, field_name="category")
+        if self.active_only and normalized_status is not None:
             raise ValueError("status cannot be supplied when active_only=True")
 
-        if requester_role == "customer":
+        if self.principal.role is AuthRole.CUSTOMER:
             if self.assigned_agent_id is not None:
-                raise TicketAccessDeniedError("Customers cannot filter tickets by assigned agent")
+                raise TicketAccessDeniedError("Customers cannot filter tickets by assigned agent.")
 
             if self.unassigned_only:
-                raise TicketAccessDeniedError("Customers cannot request the unassigned support queue")
+                raise TicketAccessDeniedError("Customers cannot request the unassigned support queue.")
 
             if self.active_only:
-                raise TicketAccessDeniedError("Customers cannot request the support work queue")
+                raise TicketAccessDeniedError("Customers cannot request the support work queue.")
 
-            if priority is not None:
-                raise TicketAccessDeniedError("Customers cannot filter tickets by internal priority")
+            if normalized_priority is not None:
+                raise TicketAccessDeniedError("Customers cannot filter tickets by internal priority.")
 
-            if category is not None:
-                raise TicketAccessDeniedError("Customers cannot filter tickets by internal category")
+            if normalized_category is not None:
+                raise TicketAccessDeniedError("Customers cannot filter tickets by internal category.")
 
-        object.__setattr__(self, "requester_role", requester_role)
-        object.__setattr__(self, "status", status)
-        object.__setattr__(self, "priority", priority)
-        object.__setattr__(self, "category", category)
+        object.__setattr__(self, "status", normalized_status)
+        object.__setattr__(self, "priority", normalized_priority)
+        object.__setattr__(self, "category", normalized_category)
 
 @dataclass(frozen=True, slots=True)
 class TicketPage:
@@ -212,18 +210,17 @@ class GetTicket:
 
         with self._uow_factory() as uow:
             tickets, comments = _require_repositories(uow)
-            _validate_requester(requester_id=query.requester_id, requester_role=query.requester_role, uow=uow)
+            _validate_requester(principal=query.principal, uow=uow)
             ticket = tickets.get_by_id(query.ticket_id)
             if ticket is None:
                 raise TicketDoesNotExistError(query.ticket_id)
 
-            _authorize_ticket_access(ticket=ticket, requester_id=query.requester_id, requester_role=query.requester_role)
-            include_internal = query.requester_role in {"support_agent", "admin"}
+            _authorize_ticket_access(ticket=ticket, principal=query.principal)
+            include_internal = query.principal.role in {AuthRole.SUPPORT_AGENT, AuthRole.ADMIN}
             comment_records = comments.list_for_ticket(ticket.id, include_internal=include_internal, limit=500)
-
             return TicketDetail(
                 ticket=_to_ticket_view(ticket, include_metadata=include_internal),
-                comments=tuple(_to_comment_view(comment, include_metadata=include_internal) for comment in comment_records)
+                comments=tuple(_to_comment_view(comment, include_metadata=include_internal) for comment in comment_records),
             )
 
 class ListTickets:
@@ -236,37 +233,45 @@ class ListTickets:
             raise TypeError("query must be a ListTicketsQuery")
 
         fetch_limit = query.limit + 1
+        principal = query.principal
         with self._uow_factory() as uow:
             tickets, _ = _require_repositories(uow)
-            _validate_requester(requester_id=query.requester_id, requester_role=query.requester_role, uow=uow)
-            include_metadata = query.requester_role in {"support_agent", "admin"}
-            if query.requester_role == "customer":
-                records = tickets.list_for_customer(query.requester_id, status=query.status, limit=fetch_limit, offset=query.offset)
-
-            elif query.active_only:
-                records = tickets.list_active_queue(
-                    priority=query.priority,
-                    category=query.category,
-                    assigned_agent_id=query.assigned_agent_id,
-                    unassigned_only=query.unassigned_only,
+            _validate_requester(principal=principal, uow=uow)
+            include_metadata = principal.role in {AuthRole.SUPPORT_AGENT, AuthRole.ADMIN,}
+            if principal.role is AuthRole.CUSTOMER:
+                records = tickets.list_for_customer(
+                    principal.user_id,
+                    status=query.status,
                     limit=fetch_limit,
                     offset=query.offset,
                 )
+
+            elif principal.role in {AuthRole.SUPPORT_AGENT, AuthRole.ADMIN,}:
+                if query.active_only:
+                    records = tickets.list_active_queue(
+                        priority=query.priority,
+                        category=query.category,
+                        assigned_agent_id=query.assigned_agent_id,
+                        unassigned_only=query.unassigned_only,
+                        limit=fetch_limit,
+                        offset=query.offset,
+                    )
+                else:
+                    records = tickets.list_recent(
+                        status=query.status,
+                        priority=query.priority,
+                        category=query.category,
+                        assigned_agent_id=query.assigned_agent_id,
+                        unassigned_only=query.unassigned_only,
+                        limit=fetch_limit,
+                        offset=query.offset,
+                    )
 
             else:
-                records = tickets.list_recent(
-                    status=query.status,
-                    priority=query.priority,
-                    category=query.category,
-                    assigned_agent_id=query.assigned_agent_id,
-                    unassigned_only=query.unassigned_only,
-                    limit=fetch_limit,
-                    offset=query.offset,
-                )
+                raise TicketAccessDeniedError("The principal role cannot query tickets.")
 
             has_more = len(records) > query.limit
             visible_records = records[:query.limit]
-
             return TicketPage(
                 items=tuple(_to_ticket_view(ticket, include_metadata=include_metadata) for ticket in visible_records),
                 limit=query.limit,
@@ -298,28 +303,29 @@ def _require_repositories(uow: SqlAlchemyUnitOfWork) -> tuple[TicketRepository, 
 
     return (uow.tickets, uow.ticket_comments,)
 
-def _validate_requester(*, requester_id: uuid.UUID, requester_role: str, uow: SqlAlchemyUnitOfWork) -> None:
+def _validate_requester(*, principal: AuthenticatedPrincipal, uow: SqlAlchemyUnitOfWork) -> None:
     if uow.users is None:
         raise TicketQueryContractError("UserRepository unavailable")
 
-    requester = uow.users.get_by_id(requester_id)
+    requester = uow.users.get_by_id(principal.user_id)
     if requester is None:
-        raise TicketRequesterDoesNotExistError(requester_id)
+        raise TicketRequesterDoesNotExistError(principal.user_id)
 
     if requester.status != "active":
-        raise TicketRequesterNotActiveError(f"Requester {requester_id} is not active: status={requester.status!r}")
+        raise TicketRequesterNotActiveError(f"Requester {principal.user_id} is not active: status={requester.status!r}")
 
-    if requester.role != requester_role:
-        raise TicketRequesterRoleMismatchError(f"Declared requester role {requester_role!r} does not match persisted role {requester.role!r}")
+    if requester.role != principal.role.value:
+        raise TicketRequesterRoleMismatchError(f"Principal role {principal.role.value!r} does not match persisted role {requester.role!r}")
 
-def _authorize_ticket_access(*, ticket: TicketModel, requester_id: uuid.UUID, requester_role: str) -> None:
-    if requester_role in {"support_agent", "admin",}:
+def _authorize_ticket_access(*, ticket: TicketModel, principal: AuthenticatedPrincipal) -> None:
+    if principal.role in {AuthRole.SUPPORT_AGENT, AuthRole.ADMIN,}:
         return
 
-    if requester_role == "customer" and ticket.customer_id == requester_id:
+    if principal.role is AuthRole.CUSTOMER and ticket.customer_id == principal.user_id:
         return
 
-    raise TicketAccessDeniedError(f"Requester {requester_id} cannot access ticket {ticket.id}")
+    # Conceal another customer's ticket existence.
+    raise TicketDoesNotExistError(ticket.id)
 
 def _to_ticket_view(ticket: TicketModel, *, include_metadata: bool) -> TicketView:
     if ticket.id is None:
@@ -373,17 +379,6 @@ def _to_comment_view(comment: TicketCommentModel, *, include_metadata: bool) -> 
 def _validate_uuid(value: uuid.UUID, *, field_name: str) -> None:
     if not isinstance(value, uuid.UUID):
         raise TypeError(f"{field_name} must be a UUID")
-
-def _normalize_requester_role(role: str) -> str:
-    if not isinstance(role, str):
-        raise TypeError("requester_role must be a string")
-
-    normalized = role.strip().lower()
-    if normalized not in AUTHORIZED_REQUESTER_ROLES:
-        expected = ", ".join(sorted(AUTHORIZED_REQUESTER_ROLES))
-        raise ValueError(f"requester_role must be one of: {expected}")
-
-    return normalized
 
 def _normalize_optional_text(value: str | None, *, field_name: str) -> str | None:
     if value is None:

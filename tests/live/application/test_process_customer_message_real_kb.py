@@ -27,6 +27,10 @@ from packages.database.models.support.conversation import (
 )
 from packages.database.models.support.message import MessageModel
 from packages.database.models.support.user import UserModel
+from packages.application.auth.models import (
+    AuthenticatedPrincipal,
+    AuthRole,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +341,12 @@ def test_customer_message_uses_real_kb_jina_and_groq(
     )
 
     trace_id = uuid7()
+    
+    principal = AuthenticatedPrincipal(
+        user_id=live_conversation["user_id"],
+        session_id=uuid7(),
+        role=AuthRole.CUSTOMER,
+    )
 
     result = (
         live_application
@@ -347,6 +357,7 @@ def test_customer_message_uses_real_kb_jina_and_groq(
                 customer_message=(
                     LIVE_CUSTOMER_MESSAGE
                 ),
+                principal=principal,
                 trace_id=trace_id,
             )
         )

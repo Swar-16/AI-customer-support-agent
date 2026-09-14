@@ -16,7 +16,7 @@ from packages.database.models.support.conversation import (
 )
 from packages.database.models.support.feedback import FeedbackModel
 from packages.database.models.support.message import MessageModel
-from packages.database.models.support.user import UserModel
+# from packages.database.models.support.user import UserModel
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,67 +25,40 @@ class FeedbackTestContext:
     other_customer_id: uuid.UUID
     agent_id: uuid.UUID
     admin_id: uuid.UUID
-
     conversation_id: uuid.UUID
-
     customer_message_id: uuid.UUID
     assistant_message_id: uuid.UUID
     ai_run_id: uuid.UUID
+    customer_headers: dict[str, str]
+    other_customer_headers: dict[str, str]
+    agent_headers: dict[str, str]
+    admin_headers: dict[str, str]
 
 
 @pytest.fixture()
 def feedback_context(
-    clean_database,
     test_session_factory,
+    customer_identity,
+    support_agent_identity,
+    admin_identity,
+    authenticated_identity_factory,
 ) -> FeedbackTestContext:
-    customer_id = uuid7()
-    other_customer_id = uuid7()
-    agent_id = uuid7()
-    admin_id = uuid7()
+    other_customer_identity = authenticated_identity_factory(
+        role="customer",
+        email="other-feedback-customer@example.com",
+    )
 
     conversation_id = uuid7()
-
     customer_message_id = uuid7()
     assistant_message_id = uuid7()
     ai_run_id = uuid7()
-
     completed_at = datetime.now(timezone.utc)
 
     with test_session_factory() as session:
-        session.add_all(
-            [
-                UserModel(
-                    id=customer_id,
-                    external_id="feedback-customer",
-                    role="customer",
-                    status="active",
-                ),
-                UserModel(
-                    id=other_customer_id,
-                    external_id="other-feedback-customer",
-                    role="customer",
-                    status="active",
-                ),
-                UserModel(
-                    id=agent_id,
-                    external_id="feedback-agent",
-                    role="support_agent",
-                    status="active",
-                ),
-                UserModel(
-                    id=admin_id,
-                    external_id="feedback-admin",
-                    role="admin",
-                    status="active",
-                ),
-            ]
-        )
-        session.flush()
-
         session.add(
             ConversationModel(
                 id=conversation_id,
-                user_id=customer_id,
+                user_id=customer_identity.user_id,
             )
         )
         session.flush()
@@ -135,14 +108,22 @@ def feedback_context(
         session.commit()
 
     return FeedbackTestContext(
-        customer_id=customer_id,
-        other_customer_id=other_customer_id,
-        agent_id=agent_id,
-        admin_id=admin_id,
+        customer_id=customer_identity.user_id,
+        other_customer_id=other_customer_identity.user_id,
+        agent_id=support_agent_identity.user_id,
+        admin_id=admin_identity.user_id,
         conversation_id=conversation_id,
         customer_message_id=customer_message_id,
         assistant_message_id=assistant_message_id,
         ai_run_id=ai_run_id,
+        customer_headers=customer_identity.authorization_headers,
+        other_customer_headers=(
+            other_customer_identity.authorization_headers
+        ),
+        agent_headers=(
+            support_agent_identity.authorization_headers
+        ),
+        admin_headers=admin_identity.authorization_headers,
     )
 
 
@@ -152,7 +133,6 @@ def _feedback_payload(
     rating: int = 2,
 ) -> dict[str, Any]:
     return {
-        "customer_id": str(context.customer_id),
         "response_message_id": str(
             context.assistant_message_id
         ),
@@ -160,7 +140,8 @@ def _feedback_payload(
         "rating": rating,
         "helpful": False,
         "comment": (
-            "The answer did not explain the exact eligibility period."
+            "The answer did not explain the exact "
+            "eligibility period."
         ),
         "reason_codes": [
             "INCOMPLETE_ANSWER",
@@ -178,6 +159,7 @@ def _submit_feedback(
 ) -> dict[str, Any]:
     response = client.post(
         f"/v1/conversations/{context.conversation_id}/feedback",
+        headers=context.customer_headers,
         json=_feedback_payload(context),
     )
 
@@ -243,11 +225,14 @@ class TestFeedbackSubmission:
         first = client.post(
             f"/v1/conversations/"
             f"{feedback_context.conversation_id}/feedback",
+            headers=feedback_context.customer_headers,
             json=_feedback_payload(feedback_context),
         )
+
         second = client.post(
             f"/v1/conversations/"
             f"{feedback_context.conversation_id}/feedback",
+            headers=feedback_context.customer_headers,
             json=_feedback_payload(feedback_context),
         )
 
@@ -272,6 +257,7 @@ class TestFeedbackSubmission:
         first = client.post(
             f"/v1/conversations/"
             f"{feedback_context.conversation_id}/feedback",
+            headers=feedback_context.customer_headers,
             json=_feedback_payload(feedback_context),
         )
 
@@ -286,6 +272,7 @@ class TestFeedbackSubmission:
         second = client.post(
             f"/v1/conversations/"
             f"{feedback_context.conversation_id}/feedback",
+            headers=feedback_context.customer_headers,
             json=conflicting_payload,
         )
 
@@ -309,6 +296,7 @@ class TestFeedbackSubmission:
         response = client.post(
             f"/v1/conversations/"
             f"{feedback_context.conversation_id}/feedback",
+            headers=feedback_context.customer_headers,
             json=payload,
         )
 
@@ -322,6 +310,23 @@ class TestFeedbackSubmission:
         client: TestClient,
         feedback_context: FeedbackTestContext,
     ) -> None:
+        response = client.post(
+            f"/v1/conversations/"
+            f"{feedback_context.conversation_id}/feedback",
+            headers=feedback_context.other_customer_headers,
+            json=_feedback_payload(feedback_context),
+        )
+
+        assert response.status_code == 403
+        assert response.json()["error"]["code"] == (
+            "FEEDBACK_ACCESS_DENIED"
+        )
+        
+    def test_customer_id_input_is_rejected(
+        self,
+        client: TestClient,
+        feedback_context: FeedbackTestContext,
+    ) -> None:
         payload = _feedback_payload(feedback_context)
         payload["customer_id"] = str(
             feedback_context.other_customer_id
@@ -330,12 +335,13 @@ class TestFeedbackSubmission:
         response = client.post(
             f"/v1/conversations/"
             f"{feedback_context.conversation_id}/feedback",
+            headers=feedback_context.customer_headers,
             json=payload,
         )
 
-        assert response.status_code == 403
+        assert response.status_code == 422
         assert response.json()["error"]["code"] == (
-            "FEEDBACK_ACCESS_DENIED"
+            "INVALID_REQUEST"
         )
 
 
@@ -352,12 +358,7 @@ class TestFeedbackQueries:
 
         response = client.get(
             f"/v1/feedback/{submitted['feedback_id']}",
-            params={
-                "requester_id": str(
-                    feedback_context.customer_id
-                ),
-                "requester_role": "customer",
-            },
+            headers=feedback_context.customer_headers,
         )
 
         assert response.status_code == 200
@@ -382,17 +383,16 @@ class TestFeedbackQueries:
 
         response = client.get(
             f"/v1/feedback/{submitted['feedback_id']}",
-            params={
-                "requester_id": str(
-                    feedback_context.other_customer_id
-                ),
-                "requester_role": "customer",
-            },
+            headers=feedback_context.other_customer_headers,
         )
 
-        assert response.status_code == 403
+        # assert response.status_code == 403
+        # assert response.json()["error"]["code"] == (
+        #     "FEEDBACK_ACCESS_DENIED"
+        # )
+        assert response.status_code == 404
         assert response.json()["error"]["code"] == (
-            "FEEDBACK_ACCESS_DENIED"
+            "FEEDBACK_NOT_FOUND"
         )
 
     def test_agent_can_filter_dashboard_feedback(
@@ -407,9 +407,8 @@ class TestFeedbackQueries:
 
         response = client.get(
             "/v1/feedback",
+            headers=feedback_context.agent_headers,
             params={
-                "requester_id": str(feedback_context.agent_id),
-                "requester_role": "support_agent",
                 "status": "pending",
                 "rating": 2,
                 "helpful": "false",
@@ -437,10 +436,7 @@ class TestFeedbackQueries:
     ) -> None:
         response = client.get(
             f"/v1/feedback/{uuid7()}",
-            params={
-                "requester_id": str(feedback_context.agent_id),
-                "requester_role": "support_agent",
-            },
+            headers=feedback_context.agent_headers,
         )
 
         assert response.status_code == 404
@@ -466,8 +462,9 @@ class TestFeedbackReview:
 
         reviewed = client.patch(
             f"/v1/feedback/{feedback_id}/review",
+            headers=feedback_context.agent_headers,
             json={
-                "reviewer_id": str(feedback_context.agent_id),
+                # "reviewer_id": str(feedback_context.agent_id),
                 "expected_row_version": submitted["row_version"],
                 "target_status": "reviewed",
             },
@@ -491,8 +488,9 @@ class TestFeedbackReview:
 
         actioned = client.patch(
             f"/v1/feedback/{feedback_id}/review",
+            headers=feedback_context.admin_headers,
             json={
-                "reviewer_id": str(feedback_context.admin_id),
+                # "reviewer_id": str(feedback_context.admin_id),
                 "expected_row_version": (
                     reviewed_body["row_version"]
                 ),
@@ -533,17 +531,16 @@ class TestFeedbackReview:
 
         response = client.patch(
             f"/v1/feedback/{submitted['feedback_id']}/review",
+            headers=feedback_context.customer_headers,
             json={
-                "reviewer_id": str(feedback_context.customer_id),
+                # "reviewer_id": str(feedback_context.customer_id),
                 "expected_row_version": submitted["row_version"],
                 "target_status": "reviewed",
             },
         )
 
         assert response.status_code == 403
-        assert response.json()["error"]["code"] == (
-            "FEEDBACK_ACCESS_DENIED"
-        )
+        assert response.json()["error"]["code"] == "FORBIDDEN"
 
     def test_stale_review_version_returns_409(
         self,
@@ -559,8 +556,9 @@ class TestFeedbackReview:
 
         first = client.patch(
             f"/v1/feedback/{feedback_id}/review",
+            headers=feedback_context.agent_headers,
             json={
-                "reviewer_id": str(feedback_context.agent_id),
+                # "reviewer_id": str(feedback_context.agent_id),
                 "expected_row_version": initial_version,
                 "target_status": "reviewed",
             },
@@ -570,8 +568,9 @@ class TestFeedbackReview:
 
         stale = client.patch(
             f"/v1/feedback/{feedback_id}/review",
+            headers=feedback_context.admin_headers,
             json={
-                "reviewer_id": str(feedback_context.admin_id),
+                # "reviewer_id": str(feedback_context.admin_id),
                 "expected_row_version": initial_version,
                 "target_status": "actioned",
                 "review_notes": "Corrective action completed.",

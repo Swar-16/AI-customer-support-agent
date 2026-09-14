@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
+from uuid6 import uuid7
 
 import pytest
 from sqlalchemy import select
@@ -55,9 +56,33 @@ from packages.knowledge.ingestion.chunking.models import (
     ChunkedDocument,
     ChunkSourceSpan,
 )
+from packages.application.auth.models import (
+    AuthenticatedPrincipal,
+    AuthRole,
+)
+from packages.knowledge.application.mutation_context import (
+    KnowledgeMutationContext,
+)
 
 
 UTC = timezone.utc
+
+def process_command(
+    version_id: UUID,
+) -> ProcessKnowledgeVersionCommand:
+    principal = AuthenticatedPrincipal(
+        user_id=uuid7(),
+        session_id=uuid7(),
+        role=AuthRole.ADMIN,
+    )
+
+    return ProcessKnowledgeVersionCommand(
+        context=KnowledgeMutationContext.from_admin(
+            principal=principal,
+            trace_id=uuid7(),
+        ),
+        version_id=version_id,
+    )
 
 
 # ===========================================================================
@@ -283,8 +308,8 @@ def seed_draft_version(
     fixture isolates ProcessKnowledgeVersion's integration boundary.
     """
 
-    document_id = uuid4()
-    version_id = uuid4()
+    document_id = uuid7()
+    version_id = uuid7()
 
     now = datetime.now(UTC)
 
@@ -390,9 +415,7 @@ class TestProcessKnowledgeVersionPersistence:
         )
 
         result = service.execute(
-            ProcessKnowledgeVersionCommand(
-                version_id=version_id,
-            )
+            process_command(version_id)
         )
 
         assert result.version_id == version_id
@@ -444,9 +467,7 @@ class TestProcessKnowledgeVersionPersistence:
         )
 
         service.execute(
-            ProcessKnowledgeVersionCommand(
-                version_id=version_id,
-            )
+            process_command(version_id)
         )
 
         with test_session_factory() as session:
@@ -496,9 +517,7 @@ class TestProcessKnowledgeVersionPersistence:
         )
 
         service.execute(
-            ProcessKnowledgeVersionCommand(
-                version_id=version_id,
-            )
+            process_command(version_id)
         )
 
         with test_session_factory() as session:
@@ -562,9 +581,7 @@ class TestProcessKnowledgeVersionPersistence:
         )
 
         service.execute(
-            ProcessKnowledgeVersionCommand(
-                version_id=version_id,
-            )
+            process_command(version_id)
         )
 
         with test_session_factory() as session:
@@ -600,9 +617,7 @@ class TestProcessKnowledgeVersionPersistence:
         )
 
         service.execute(
-            ProcessKnowledgeVersionCommand(
-                version_id=version_id,
-            )
+            process_command(version_id)
         )
 
         with test_session_factory() as session:
@@ -639,9 +654,7 @@ class TestKnowledgePersistenceRoundTrip:
         )
 
         service.execute(
-            ProcessKnowledgeVersionCommand(
-                version_id=version_id,
-            )
+            process_command(version_id)
         )
 
         with SQLAlchemyKnowledgeUnitOfWork(

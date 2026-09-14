@@ -20,7 +20,9 @@ from packages.database.unit_of_work.knowledge import (
 from packages.knowledge.application.archive_document import (
     ArchiveKnowledgeDocument,
     ArchiveKnowledgeDocumentCommand,
-    KnowledgeDocumentDoesNotExistError,
+)
+from packages.knowledge.application.exceptions import (
+    ArchiveKnowledgeDocumentDoesNotExistError,
 )
 from packages.knowledge.domain.enums import (
     KnowledgeDocumentStatus,
@@ -29,6 +31,13 @@ from packages.knowledge.domain.enums import (
 from packages.knowledge.domain.errors import (
     KnowledgeDocumentAlreadyArchivedError,
     KnowledgeDocumentDeletedError,
+)
+from packages.application.auth.models import (
+    AuthenticatedPrincipal,
+    AuthRole,
+)
+from packages.knowledge.application.mutation_context import (
+    KnowledgeMutationContext,
 )
 
 
@@ -203,6 +212,22 @@ def seed_published_version(
 
     return version_id
 
+def archive_command(
+    document_id: UUID,
+) -> ArchiveKnowledgeDocumentCommand:
+    principal = AuthenticatedPrincipal(
+        user_id=uuid7(),
+        session_id=uuid7(),
+        role=AuthRole.ADMIN,
+    )
+
+    return ArchiveKnowledgeDocumentCommand(
+        context=KnowledgeMutationContext.from_admin(
+            principal=principal,
+            trace_id=uuid7(),
+        ),
+        document_id=document_id,
+    )
 
 def build_service(
     session_factory: sessionmaker[Session],
@@ -234,9 +259,7 @@ class TestArchiveDocument:
         )
 
         result = service.execute(
-            ArchiveKnowledgeDocumentCommand(
-                document_id=document_id
-            )
+            archive_command(document_id)
         )
 
         assert result.document_id == document_id
@@ -272,9 +295,7 @@ class TestArchiveDocument:
         build_service(
             test_session_factory
         ).execute(
-            ArchiveKnowledgeDocumentCommand(
-                document_id=document_id
-            )
+            archive_command(document_id)
         )
 
         with SQLAlchemyKnowledgeUnitOfWork(
@@ -315,9 +336,7 @@ class TestArchivePublishedDocument:
         )
 
         result = service.execute(
-            ArchiveKnowledgeDocumentCommand(
-                document_id=document_id
-            )
+            archive_command(document_id)
         )
 
         assert (
@@ -366,9 +385,7 @@ class TestArchivePublishedDocument:
         build_service(
             test_session_factory
         ).execute(
-            ArchiveKnowledgeDocumentCommand(
-                document_id=document_id
-            )
+            archive_command(document_id)
         )
 
         with SQLAlchemyKnowledgeUnitOfWork(
@@ -408,9 +425,7 @@ class TestArchivePublishedDocument:
         build_service(
             test_session_factory
         ).execute(
-            ArchiveKnowledgeDocumentCommand(
-                document_id=document_id
-            )
+            archive_command(document_id)
         )
 
         with test_session_factory() as session:
@@ -461,9 +476,7 @@ class TestArchivePublishedDocument:
         build_service(
             test_session_factory
         ).execute(
-            ArchiveKnowledgeDocumentCommand(
-                document_id=document_id
-            )
+            archive_command(document_id)
         )
 
         with test_session_factory() as session:
@@ -510,9 +523,7 @@ class TestArchivePreservesHistoricalVersions:
         build_service(
             test_session_factory
         ).execute(
-            ArchiveKnowledgeDocumentCommand(
-                document_id=document_id
-            )
+            archive_command(document_id)
         )
 
         with test_session_factory() as session:
@@ -560,9 +571,7 @@ class TestInvalidDocumentLifecycle:
             KnowledgeDocumentAlreadyArchivedError
         ):
             service.execute(
-                ArchiveKnowledgeDocumentCommand(
-                    document_id=document_id
-                )
+                archive_command(document_id)
             )
 
         with test_session_factory() as session:
@@ -593,9 +602,7 @@ class TestInvalidDocumentLifecycle:
             KnowledgeDocumentDeletedError
         ):
             service.execute(
-                ArchiveKnowledgeDocumentCommand(
-                    document_id=document_id
-                )
+                archive_command(document_id)
             )
 
         with test_session_factory() as session:
@@ -627,12 +634,10 @@ class TestMissingDocument:
         )
 
         with pytest.raises(
-            KnowledgeDocumentDoesNotExistError
+            ArchiveKnowledgeDocumentDoesNotExistError
         ):
             service.execute(
-                ArchiveKnowledgeDocumentCommand(
-                    document_id=document_id
-                )
+                archive_command(document_id)
             )
 
 
@@ -660,9 +665,7 @@ class TestRepositoryStateAfterArchive:
         build_service(
             test_session_factory
         ).execute(
-            ArchiveKnowledgeDocumentCommand(
-                document_id=document_id
-            )
+            archive_command(document_id)
         )
 
         with SQLAlchemyKnowledgeUnitOfWork(

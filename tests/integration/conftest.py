@@ -23,6 +23,9 @@ from packages.database.models.support.ticket import TicketModel
 from packages.database.models.support.ticket_comment import TicketCommentModel
 from packages.database.models.audit.api_request import APIRequestModel
 from packages.database.models.audit.audit_event import AuditEventModel
+from packages.database.models.support.auth_session import AuthSessionModel
+from packages.database.models.support.user_credential import UserCredentialModel
+from packages.database.models.ai.embedding_call import EmbeddingCallModel
 
 
 @pytest.fixture(scope="session")
@@ -65,8 +68,11 @@ def _clear_database(session_factory: sessionmaker) -> None:
 
         session.execute(delete(MessageModel))
         session.execute(delete(ConversationModel))
+        session.execute(delete(AuthSessionModel))
+        session.execute(delete(UserCredentialModel))
         session.execute(delete(UserModel))
         
+        session.execute(delete(EmbeddingCallModel))
         session.execute(delete(KnowledgeChunkEmbeddingModel))
         session.execute(delete(KnowledgeChunkModel))
         session.execute(delete(KnowledgeDocumentVersionModel))

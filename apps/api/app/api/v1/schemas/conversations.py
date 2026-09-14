@@ -2,6 +2,11 @@
 from __future__ import annotations
 import uuid
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from typing import Literal
+from datetime import datetime
+
+ConversationChannel = Literal["web", "mobile", "email", "api",]
+ConversationStatus = Literal["open", "waiting_for_customer", "waiting_for_agent", "escalated", "resolved", "closed",]
 
 
 # Shared configuration
@@ -22,6 +27,67 @@ class APIModel(BaseModel):
     ## }
     ## is rejected instead of silently ignoring admin giving a stricter API boundary.
 
+
+# Conversation creation
+class CreateConversationRequest(APIModel):
+    channel: ConversationChannel = Field(default="web", description="Channel through which the conversation begins.")
+    title: str | None = Field(default=None, max_length=500, description="Optional customer-visible conversation title.")
+
+    @field_validator("title")
+    @classmethod
+    def normalize_title(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+
+        normalized = " ".join(value.split())
+        return normalized or None
+
+class CreateConversationResponse(APIModel):
+    conversation_id: uuid.UUID
+    customer_id: uuid.UUID
+    status: ConversationStatus
+    channel: ConversationChannel
+    title: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    
+class ConversationResponse(APIModel):
+    conversation_id: uuid.UUID
+    customer_id: uuid.UUID
+    status: ConversationStatus
+    channel: ConversationChannel
+    title: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    resolved_at: datetime | None = None
+    closed_at: datetime | None = None
+
+class ConversationListResponse(APIModel):
+    items: list[ConversationResponse]
+    total: int = Field(..., ge=0)
+    count: int = Field(..., ge=0)
+    limit: int = Field(..., ge=1, le=200)
+    offset: int = Field(..., ge=0)
+    has_more: bool
+    next_offset: int | None = Field(default=None, ge=0)
+    
+class ConversationMessageResponse(BaseModel):
+    message_id: uuid.UUID
+    conversation_id: uuid.UUID
+    role: Literal["customer", "assistant", "support_agent",]
+    content: str
+    sequence_number: int
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+class ConversationMessageListResponse(BaseModel):
+    items: list[ConversationMessageResponse]
+    total: int
+    count: int
+    limit: int
+    offset: int
+    has_more: bool
+    next_offset: int | None
 
 # Send message
 class SendMessageRequest(APIModel):
@@ -115,3 +181,13 @@ class SendMessageResponse(APIModel):
         ...,
         description="Whether the application pipeline completed without entering the failed stage. An escalation is a successful workflow outcome and therefore may return true.",
     )
+    
+# Close Conversation
+class CloseConversationResponse(APIModel):
+    conversation_id: uuid.UUID
+    customer_id: uuid.UUID
+    status: Literal["closed"]
+    resolved_at: datetime | None
+    closed_at: datetime
+    updated_at: datetime
+    changed: bool

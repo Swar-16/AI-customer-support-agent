@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Final, Mapping
 
+from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
 from packages.database.models.support.ticket import TicketModel
 from packages.database.repositories.support.escalation_repository import EscalationRepository
 from packages.database.repositories.support.ticket_repository import TicketRepository
@@ -25,7 +26,10 @@ MAX_METADATA_KEYS: Final[int] = 100
 MAX_METADATA_SERIALIZED_LENGTH: Final[int] = 20_000
 
 class CreateTicketError(RuntimeError):
-    """Base application error for ticket creation.    """
+    """Base application error for ticket creation."""
+    
+class TicketCreationAccessDeniedError(CreateTicketError):
+    """Raised when a caller attempts an unauthorized creation path."""
 
 class TicketConversationDoesNotExistError(CreateTicketError):
     def __init__(self, conversation_id: uuid.UUID) -> None:
@@ -74,18 +78,23 @@ class TicketPersistenceContractError(CreateTicketError):
 @dataclass(frozen=True, slots=True)
 class CreateTicketCommand:
     """
-    Command for creating a support ticket.
+    Create a ticket through either an authenticated or internal path.
 
-    For `source="escalation"`, escalation_id is required.
+    Authenticated paths:
+    - customer: customer_id and source are derived from the principal;
+    - support agent/admin: source is derived as "agent", while
+      customer_id identifies the customer receiving support.
 
-    For every other source, escalation_id must be None. This prevents a manually/customer-created ticket from
-    silently claiming escalation provenance.
+    Internal paths:
+    - principal=None permits only "escalation" and "system".
     """
     conversation_id: uuid.UUID
-    customer_id: uuid.UUID
-    source: str
     subject: str
     description: str
+    principal: AuthenticatedPrincipal | None = None
+    trace_id: uuid.UUID | None = None
+    customer_id: uuid.UUID | None = None
+    source: str | None = None
     category: str = "general"
     priority: str = "normal"
     source_message_id: uuid.UUID | None = None
@@ -94,19 +103,26 @@ class CreateTicketCommand:
 
     def __post_init__(self) -> None:
         self._validate_uuid(self.conversation_id, field_name="conversation_id")
-        self._validate_uuid(self.customer_id, field_name="customer_id")
+        if self.trace_id is not None:
+            self._validate_uuid(self.trace_id, field_name="trace_id")
+
+        if self.customer_id is not None:
+            self._validate_uuid(self.customer_id, field_name="customer_id")
+
         if self.source_message_id is not None:
             self._validate_uuid(self.source_message_id, field_name="source_message_id")
 
         if self.escalation_id is not None:
             self._validate_uuid(self.escalation_id, field_name="escalation_id")
 
-        source = self._normalize_choice(self.source, field_name="source", valid_values=VALID_TICKET_SOURCES)
+        if self.principal is not None and not isinstance(self.principal, AuthenticatedPrincipal):
+            raise TypeError("principal must be an AuthenticatedPrincipal or None")
+
+        customer_id, source = self._resolve_creation_identity()
         category = self._normalize_choice(self.category, field_name="category", valid_values=VALID_TICKET_CATEGORIES)
         priority = self._normalize_choice(self.priority, field_name="priority", valid_values=VALID_TICKET_PRIORITIES)
         subject = self._normalize_text(self.subject, field_name="subject", max_length=MAX_SUBJECT_LENGTH)
         description = self._normalize_text(self.description, field_name="description", max_length=MAX_DESCRIPTION_LENGTH)
-
         if source == "escalation" and self.escalation_id is None:
             raise ValueError("escalation_id is required when source='escalation'")
 
@@ -114,13 +130,55 @@ class CreateTicketCommand:
             raise ValueError("escalation_id may only be supplied when source='escalation'")
 
         metadata = self._normalize_metadata(self.metadata)
-
+        object.__setattr__(self, "customer_id", customer_id)
         object.__setattr__(self, "source", source)
         object.__setattr__(self, "category", category)
         object.__setattr__(self, "priority", priority)
         object.__setattr__(self, "subject", subject)
         object.__setattr__(self, "description", description)
         object.__setattr__(self, "metadata", MappingProxyType(metadata))
+
+    def _resolve_creation_identity(self) -> tuple[uuid.UUID, str]:
+        principal = self.principal
+        if principal is None:
+            if self.customer_id is None:
+                raise ValueError("customer_id is required for internal ticket creation")
+
+            if self.source is None:
+                raise ValueError("source is required for internal ticket creation")
+
+            source = self._normalize_choice(self.source, field_name="source", valid_values=VALID_TICKET_SOURCES)
+            if source not in {"escalation", "system"}:
+                raise TicketCreationAccessDeniedError("Unauthenticated internal ticket creation permits only escalation or system sources")
+
+            return self.customer_id, source
+
+        if self.trace_id is None:
+            raise ValueError("trace_id is required for authenticated ticket creation")
+
+        if principal.role is AuthRole.CUSTOMER:
+            if self.customer_id is not None and self.customer_id != principal.user_id:
+                raise TicketCreationAccessDeniedError("Customers cannot create tickets for another user")
+
+            if self.source is not None:
+                supplied_source = self._normalize_choice(self.source, field_name="source", valid_values=VALID_TICKET_SOURCES)
+                if supplied_source != "customer":
+                    raise TicketCreationAccessDeniedError("Customers may create only customer-source tickets")
+
+            return principal.user_id, "customer"
+
+        if principal.role in {AuthRole.SUPPORT_AGENT, AuthRole.ADMIN,}:
+            if self.customer_id is None:
+                raise ValueError("customer_id is required when staff create a ticket")
+
+            if self.source is not None:
+                supplied_source = self._normalize_choice(self.source, field_name="source", valid_values=VALID_TICKET_SOURCES)
+                if supplied_source != "agent":
+                    raise TicketCreationAccessDeniedError("Authenticated staff may create only agent-source tickets")
+
+            return self.customer_id, "agent"
+
+        raise TicketCreationAccessDeniedError("Authenticated role cannot create support tickets")
 
     @staticmethod
     def _validate_uuid(value: uuid.UUID, *, field_name: str) -> None:
@@ -180,7 +238,6 @@ class CreateTicketCommand:
 
         try:
             serialized = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
-            
         except (TypeError, ValueError) as exc:
             raise ValueError("metadata must contain only JSON-serializable values") from exc
 
@@ -298,6 +355,7 @@ class CreateTicket:
                 entity_id=ticket.id,
                 action="created",
                 actor=self._resolve_audit_actor(command),
+                trace_id=command.trace_id,
                 conversation_id=ticket.conversation_id,
                 before_state=None,
                 after_state={
@@ -401,7 +459,7 @@ class CreateTicket:
             raise TicketPersistenceContractError("TicketRepository unavailable")
         
         if uow.audit_events is None:
-            raise TicketPersistenceContractError("AuditEventRepository unavailable", audit_events=uow.audit_events)
+            raise TicketPersistenceContractError("AuditEventRepository unavailable")
 
         return _TicketRepositories(tickets=uow.tickets, escalations=uow.escalations, audit_events=uow.audit_events)
 
@@ -428,11 +486,18 @@ class CreateTicket:
         
     @staticmethod
     def _resolve_audit_actor(command: CreateTicketCommand) -> AuditActor:
-        if command.source == "customer":
-            return AuditActor(actor_type=AuditActorType.CUSTOMER, actor_id=command.customer_id)
+        principal = command.principal
+        if principal is None:
+            return AuditActor(actor_type=AuditActorType.SYSTEM,)
 
-        if command.source == "agent":
-            # Authentication is not wired into this command yet, so the initiating agent ID is currently unavailable.
-            return AuditActor(actor_type=AuditActorType.AGENT, actor_id=None)
+        actor_types = {
+            AuthRole.CUSTOMER: AuditActorType.CUSTOMER,
+            AuthRole.SUPPORT_AGENT: AuditActorType.AGENT,
+            AuthRole.ADMIN: AuditActorType.ADMIN,
+        }
 
-        return AuditActor(actor_type=AuditActorType.SYSTEM, actor_id=None)
+        actor_type = actor_types.get(principal.role)
+        if actor_type is None:
+            raise TicketCreationAccessDeniedError("Authenticated role cannot create support tickets")
+
+        return AuditActor(actor_type=actor_type, actor_id=principal.user_id)

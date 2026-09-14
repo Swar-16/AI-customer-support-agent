@@ -6,39 +6,65 @@ from typing import Any, Mapping
 from uuid import UUID
 from uuid6 import uuid7
 
-from packages.knowledge.domain.document import KnowledgeDocument
-from packages.knowledge.domain.enums import KnowledgeContentType, KnowledgeVisibility
-from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
-from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
+from packages.application.audit.models import RecordAuditEventCommand
 from packages.application.audit.recorder import AuditRecorder
-
+from packages.knowledge.application.mutation_context import KnowledgeMutationContext
+from packages.knowledge.domain.document import KnowledgeDocument
+from packages.knowledge.domain.enums import KnowledgeContentType, KnowledgeDocumentStatus, KnowledgeVisibility
+from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
 
 @dataclass(frozen=True, slots=True)
 class CreateKnowledgeDocumentCommand:
+    context: KnowledgeMutationContext
     title: str
     content_type: KnowledgeContentType
     visibility: KnowledgeVisibility
     description: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.context, KnowledgeMutationContext):
+            raise TypeError("context must be a KnowledgeMutationContext.")
+        
+        if not isinstance(self.content_type, KnowledgeContentType):
+            raise TypeError("content_type must be a KnowledgeContentType.")
+
+        if not isinstance(self.visibility, KnowledgeVisibility):
+            raise TypeError("visibility must be a KnowledgeVisibility.")
+
+        if not isinstance(self.metadata, Mapping):
+            raise TypeError("metadata must be a mapping.")
+
+        object.__setattr__(self, "metadata", dict(self.metadata))
+
 @dataclass(frozen=True, slots=True)
 class CreateKnowledgeDocumentResult:
     document_id: UUID
+    title: str
+    content_type: KnowledgeContentType
+    visibility: KnowledgeVisibility
+    status: KnowledgeDocumentStatus
+    description: str | None
     created_at: datetime
+    updated_at: datetime
 
 class CreateKnowledgeDocument:
     """
-    Application use case for creating a logical knowledge document.
+    Create and atomically audit a logical knowledge document.
 
-    This creates document identity and metadata only. Source content belongs
-    to KnowledgeDocumentVersion and is created through a separate use case.
+    Source content is deliberately excluded. Content belongs to immutable KnowledgeDocumentVersion entities.
     """
-    def __init__(self, uow_factory: KnowledgeUnitOfWorkFactory) -> None:
+    def __init__(self, *, uow_factory: KnowledgeUnitOfWorkFactory) -> None:
+        if not callable(uow_factory):
+            raise TypeError("uow_factory must be callable.")
+
         self._uow_factory = uow_factory
 
     def execute(self, command: CreateKnowledgeDocumentCommand) -> CreateKnowledgeDocumentResult:
-        now = datetime.now(timezone.utc)
+        if not isinstance(command, CreateKnowledgeDocumentCommand):
+            raise TypeError("command must be a CreateKnowledgeDocumentCommand.")
 
+        occurred_at = datetime.now(timezone.utc)
         document = KnowledgeDocument(
             id=uuid7(),
             title=command.title,
@@ -46,19 +72,22 @@ class CreateKnowledgeDocument:
             content_type=command.content_type,
             visibility=command.visibility,
             metadata=dict(command.metadata),
-            created_at=now,
-            updated_at=now,
+            created_at=occurred_at,
+            updated_at=occurred_at,
         )
 
         with self._uow_factory() as uow:
             uow.documents.add(document)
+            uow.flush()
+
             AuditRecorder(repository=uow.audit_events).record(
                 RecordAuditEventCommand(
                     event_type="knowledge_document.created",
                     entity_type="knowledge_document",
                     entity_id=document.id,
                     action="created",
-                    actor=AuditActor(actor_type=AuditActorType.SYSTEM),
+                    actor=command.context.actor,
+                    trace_id=command.context.trace_id,
                     before_state=None,
                     after_state={
                         "title": document.title,
@@ -67,15 +96,22 @@ class CreateKnowledgeDocument:
                         "status": document.status.value,
                         "has_description": document.description is not None,
                     },
-                    metadata={
-                        "metadata_keys": sorted(document.metadata.keys()),
-                    },
-                    occurred_at=document.created_at,
+                    metadata={"metadata_keys": sorted(document.metadata.keys()),},
+                    occurred_at=occurred_at,
                 )
             )
+
+            result = CreateKnowledgeDocumentResult(
+                document_id=document.id,
+                title=document.title,
+                content_type=document.content_type,
+                visibility=document.visibility,
+                status=document.status,
+                description=document.description,
+                created_at=document.created_at,
+                updated_at=document.updated_at,
+            )
+
             uow.commit()
 
-        return CreateKnowledgeDocumentResult(
-            document_id=document.id,
-            created_at=document.created_at,
-        )
+        return result

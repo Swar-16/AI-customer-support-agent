@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from uuid6 import uuid7
 
+from packages.database.models.support.conversation import ConversationModel
 
 pytestmark = pytest.mark.integration
 
@@ -18,18 +19,40 @@ pytestmark = pytest.mark.integration
 def isolate_database(clean_database):
     """Keep trace-detail assertions independent of other tests."""
     yield
+    
+@pytest.fixture()
+def seeded_conversation(
+    test_session_factory,
+    customer_identity,
+) -> uuid.UUID:
+    conversation_id = uuid7()
 
+    with test_session_factory() as session:
+        session.add(
+            ConversationModel(
+                id=conversation_id,
+                user_id=customer_identity.user_id,
+                status="open",
+                channel="web",
+                title="Dashboard trace correlation test",
+            )
+        )
+        session.commit()
+
+    return conversation_id
 
 def _create_customer_message_trace(
     *,
-    client: TestClient,
+    admin_client: TestClient,
     conversation_id: uuid.UUID,
+    customer_auth_headers: dict[str, str],
     trace_id: uuid.UUID,
     customer_message: str = "Where is my order ORD-12345?",
 ) -> dict[str, Any]:
-    response = client.post(
+    response = admin_client.post(
         f"/v1/conversations/{conversation_id}/messages",
         headers={
+            **customer_auth_headers,
             "X-Trace-ID": str(trace_id),
         },
         json={
@@ -67,18 +90,20 @@ def _walk_dictionary_keys(
 class TestDashboardTraceDetail:
     def test_returns_correlated_customer_message_trace(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
     ) -> None:
         trace_id = uuid7()
 
         message_result = _create_customer_message_trace(
-            client=client,
+            admin_client=admin_client,
             conversation_id=seeded_conversation,
+            customer_auth_headers=customer_auth_headers,
             trace_id=trace_id,
         )
 
-        response = client.get(
+        response = admin_client.get(
             f"/v1/dashboard/traces/{trace_id}"
         )
 
@@ -115,18 +140,20 @@ class TestDashboardTraceDetail:
 
     def test_timeline_is_chronological(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
     ) -> None:
         trace_id = uuid7()
 
         _create_customer_message_trace(
-            client=client,
+            admin_client=admin_client,
             conversation_id=seeded_conversation,
+            customer_auth_headers=customer_auth_headers,
             trace_id=trace_id,
         )
 
-        response = client.get(
+        response = admin_client.get(
             f"/v1/dashboard/traces/{trace_id}"
         )
 
@@ -147,11 +174,11 @@ class TestDashboardTraceDetail:
 
     def test_returns_api_only_trace(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
         trace_id = uuid7()
 
-        health_response = client.get(
+        health_response = admin_client.get(
             "/v1/health",
             headers={
                 "X-Trace-ID": str(trace_id),
@@ -160,7 +187,7 @@ class TestDashboardTraceDetail:
 
         assert health_response.status_code == 200
 
-        response = client.get(
+        response = admin_client.get(
             f"/v1/dashboard/traces/{trace_id}"
         )
 
@@ -184,11 +211,11 @@ class TestDashboardTraceDetail:
 
     def test_unknown_trace_returns_not_found(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
         unknown_trace_id = uuid7()
 
-        response = client.get(
+        response = admin_client.get(
             f"/v1/dashboard/traces/{unknown_trace_id}"
         )
 
@@ -200,9 +227,9 @@ class TestDashboardTraceDetail:
 
     def test_invalid_trace_id_returns_validation_error(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/traces/not-a-uuid"
         )
 
@@ -210,8 +237,9 @@ class TestDashboardTraceDetail:
 
     def test_does_not_expose_sensitive_payloads(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
     ) -> None:
         trace_id = uuid7()
         secret_customer_message = (
@@ -219,13 +247,14 @@ class TestDashboardTraceDetail:
         )
 
         _create_customer_message_trace(
-            client=client,
+            admin_client=admin_client,
             conversation_id=seeded_conversation,
+            customer_auth_headers=customer_auth_headers,
             trace_id=trace_id,
             customer_message=secret_customer_message,
         )
 
-        response = client.get(
+        response = admin_client.get(
             f"/v1/dashboard/traces/{trace_id}"
         )
 
@@ -268,18 +297,20 @@ class TestDashboardTraceDetail:
 
     def test_component_counts_match_timeline_categories(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
     ) -> None:
         trace_id = uuid7()
 
         _create_customer_message_trace(
-            client=client,
+            admin_client=admin_client,
             conversation_id=seeded_conversation,
+            customer_auth_headers=customer_auth_headers,
             trace_id=trace_id,
         )
 
-        response = client.get(
+        response = admin_client.get(
             f"/v1/dashboard/traces/{trace_id}"
         )
 

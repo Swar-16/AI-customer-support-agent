@@ -8,6 +8,7 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Any, Final, Mapping
 
+from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
 from packages.database.models.support.ticket_comment import TicketCommentModel
 from packages.database.repositories.support.ticket_comment_repository import TicketCommentRepository
 from packages.database.repositories.support.ticket_repository import TicketRepository
@@ -17,7 +18,6 @@ from packages.application.audit.recorder import AuditRecorder
 from packages.database.repositories.audit.audit_event_repository import AuditEventRepository
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork,]
-VALID_AUTHOR_ROLES: Final[frozenset[str]] = frozenset({"customer", "support_agent", "admin", "system",})
 VALID_COMMENT_VISIBILITIES: Final[frozenset[str]] = frozenset({"customer", "internal",})
 COMMENTABLE_TICKET_STATUSES: Final[frozenset[str]] = frozenset({"open", "in_progress", "waiting_for_customer", "reopened",})
 MAX_COMMENT_LENGTH: Final[int] = 20_000
@@ -57,36 +57,30 @@ class TicketCommentPersistenceContractError(AddTicketCommentError):
 
 @dataclass(frozen=True, slots=True)
 class AddTicketCommentCommand:
-    """
-    Add one append-only comment to a support ticket.
-
-    `author_id` is required for customer, support-agent, and admin comments. It must be None for an unowned system-generated comment.
-
-    The API authentication layer will eventually derive author_id and author_role from the authenticated
-    principal rather than trusting arbitrary request-body values.
-    """
+    """Add an authenticated user's append-only ticket comment."""
     ticket_id: uuid.UUID
-    author_role: str
+    principal: AuthenticatedPrincipal
+    trace_id: uuid.UUID
     content: str
-    author_id: uuid.UUID | None = None
     visibility: str = "customer"
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self._validate_uuid(self.ticket_id, field_name="ticket_id")
-        if self.author_id is not None:
-            self._validate_uuid(self.author_id, field_name="author_id")
-        author_role = self._normalize_choice(self.author_role, field_name="author_role", valid_values=VALID_AUTHOR_ROLES)
+        self._validate_uuid(self.trace_id, field_name="trace_id")
+
+        if not isinstance(self.principal, AuthenticatedPrincipal):
+            raise TypeError("principal must be an AuthenticatedPrincipal")
+
+        if self.principal.role not in {AuthRole.CUSTOMER, AuthRole.SUPPORT_AGENT, AuthRole.ADMIN,}:
+            raise CommentAuthorRoleMismatchError("Authenticated role cannot create ticket comments")
+
         visibility = self._normalize_choice(self.visibility, field_name="visibility", valid_values=VALID_COMMENT_VISIBILITIES)
         content = self._normalize_content(self.content)
-        if author_role != "system" and self.author_id is None:
-            raise ValueError(f"author_id is required for author_role={author_role!r}")
-
-        if author_role == "customer" and visibility == "internal":
+        if self.principal.role is AuthRole.CUSTOMER and visibility == "internal":
             raise CustomerInternalCommentError("Customer comments cannot be internal")
 
         metadata = self._normalize_metadata(self.metadata)
-        object.__setattr__(self, "author_role", author_role)
         object.__setattr__(self, "visibility", visibility)
         object.__setattr__(self, "content", content)
         object.__setattr__(self, "metadata", MappingProxyType(metadata))
@@ -116,7 +110,7 @@ class AddTicketCommentCommand:
         if not isinstance(content, str):
             raise TypeError("content must be a string")
 
-        normalized = content.strip()    # Preserve meaningful user formatting while removing empty margins.
+        normalized = content.strip()
         if not normalized:
             raise ValueError("content cannot be blank")
 
@@ -134,6 +128,7 @@ class AddTicketCommentCommand:
             raise ValueError("metadata contains too many keys")
 
         normalized: dict[str, Any] = {}
+
         for key, value in metadata.items():
             if not isinstance(key, str):
                 raise TypeError("metadata keys must be strings")
@@ -154,7 +149,7 @@ class AddTicketCommentCommand:
             raise ValueError("metadata must contain only JSON-serializable values") from exc
 
         if len(serialized) > MAX_METADATA_SERIALIZED_LENGTH:
-            raise ValueError(f"serialized metadata exceeds {MAX_METADATA_SERIALIZED_LENGTH} characterscharacters")
+            raise ValueError(f"serialized metadata exceeds {MAX_METADATA_SERIALIZED_LENGTH} characters")
 
         return normalized
 
@@ -200,8 +195,8 @@ class AddTicketComment:
             self._validate_author(command=command, ticket_customer_id=ticket.customer_id, uow=uow)
             comment = TicketCommentModel(
                 ticket_id=ticket.id,
-                author_id=command.author_id,
-                author_role=command.author_role,
+                author_id=command.principal.user_id,
+                author_role=command.principal.role.value,
                 visibility=command.visibility,
                 content=command.content,
                 metadata_=dict(command.metadata),
@@ -222,7 +217,8 @@ class AddTicketComment:
                     entity_type="ticket",
                     entity_id=ticket.id,
                     action="comment_added",
-                    actor=self._resolve_audit_actor(command),
+                    actor=self._resolve_audit_actor(command.principal),
+                    trace_id=command.trace_id,
                     conversation_id=ticket.conversation_id,
                     before_state=None,
                     after_state={
@@ -230,10 +226,7 @@ class AddTicketComment:
                         "visibility": comment.visibility,
                         "author_role": comment.author_role,
                     },
-                    metadata={
-                        "comment_length": len(comment.content),
-                        "system_author_id": str(comment.author_id) if comment.author_role == "system" and comment.author_id is not None else None,
-                    },
+                    metadata={"comment_length": len(comment.content),},
                     occurred_at=comment.created_at,
                 )
             )
@@ -253,48 +246,25 @@ class AddTicketComment:
 
     @staticmethod
     def _validate_author(*, command: AddTicketCommentCommand, ticket_customer_id: uuid.UUID, uow: SqlAlchemyUnitOfWork) -> None:
-        if command.author_role == "system":
-            AddTicketComment._validate_system_author(command=command, uow=uow)
-            return
-
-        if command.author_id is None:
-            raise TicketCommentPersistenceContractError("Non-system comment has no author ID")
-
         if uow.users is None:
             raise TicketCommentPersistenceContractError("UserRepository unavailable")
 
-        author = uow.users.get_by_id(command.author_id)
+        principal = command.principal
+        author = uow.users.get_by_id(principal.user_id)
         if author is None:
-            raise CommentAuthorDoesNotExistError(command.author_id)
+            raise CommentAuthorDoesNotExistError(principal.user_id)
 
         if author.status != "active":
             raise CommentAuthorNotActiveError(f"Comment author {author.id} is not active: status={author.status!r}")
 
-        if author.role != command.author_role:
-            raise CommentAuthorRoleMismatchError(f"Declared author_role {command.author_role!r} does not match persisted role {author.role!r}"            )
+        if author.role != principal.role.value:
+            raise CommentAuthorRoleMismatchError(f"Authenticated role {principal.role.value!r} does not match persisted role {author.role!r}")
 
-        if command.author_role == "customer" and command.author_id != ticket_customer_id:
-            raise TicketCommentOwnershipError(f"Customer {command.author_id} does not own ticket {command.ticket_id}")
+        if principal.role is AuthRole.CUSTOMER and principal.user_id != ticket_customer_id :
+            raise TicketCommentOwnershipError(f"Customer {principal.user_id} does not own ticket {command.ticket_id}")
 
-    @staticmethod
-    def _validate_system_author(*, command: AddTicketCommentCommand, uow: SqlAlchemyUnitOfWork) -> None:
-        """Allow anonymous system comments or comments tied to a persisted active system user."""
-        if command.author_id is None:
-            return
-
-        if uow.users is None:
-            raise TicketCommentPersistenceContractError("UserRepository unavailable")
-
-        author = uow.users.get_by_id(command.author_id)
-
-        if author is None:
-            raise CommentAuthorDoesNotExistError(command.author_id)
-
-        if author.status != "active":
-            raise CommentAuthorNotActiveError(f"System author {author.id} is not active: status={author.status!r}")
-
-        if author.role != "system":
-            raise CommentAuthorRoleMismatchError(f"User {author.id} has role {author.role!r}, not 'system'")
+        if principal.role is AuthRole.CUSTOMER and command.visibility == "internal":
+            raise CustomerInternalCommentError("Customer comments cannot be internal")
 
     @staticmethod
     def _require_repositories(uow: SqlAlchemyUnitOfWork) -> tuple[TicketRepository, TicketCommentRepository, AuditEventRepository,]:
@@ -316,17 +286,15 @@ class AddTicketComment:
         return (uow.tickets, uow.ticket_comments, uow.audit_events,)
     
     @staticmethod
-    def _resolve_audit_actor(command: AddTicketCommentCommand) -> AuditActor:
-        actor_type_by_role = {
-            "customer": AuditActorType.CUSTOMER,
-            "support_agent": AuditActorType.AGENT,
-            "admin": AuditActorType.ADMIN,
-            "system": AuditActorType.SYSTEM,
+    def _resolve_audit_actor(principal: AuthenticatedPrincipal) -> AuditActor:
+        actor_types = {
+            AuthRole.CUSTOMER: AuditActorType.CUSTOMER,
+            AuthRole.SUPPORT_AGENT: AuditActorType.AGENT,
+            AuthRole.ADMIN: AuditActorType.ADMIN,
         }
 
-        actor_type = actor_type_by_role[command.author_role]
+        actor_type = actor_types.get(principal.role)
+        if actor_type is None:
+            raise CommentAuthorRoleMismatchError("Authenticated role cannot create ticket comments")
 
-        return AuditActor(
-            actor_type=actor_type,
-            actor_id=command.author_id if actor_type is not AuditActorType.SYSTEM else None,
-        )
+        return AuditActor(actor_type=actor_type, actor_id=principal.user_id)

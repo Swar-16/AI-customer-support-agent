@@ -2,9 +2,16 @@
 from __future__ import annotations
 from typing import Protocol
 from uuid import UUID
+from dataclasses import dataclass
 
 from packages.knowledge.domain.version import KnowledgeDocumentVersion
+from packages.knowledge.domain.enums import KnowledgeIngestionStatus, KnowledgeSourceType, KnowledgeVersionStatus, KnowledgeSourceType
 
+@dataclass(frozen=True, slots=True)
+class KnowledgeVersionListFilter:
+    status: KnowledgeVersionStatus | None = None
+    ingestion_status: KnowledgeIngestionStatus | None = None
+    source_type: KnowledgeSourceType | None = None
 
 class KnowledgeVersionRepository(Protocol):
     """
@@ -23,10 +30,11 @@ class KnowledgeVersionRepository(Protocol):
         ...
         
     def get_by_id_for_update(self, version_id: UUID) -> KnowledgeDocumentVersion | None:
-        """
-        Return a version while acquiring a row-level write lock
-        for the lifetime of the surrounding transaction.
-        """
+        """Return a version while acquiring a row-level write lock for the lifetime of the surrounding transaction."""
+        ...
+        
+    def get_by_document_and_content_hash(self, *, document_id: UUID, source_type: KnowledgeSourceType, content_hash: str) -> KnowledgeDocumentVersion | None:
+        """Return the latest version of a document with identical normalized source content, or None when no duplicate exists."""
         ...
 
     def save(self, version: KnowledgeDocumentVersion) -> None:
@@ -38,18 +46,14 @@ class KnowledgeVersionRepository(Protocol):
         ...
 
     def list_for_document(self, document_id: UUID) -> list[KnowledgeDocumentVersion]:
-        """
-        Return all versions belonging to a document,
-        ordered by version number.
-        """
+        """Return all versions belonging to a document, ordered by version number."""
         ...
 
     def next_version_number(self, document_id: UUID) -> int:
         """
         Determine the next version number for a document.
 
-        The concrete implementation must provide concurrency-safe allocation
-        when used within the surrounding transaction.
+        The concrete implementation must provide concurrency-safe allocation when used within the surrounding transaction.
         """
         ...
     
@@ -59,4 +63,12 @@ class KnowledgeVersionRepository(Protocol):
 
         Only successfully ingested published versions are returned.
         """
+        ...
+
+    def list_page_for_document(self, document_id: UUID, *, filter_: KnowledgeVersionListFilter, limit: int, offset: int) -> list[KnowledgeDocumentVersion]:
+        """Return a filtered, paginated version history."""
+        ...
+
+    def count_for_document(self, document_id: UUID, *, filter_: KnowledgeVersionListFilter) -> int:
+        """Count versions matching the supplied document and filters."""
         ...

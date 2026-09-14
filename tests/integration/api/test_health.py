@@ -14,9 +14,23 @@ def make_application_services(*, provider_healthy: bool = True) -> ApplicationSe
     provider.health_check.return_value = provider_healthy
 
     return ApplicationServices(
+        create_conversation=Mock(),
+        list_conversations=Mock(),
+        get_conversation=Mock(),
+        get_conversation_messages=Mock(),
         process_customer_message=Mock(),
+        close_conversation=Mock(),
         
         record_api_request=Mock(),
+        
+        register_user=Mock(),
+        login_user=Mock(),
+        refresh_session=Mock(),
+        logout_user=Mock(),
+        authenticate_access_token=Mock(),
+        get_current_user=Mock(),
+        update_user_access=Mock(),
+        
         get_dashboard_overview=Mock(),
         query_dashboard_traces=Mock(),
         get_dashboard_trace_detail=Mock(),
@@ -24,6 +38,7 @@ def make_application_services(*, provider_healthy: bool = True) -> ApplicationSe
         query_dashboard_retrieval_runs=Mock(),
         query_dashboard_api_requests=Mock(),
         query_dashboard_audit_events=Mock(),
+        
         get_audit_event=Mock(),
         list_audit_events=Mock(),
         get_entity_audit_history=Mock(),
@@ -32,6 +47,7 @@ def make_application_services(*, provider_healthy: bool = True) -> ApplicationSe
         get_escalation=Mock(),
         list_escalations=Mock(),
         list_conversation_escalations=Mock(),
+        get_customer_escalation_status=Mock(),
         update_escalation=Mock(),
 
         create_ticket=Mock(),
@@ -48,6 +64,19 @@ def make_application_services(*, provider_healthy: bool = True) -> ApplicationSe
         ai_pipeline_factory=Mock(),
         base_llm_provider=provider,
         orchestration_observer=Mock(),
+        
+        list_knowledge_documents=Mock(),
+        get_knowledge_document=Mock(),
+        list_knowledge_versions=Mock(),
+        get_knowledge_version=Mock(),
+        create_knowledge_document=Mock(),
+        create_knowledge_version=Mock(),
+        process_knowledge_version=Mock(),
+        embed_knowledge_version=Mock(),
+        publish_knowledge_version=Mock(),
+        archive_knowledge_document=Mock(),
+        upload_knowledge_document=Mock(),
+        upload_knowledge_version=Mock(),
     )
 
 

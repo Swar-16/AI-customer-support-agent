@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from datetime import datetime
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 from sqlalchemy.orm import Session
 
 from packages.database.models.support.conversation import ConversationModel
@@ -54,6 +54,14 @@ class ConversationRepository:
         )
 
         return self._session.scalar(statement)
+    
+    def get_by_id_for_update(self, conversation_id: uuid.UUID) -> ConversationModel | None:
+        statement = (select(ConversationModel)
+                     .where(ConversationModel.id == conversation_id)
+                     .with_for_update()
+        )
+
+        return self._session.scalar(statement)
 
     def get_by_user(self, user_id: uuid.UUID, *, limit: int = 100) -> Sequence[ConversationModel]:
         self._validate_limit(limit)
@@ -65,6 +73,40 @@ class ConversationRepository:
         )
 
         return tuple(self._session.scalars(statement))
+    
+    def list_recent(self, *, user_id: uuid.UUID | None = None, status: str | None = None, channel: str | None = None, limit: int = 50, offset: int = 0) -> Sequence[ConversationModel]:
+        self._validate_limit(limit)
+        self._validate_offset(offset)
+        statement = select(ConversationModel)
+        if user_id is not None:
+            statement = statement.where(ConversationModel.user_id == user_id)
+
+        if status is not None:
+            statement = statement.where(ConversationModel.status == status)
+
+        if channel is not None:
+            statement = statement.where(ConversationModel.channel == channel)
+
+        statement = (statement.order_by(ConversationModel.created_at.desc(),
+                                        ConversationModel.id.desc())
+                              .limit(limit)
+                              .offset(offset)
+        )
+
+        return tuple(self._session.scalars(statement))
+    
+    def count_recent(self, *, user_id: uuid.UUID | None = None, status: str | None = None, channel: str | None = None) -> int:
+        statement = select(func.count(ConversationModel.id))
+        if user_id is not None:
+            statement = statement.where(ConversationModel.user_id == user_id)
+
+        if status is not None:
+            statement = statement.where(ConversationModel.status == status)
+
+        if channel is not None:
+            statement = statement.where(ConversationModel.channel == channel)
+
+        return int(self._session.scalar(statement) or 0)
 
     # Message sequence allocation
     def allocate_message_sequence(self, conversation_id: uuid.UUID) -> int:
@@ -131,8 +173,19 @@ class ConversationRepository:
 
     @staticmethod
     def _validate_limit(limit: int) -> None:
-        if not isinstance(limit, int):
+        if isinstance(limit, bool) or not isinstance(limit, int):
             raise TypeError("limit must be an integer")
 
         if limit <= 0:
             raise ValueError("limit must be greater than zero")
+
+        if limit > 200:
+            raise ValueError("limit must not exceed 200")
+        
+    @staticmethod
+    def _validate_offset(offset: int) -> None:
+        if isinstance(offset, bool) or not isinstance(offset, int):
+            raise TypeError("offset must be an integer")
+
+        if offset < 0:
+            raise ValueError("offset must not be negative")

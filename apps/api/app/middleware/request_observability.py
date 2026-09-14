@@ -65,9 +65,12 @@ class RequestObservabilityMiddleware:
             elif message["type"] == "http.response.body":
                 body = message.get("body", b"")
                 response_size_bytes += len(body)
-                remaining = _MAX_ERROR_BODY_INSPECTION_BYTES - len(response_body_prefix)
-                if remaining > 0 and body:
-                    response_body_prefix.extend(body[:remaining])
+                # Only error bodies need inspection for a stable error code.
+                # Successful authentication responses may contain access and refresh tokens and must not be unnecessarily copied.
+                if status_code >= 400:
+                    remaining = _MAX_ERROR_BODY_INSPECTION_BYTES - len(response_body_prefix)
+                    if remaining > 0 and body:
+                        response_body_prefix.extend(body[:remaining])
 
             await send(message)
 
@@ -143,7 +146,7 @@ class RequestObservabilityMiddleware:
             actor_user_id=actor_user_id,
             actor_role=actor_role,
             client_ip=self._resolve_client_ip(scope),
-            user_agent=self._get_header(scope, "user-agent"),
+            user_agent=self._resolve_user_agent(scope),
             request_size_bytes=self._resolve_request_size(scope),
             response_size_bytes=response_size_bytes,
             latency_ms=latency_ms,
@@ -255,6 +258,15 @@ class RequestObservabilityMiddleware:
             return None, None
 
         return actor_user_id, normalized_role
+
+    @staticmethod
+    def _resolve_user_agent(scope: Scope) -> str | None:
+        value = RequestObservabilityMiddleware._get_header(scope, "user-agent")
+        if value is None:
+            return None
+
+        normalized = value.strip()
+        return normalized[:2048] or None
 
     @staticmethod
     def _resolve_client_ip(scope: Scope) -> str | None:

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from packages.ai.generation.generator import GroundedResponseGenerator
 from packages.application.ai.answer_service import AnswerService
 from packages.application.knowledge.evidence_mapper import KnowledgeEvidenceMapper
-from packages.application.composition.knowledge_application_factory import KnowledgeApplicationComponents, create_knowledge_application_components
+from packages.application.composition.knowledge_application_factory import KnowledgeApplicationComponents
 from packages.knowledge.embeddings.models import EmbeddingInputDescriptor
 from packages.knowledge.embeddings.provider.base import EmbeddingProvider
 from packages.knowledge.retrieval.context.builder import TokenEstimator
@@ -41,10 +41,10 @@ class AnswerServiceComponents:
 
 # Factory
 def create_answer_service_components(*, session: Session, profile: RetrievalProfile, default_context_budget: GroundingContextBudget, 
-                                     response_generator: GroundedResponseGenerator, embedding_provider: EmbeddingProvider | None = None, 
-                                     embedding_input_descriptor: EmbeddingInputDescriptor | None = None, reranker: Reranker | None = None,
-                                     token_estimator: TokenEstimator | None = None, evidence_mapper: KnowledgeEvidenceMapper | None = None,
-                                     knowledge_application: KnowledgeApplicationComponents | None = None, knowledge_retrieval: KnowledgeRetrievalComponents | None = None,
+                                     response_generator: GroundedResponseGenerator, knowledge_application: KnowledgeApplicationComponents,
+                                     embedding_provider: EmbeddingProvider | None = None, embedding_input_descriptor: EmbeddingInputDescriptor | None = None,
+                                     reranker: Reranker | None = None, token_estimator: TokenEstimator | None = None,
+                                     evidence_mapper: KnowledgeEvidenceMapper | None = None, knowledge_retrieval: KnowledgeRetrievalComponents | None = None,
                                      retrieval_telemetry_recorder: RetrievalTelemetryRecorder | None = None, reranker_telemetry_recorder: RerankerTelemetryRecorder | None = None
 ) -> AnswerServiceComponents:
     """
@@ -111,7 +111,10 @@ def create_answer_service_components(*, session: Session, profile: RetrievalProf
     When a precomposed `knowledge_retrieval` bundle is supplied, the retrieval-specific construction arguments are intentionally not used to rebuild that bundle.
     """
     _validate_core_dependencies(session=session, profile=profile, default_context_budget=default_context_budget, response_generator=response_generator)
-    effective_knowledge_application = knowledge_application if knowledge_application is not None else create_knowledge_application_components()
+    if not isinstance(knowledge_application, KnowledgeApplicationComponents):
+        raise TypeError("knowledge_application must be a KnowledgeApplicationComponents instance.")
+
+    effective_knowledge_application = knowledge_application
     if not isinstance(effective_knowledge_application, KnowledgeApplicationComponents):
         raise TypeError("knowledge_application must be a KnowledgeApplicationComponents instance or None.")
 

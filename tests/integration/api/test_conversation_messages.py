@@ -3,7 +3,9 @@ from __future__ import annotations
 import uuid
 from uuid6 import uuid7
 from fastapi.testclient import TestClient
+import pytest
 
+from packages.database.models.support.conversation import ConversationModel
 from packages.database.models.ai.decision import AIDecisionModel
 from packages.database.models.ai.intent_prediction import IntentPredictionModel
 from packages.database.models.ai.llm_call import LLMCallModel
@@ -13,12 +15,36 @@ from packages.ai.intent.taxonomy import IntentType
 from packages.ai.decision.schemas import DecisionType
 from packages.ai.orchestration.state import PipelineStage
 
+@pytest.fixture()
+def seeded_conversation(
+    test_session_factory,
+    customer_identity,
+) -> uuid.UUID:
+    """
+    Create a conversation owned by the authenticated test customer.
+    """
+    conversation_id = uuid7()
+
+    with test_session_factory() as session:
+        session.add(
+            ConversationModel(
+                id=conversation_id,
+                user_id=customer_identity.user_id,
+                status="open",
+                channel="web",
+                title="Authenticated message test",
+            )
+        )
+        session.commit()
+
+    return conversation_id
+
 class TestSendCustomerMessage:
-    def test_processes_customer_message_successfully(self, client: TestClient, seeded_conversation: uuid.UUID) -> None:
+    def test_processes_customer_message_successfully(self, client: TestClient, seeded_conversation: uuid.UUID, customer_auth_headers: dict[str, str],) -> None:
         trace_id = uuid7()
         response = client.post(
             f"/v1/conversations/{seeded_conversation}/messages",
-            headers={ "X-Trace-ID": str(trace_id) },
+            headers={**customer_auth_headers, "X-Trace-ID": str(trace_id) },
             json={ "message": "Where is my order ORD-12345?" },
         )
 
@@ -35,9 +61,10 @@ class TestSendCustomerMessage:
         assert body["intent"] == IntentType.ORDER_STATUS.value
         assert body["decision"] == DecisionType.RETRIEVE_INFORMATION.value
 
-    def test_persists_customer_message(self, client: TestClient, seeded_conversation: uuid.UUID, test_session_factory) -> None:
+    def test_persists_customer_message(self, client: TestClient, seeded_conversation: uuid.UUID, test_session_factory, customer_auth_headers: dict[str, str],) -> None:
         response = client.post(
             f"/v1/conversations/{seeded_conversation}/messages",
+            headers=customer_auth_headers,
             json={ "message": "Where is my order ORD-12345?" },
         )
 
@@ -53,12 +80,12 @@ class TestSendCustomerMessage:
             assert message.role == "customer"
             assert message.content == "Where is my order ORD-12345?"
 
-    def test_creates_completed_ai_run(self, client: TestClient, seeded_conversation: uuid.UUID, test_session_factory) -> None:
+    def test_creates_completed_ai_run(self, client: TestClient, seeded_conversation: uuid.UUID, test_session_factory, customer_auth_headers: dict[str, str],) -> None:
         trace_id = uuid7()
 
         response = client.post(
             f"/v1/conversations/{seeded_conversation}/messages",
-            headers={ "X-Trace-ID": str(trace_id) },
+            headers={**customer_auth_headers, "X-Trace-ID": str(trace_id) },
             json={ "message": "Where is my order ORD-12345?" },
         )
 
@@ -73,9 +100,10 @@ class TestSendCustomerMessage:
             assert ai_run.trace_id == trace_id
             assert ai_run.status == "completed"
 
-    def test_persists_ai_telemetry(self, client: TestClient, seeded_conversation: uuid.UUID, test_session_factory) -> None:
+    def test_persists_ai_telemetry(self, client: TestClient, seeded_conversation: uuid.UUID, test_session_factory, customer_auth_headers: dict[str, str],) -> None:
         response = client.post(
             f"/v1/conversations/{seeded_conversation}/messages",
+            headers=customer_auth_headers,
             json={ "message": "Where is my order ORD-12345?" },
         )
 
@@ -103,9 +131,10 @@ class TestSendCustomerMessage:
             assert len(predictions) == 1
             assert len(decisions) == 1
 
-    def test_intent_prediction_is_linked_to_llm_call(self, client: TestClient, seeded_conversation: uuid.UUID, test_session_factory) -> None:
+    def test_intent_prediction_is_linked_to_llm_call(self, client: TestClient, seeded_conversation: uuid.UUID, test_session_factory, customer_auth_headers: dict[str, str],) -> None:
         response = client.post(
             f"/v1/conversations/{seeded_conversation}/messages",
+            headers=customer_auth_headers,
             json={ "message": "Where is my order ORD-12345?" },
         )
 

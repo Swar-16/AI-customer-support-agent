@@ -9,6 +9,12 @@ import pytest
 from fastapi.testclient import TestClient
 from uuid6 import uuid7
 
+from packages.application.composition.application_factory import (
+    ApplicationServices,
+)
+from packages.application.tickets.create_ticket import (
+    CreateTicketCommand,
+)
 from packages.database.models.support.conversation import (
     ConversationModel,
 )
@@ -19,7 +25,7 @@ from packages.database.models.support.ticket import TicketModel
 from packages.database.models.support.ticket_comment import (
     TicketCommentModel,
 )
-from packages.database.models.support.user import UserModel
+# from packages.database.models.support.user import UserModel
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,55 +36,33 @@ class TicketTestContext:
     admin_id: uuid.UUID
     conversation_id: uuid.UUID
     escalation_id: uuid.UUID
+    customer_headers: dict[str, str]
+    other_customer_headers: dict[str, str]
+    agent_headers: dict[str, str]
+    admin_headers: dict[str, str]
 
 
 @pytest.fixture()
 def ticket_context(
-    clean_database,
     test_session_factory,
+    customer_identity,
+    support_agent_identity,
+    admin_identity,
+    authenticated_identity_factory,
 ) -> TicketTestContext:
-    customer_id = uuid7()
-    other_customer_id = uuid7()
-    agent_id = uuid7()
-    admin_id = uuid7()
+    other_customer_identity = authenticated_identity_factory(
+        role="customer",
+        email="other-ticket-customer@example.com",
+    )
+
     conversation_id = uuid7()
     escalation_id = uuid7()
 
     with test_session_factory() as session:
-        session.add_all(
-            [
-                UserModel(
-                    id=customer_id,
-                    external_id="ticket-customer",
-                    role="customer",
-                    status="active",
-                ),
-                UserModel(
-                    id=other_customer_id,
-                    external_id="other-ticket-customer",
-                    role="customer",
-                    status="active",
-                ),
-                UserModel(
-                    id=agent_id,
-                    external_id="ticket-agent",
-                    role="support_agent",
-                    status="active",
-                ),
-                UserModel(
-                    id=admin_id,
-                    external_id="ticket-admin",
-                    role="admin",
-                    status="active",
-                ),
-            ]
-        )
-        session.flush()
-
         session.add(
             ConversationModel(
                 id=conversation_id,
-                user_id=customer_id,
+                user_id=customer_identity.user_id,
             )
         )
         session.flush()
@@ -103,16 +87,23 @@ def ticket_context(
                 resolved_at=None,
             )
         )
-
         session.commit()
 
     return TicketTestContext(
-        customer_id=customer_id,
-        other_customer_id=other_customer_id,
-        agent_id=agent_id,
-        admin_id=admin_id,
+        customer_id=customer_identity.user_id,
+        other_customer_id=other_customer_identity.user_id,
+        agent_id=support_agent_identity.user_id,
+        admin_id=admin_identity.user_id,
         conversation_id=conversation_id,
         escalation_id=escalation_id,
+        customer_headers=customer_identity.authorization_headers,
+        other_customer_headers=(
+            other_customer_identity.authorization_headers
+        ),
+        agent_headers=(
+            support_agent_identity.authorization_headers
+        ),
+        admin_headers=admin_identity.authorization_headers,
     )
 
 
@@ -124,9 +115,8 @@ def _create_customer_ticket(
 ) -> dict[str, Any]:
     response = client.post(
         f"/v1/conversations/{context.conversation_id}/tickets",
+        headers=context.customer_headers,
         json={
-            "customer_id": str(context.customer_id),
-            "source": "customer",
             "subject": subject,
             "description": (
                 "I was charged twice for the same order."
@@ -187,49 +177,40 @@ class TestTicketCreation:
 
     def test_escalation_conversion_is_idempotent(
         self,
-        client: TestClient,
+        application_services: ApplicationServices,
         ticket_context: TicketTestContext,
     ) -> None:
-        payload = {
-            "customer_id": str(ticket_context.customer_id),
-            "source": "escalation",
-            "subject": "Human review required",
-            "description": (
-                "The conversation was escalated for human review."
-            ),
-            "category": "billing",
-            "priority": "high",
-            "escalation_id": str(ticket_context.escalation_id),
-            "metadata": {
-                "origin": "escalation",
-            },
-        }
+        def command() -> CreateTicketCommand:
+            return CreateTicketCommand(
+                conversation_id=ticket_context.conversation_id,
+                customer_id=ticket_context.customer_id,
+                source="escalation",
+                subject="Human review required",
+                description=(
+                    "The conversation was escalated for "
+                    "human review."
+                ),
+                principal=None,
+                trace_id=uuid7(),
+                category="billing",
+                priority="high",
+                escalation_id=ticket_context.escalation_id,
+                metadata={
+                    "origin": "escalation",
+                },
+            )
 
-        first = client.post(
-            f"/v1/conversations/{ticket_context.conversation_id}/tickets",
-            json=payload,
+        first = application_services.create_ticket.execute(
+            command()
         )
-        second = client.post(
-            f"/v1/conversations/{ticket_context.conversation_id}/tickets",
-            json=payload,
+        second = application_services.create_ticket.execute(
+            command()
         )
 
-        assert first.status_code == 201, first.text
-        assert second.status_code == 201, second.text
-
-        first_body = first.json()
-        second_body = second.json()
-
-        assert first_body["created"] is True
-        assert second_body["created"] is False
-        assert (
-            second_body["ticket_id"]
-            == first_body["ticket_id"]
-        )
-        assert (
-            second_body["ticket_number"]
-            == first_body["ticket_number"]
-        )
+        assert first.created is True
+        assert second.created is False
+        assert second.ticket_id == first.ticket_id
+        assert second.ticket_number == first.ticket_number
 
 
 class TestTicketQueries:
@@ -245,12 +226,7 @@ class TestTicketQueries:
 
         owner_response = client.get(
             "/v1/tickets",
-            params={
-                "requester_id": str(
-                    ticket_context.customer_id
-                ),
-                "requester_role": "customer",
-            },
+            headers=ticket_context.customer_headers,
         )
 
         assert owner_response.status_code == 200
@@ -264,12 +240,7 @@ class TestTicketQueries:
 
         other_response = client.get(
             "/v1/tickets",
-            params={
-                "requester_id": str(
-                    ticket_context.other_customer_id
-                ),
-                "requester_role": "customer",
-            },
+            headers=ticket_context.other_customer_headers,
         )
 
         assert other_response.status_code == 200
@@ -287,17 +258,16 @@ class TestTicketQueries:
 
         response = client.get(
             f"/v1/tickets/{created['ticket_id']}",
-            params={
-                "requester_id": str(
-                    ticket_context.other_customer_id
-                ),
-                "requester_role": "customer",
-            },
+            headers=ticket_context.other_customer_headers,
         )
 
-        assert response.status_code == 403
+        # assert response.status_code == 403
+        # assert response.json()["error"]["code"] == (
+        #     "TICKET_ACCESS_DENIED"
+        # )
+        assert response.status_code == 404
         assert response.json()["error"]["code"] == (
-            "TICKET_ACCESS_DENIED"
+            "TICKET_NOT_FOUND"
         )
 
     def test_agent_can_view_active_queue_and_metadata(
@@ -312,9 +282,8 @@ class TestTicketQueries:
 
         response = client.get(
             "/v1/tickets",
+            headers=ticket_context.agent_headers,
             params={
-                "requester_id": str(ticket_context.agent_id),
-                "requester_role": "support_agent",
                 "active_only": "true",
                 "unassigned_only": "true",
             },
@@ -339,10 +308,7 @@ class TestTicketQueries:
     ) -> None:
         response = client.get(
             f"/v1/tickets/{uuid7()}",
-            params={
-                "requester_id": str(ticket_context.agent_id),
-                "requester_role": "support_agent",
-            },
+            headers=ticket_context.agent_headers,
         )
 
         assert response.status_code == 404
@@ -369,9 +335,8 @@ class TestTicketComments:
 
         public_response = client.post(
             f"/v1/tickets/{ticket_id}/comments",
+            headers=ticket_context.agent_headers,
             json={
-                "author_id": str(ticket_context.agent_id),
-                "author_role": "support_agent",
                 "visibility": "customer",
                 "content": (
                     "We are reviewing the duplicate charge."
@@ -384,9 +349,8 @@ class TestTicketComments:
 
         internal_response = client.post(
             f"/v1/tickets/{ticket_id}/comments",
+            headers=ticket_context.agent_headers,
             json={
-                "author_id": str(ticket_context.agent_id),
-                "author_role": "support_agent",
                 "visibility": "internal",
                 "content": (
                     "Check the payment processor logs."
@@ -402,12 +366,7 @@ class TestTicketComments:
 
         customer_detail = client.get(
             f"/v1/tickets/{ticket_id}",
-            params={
-                "requester_id": str(
-                    ticket_context.customer_id
-                ),
-                "requester_role": "customer",
-            },
+            headers=ticket_context.customer_headers,
         )
 
         assert customer_detail.status_code == 200
@@ -423,10 +382,7 @@ class TestTicketComments:
 
         agent_detail = client.get(
             f"/v1/tickets/{ticket_id}",
-            params={
-                "requester_id": str(ticket_context.agent_id),
-                "requester_role": "support_agent",
-            },
+            headers=ticket_context.agent_headers,
         )
 
         assert agent_detail.status_code == 200
@@ -463,18 +419,21 @@ class TestTicketComments:
 
         response = client.post(
             f"/v1/tickets/{created['ticket_id']}/comments",
+            headers=ticket_context.customer_headers,
             json={
-                "author_id": str(ticket_context.customer_id),
-                "author_role": "customer",
                 "visibility": "internal",
                 "content": "Hidden customer note.",
             },
         )
 
         # The API schema rejects this before the application service runs.
-        assert response.status_code == 422
+        # assert response.status_code == 422
+        # assert response.json()["error"]["code"] == (
+        #     "INVALID_REQUEST"
+        # )
+        assert response.status_code == 403
         assert response.json()["error"]["code"] == (
-            "INVALID_REQUEST"
+            "TICKET_ACCESS_DENIED"
         )
 
 
@@ -492,10 +451,7 @@ class TestTicketLifecycle:
 
         detail = client.get(
             f"/v1/tickets/{ticket_id}",
-            params={
-                "requester_id": str(ticket_context.agent_id),
-                "requester_role": "support_agent",
-            },
+            headers=ticket_context.agent_headers,
         )
         assert detail.status_code == 200
 
@@ -503,6 +459,7 @@ class TestTicketLifecycle:
 
         assigned = client.patch(
             f"/v1/tickets/{ticket_id}",
+            headers=ticket_context.agent_headers,
             json={
                 "expected_row_version": initial_version,
                 "target_status": "in_progress",
@@ -525,6 +482,7 @@ class TestTicketLifecycle:
 
         resolved = client.patch(
             f"/v1/tickets/{ticket_id}",
+            headers=ticket_context.agent_headers,
             json={
                 "expected_row_version": assigned_body["row_version"],
                 "target_status": "resolved",
@@ -545,6 +503,7 @@ class TestTicketLifecycle:
 
         closed = client.patch(
             f"/v1/tickets/{ticket_id}",
+            headers=ticket_context.agent_headers,
             json={
                 "expected_row_version": resolved_body["row_version"],
                 "target_status": "closed",
@@ -573,15 +532,15 @@ class TestTicketLifecycle:
 
         detail = client.get(
             f"/v1/tickets/{ticket_id}",
-            params={
-                "requester_id": str(ticket_context.admin_id),
-                "requester_role": "admin",
-            },
+            headers=ticket_context.admin_headers,
         )
+
+        assert detail.status_code == 200, detail.text
         initial_version = detail.json()["ticket"]["row_version"]
 
         first_update = client.patch(
             f"/v1/tickets/{ticket_id}",
+            headers=ticket_context.admin_headers,
             json={
                 "expected_row_version": initial_version,
                 "priority": "urgent",
@@ -592,6 +551,7 @@ class TestTicketLifecycle:
 
         stale_update = client.patch(
             f"/v1/tickets/{ticket_id}",
+            headers=ticket_context.admin_headers,
             json={
                 "expected_row_version": initial_version,
                 "category": "refund",
@@ -605,4 +565,29 @@ class TestTicketLifecycle:
         assert error["code"] == "TICKET_CONCURRENT_UPDATE"
         assert error["trace_id"] == (
             stale_update.headers["X-Trace-ID"]
+        )
+        
+    def test_customer_cannot_create_ticket_for_another_user(
+        self,
+        client: TestClient,
+        ticket_context: TicketTestContext,
+    ) -> None:
+        response = client.post(
+            f"/v1/conversations/"
+            f"{ticket_context.conversation_id}/tickets",
+            headers=ticket_context.customer_headers,
+            json={
+                "customer_id": str(
+                    ticket_context.other_customer_id
+                ),
+                "subject": "Spoofed ticket",
+                "description": (
+                    "Attempt to create a ticket for another user."
+                ),
+            },
+        )
+
+        assert response.status_code == 403
+        assert response.json()["error"]["code"] == (
+            "TICKET_ACCESS_DENIED"
         )

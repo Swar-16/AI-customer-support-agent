@@ -20,10 +20,10 @@ def isolate_database(clean_database):
 
 def _record_health_request(
     *,
-    client: TestClient,
+    admin_client: TestClient,
     trace_id: uuid.UUID,
 ) -> None:
-    response = client.get(
+    response = admin_client.get(
         "/v1/health",
         headers={
             "X-Trace-ID": str(trace_id),
@@ -36,16 +36,16 @@ def _record_health_request(
 class TestDashboardAPIRequests:
     def test_returns_correlated_api_request(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
         trace_id = uuid7()
 
         _record_health_request(
-            client=client,
+            admin_client=admin_client,
             trace_id=trace_id,
         )
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/api-requests",
             params={
                 "trace_id": str(trace_id),
@@ -78,16 +78,16 @@ class TestDashboardAPIRequests:
 
     def test_filters_by_request_properties(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
         trace_id = uuid7()
 
         _record_health_request(
-            client=client,
+            admin_client=admin_client,
             trace_id=trace_id,
         )
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/api-requests",
             params={
                 "trace_id": str(trace_id),
@@ -116,11 +116,11 @@ class TestDashboardAPIRequests:
 
     def test_filters_client_error_request(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
         trace_id = uuid7()
 
-        missing_response = client.get(
+        missing_response = admin_client.get(
             "/v1/path-that-does-not-exist",
             headers={
                 "X-Trace-ID": str(trace_id),
@@ -129,7 +129,7 @@ class TestDashboardAPIRequests:
 
         assert missing_response.status_code == 404
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/api-requests",
             params={
                 "trace_id": str(trace_id),
@@ -152,14 +152,14 @@ class TestDashboardAPIRequests:
 
     def test_non_matching_trace_returns_empty_page(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
         _record_health_request(
-            client=client,
+            admin_client=admin_client,
             trace_id=uuid7(),
         )
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/api-requests",
             params={
                 "trace_id": str(uuid7()),
@@ -178,14 +178,14 @@ class TestDashboardAPIRequests:
 
     def test_paginates_filtered_requests_without_duplicates(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
         _record_health_request(
-            client=client,
+            admin_client=admin_client,
             trace_id=uuid7(),
         )
         _record_health_request(
-            client=client,
+            admin_client=admin_client,
             trace_id=uuid7(),
         )
 
@@ -194,14 +194,14 @@ class TestDashboardAPIRequests:
             "limit": 1,
         }
 
-        first_response = client.get(
+        first_response = admin_client.get(
             "/v1/dashboard/api-requests",
             params={
                 **shared_parameters,
                 "offset": 0,
             },
         )
-        second_response = client.get(
+        second_response = admin_client.get(
             "/v1/dashboard/api-requests",
             params={
                 **shared_parameters,
@@ -232,27 +232,27 @@ class TestDashboardAPIRequests:
 
     def test_rejects_invalid_filters(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
-        invalid_method = client.get(
+        invalid_method = admin_client.get(
             "/v1/dashboard/api-requests",
             params={
                 "method": "CONNECT",
             },
         )
-        invalid_status_code = client.get(
+        invalid_status_code = admin_client.get(
             "/v1/dashboard/api-requests",
             params={
                 "status_code": 999,
             },
         )
-        invalid_outcome = client.get(
+        invalid_outcome = admin_client.get(
             "/v1/dashboard/api-requests",
             params={
                 "outcome": "maybe",
             },
         )
-        invalid_latency = client.get(
+        invalid_latency = admin_client.get(
             "/v1/dashboard/api-requests",
             params={
                 "minimum_latency_ms": -1,
@@ -266,16 +266,16 @@ class TestDashboardAPIRequests:
 
     def test_does_not_expose_sensitive_request_data(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
         trace_id = uuid7()
 
         _record_health_request(
-            client=client,
+            admin_client=admin_client,
             trace_id=trace_id,
         )
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/api-requests",
             params={
                 "trace_id": str(trace_id),

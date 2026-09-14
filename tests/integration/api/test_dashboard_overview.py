@@ -10,6 +10,7 @@ import uuid
 from uuid6 import uuid7
 
 from packages.database.models.audit.api_request import APIRequestModel
+from packages.database.models.support.conversation import ConversationModel
 
 
 pytestmark = pytest.mark.integration
@@ -34,6 +35,26 @@ def isolate_database(clean_database):
     """
     yield
 
+@pytest.fixture()
+def seeded_conversation(
+    test_session_factory,
+    customer_identity,
+) -> uuid.UUID:
+    conversation_id = uuid7()
+
+    with test_session_factory() as session:
+        session.add(
+            ConversationModel(
+                id=conversation_id,
+                user_id=customer_identity.user_id,
+                status="open",
+                channel="web",
+                title="Dashboard trace correlation test",
+            )
+        )
+        session.commit()
+
+    return conversation_id
 
 def _sections_by_key(
     response_body: dict,
@@ -68,11 +89,11 @@ def _trace_query_range() -> dict[str, str]:
 class TestDashboardTraceQueries:
     def test_lists_api_only_trace(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
         trace_id = uuid7()
 
-        source_response = client.get(
+        source_response = admin_client.get(
             "/v1/health",
             headers={
                 "X-Trace-ID": str(trace_id),
@@ -81,7 +102,7 @@ class TestDashboardTraceQueries:
 
         assert source_response.status_code == 200
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/traces",
             params={
                 **_trace_query_range(),
@@ -113,17 +134,19 @@ class TestDashboardTraceQueries:
 
     def test_correlates_api_request_and_ai_run(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
     ) -> None:
         trace_id = uuid7()
 
-        message_response = client.post(
+        message_response = admin_client.post(
             (
                 f"/v1/conversations/"
                 f"{seeded_conversation}/messages"
             ),
             headers={
+                **customer_auth_headers,
                 "X-Trace-ID": str(trace_id),
             },
             json={
@@ -136,7 +159,7 @@ class TestDashboardTraceQueries:
         message_body = message_response.json()
         ai_run_id = uuid.UUID(message_body["ai_run_id"])
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/traces",
             params={
                 **_trace_query_range(),
@@ -163,7 +186,7 @@ class TestDashboardTraceQueries:
         assert trace["maximum_api_latency_ms"] is not None
         assert trace["maximum_ai_latency_ms"] is not None
 
-        by_conversation = client.get(
+        by_conversation = admin_client.get(
             "/v1/dashboard/traces",
             params={
                 **_trace_query_range(),
@@ -178,7 +201,7 @@ class TestDashboardTraceQueries:
             == str(trace_id)
         )
 
-        by_ai_run = client.get(
+        by_ai_run = admin_client.get(
             "/v1/dashboard/traces",
             params={
                 **_trace_query_range(),
@@ -195,11 +218,11 @@ class TestDashboardTraceQueries:
 
     def test_filters_error_traces(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
         trace_id = uuid7()
 
-        invalid_response = client.get(
+        invalid_response = admin_client.get(
             "/v1/dashboard/overview",
             headers={
                 "X-Trace-ID": str(trace_id),
@@ -212,7 +235,7 @@ class TestDashboardTraceQueries:
 
         assert invalid_response.status_code == 422
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/traces",
             params={
                 **_trace_query_range(),
@@ -236,7 +259,7 @@ class TestDashboardTraceQueries:
         assert trace["failed_api_request_count"] == 1
         assert trace["ai_run_count"] == 0
 
-        success_filter = client.get(
+        success_filter = admin_client.get(
             "/v1/dashboard/traces",
             params={
                 **_trace_query_range(),
@@ -251,7 +274,7 @@ class TestDashboardTraceQueries:
 
     def test_paginates_trace_results(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         test_session_factory,
     ) -> None:
         first_trace_id = uuid7()
@@ -261,7 +284,7 @@ class TestDashboardTraceQueries:
             first_trace_id,
             second_trace_id,
         ):
-            response = client.get(
+            response = admin_client.get(
                 "/v1/health",
                 headers={
                     "X-Trace-ID": str(trace_id),
@@ -296,7 +319,7 @@ class TestDashboardTraceQueries:
             "ended_at": query_ended_at.isoformat(),
         }
 
-        first_page = client.get(
+        first_page = admin_client.get(
             "/v1/dashboard/traces",
             params={
                 **query_range,
@@ -316,7 +339,7 @@ class TestDashboardTraceQueries:
         assert first_body["has_more"] is True
         assert first_body["next_offset"] == 1
 
-        second_page = client.get(
+        second_page = admin_client.get(
             "/v1/dashboard/traces",
             params={
                 **query_range,
@@ -361,9 +384,9 @@ class TestDashboardTraceQueries:
 
     def test_rejects_invalid_trace_status(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/traces",
             params={
                 **_trace_query_range(),
@@ -377,9 +400,9 @@ class TestDashboardTraceQueries:
 class TestDashboardOverview:
     def test_default_range_returns_all_overview_sections(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
-        response = client.get("/v1/dashboard/overview")
+        response = admin_client.get("/v1/dashboard/overview")
 
         assert response.status_code == 200
 
@@ -417,7 +440,7 @@ class TestDashboardOverview:
 
     def test_accepts_explicit_timezone_aware_range(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
         started_at = datetime(
             2026,
@@ -436,7 +459,7 @@ class TestDashboardOverview:
             tzinfo=timezone.utc,
         )
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/overview",
             params={
                 "started_at": started_at.isoformat(),
@@ -460,12 +483,12 @@ class TestDashboardOverview:
 
     def test_future_range_returns_zero_time_bound_metrics(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
         started_at = datetime.now(timezone.utc) + timedelta(days=1)
         ended_at = started_at + timedelta(hours=1)
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/overview",
             params={
                 "started_at": started_at.isoformat(),
@@ -519,7 +542,7 @@ class TestDashboardOverview:
 
     def test_rejects_reversed_range(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
         started_at = datetime(
             2026,
@@ -534,7 +557,7 @@ class TestDashboardOverview:
             tzinfo=timezone.utc,
         )
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/overview",
             params={
                 "started_at": started_at.isoformat(),
@@ -550,9 +573,9 @@ class TestDashboardOverview:
 
     def test_rejects_naive_datetime(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/overview",
             params={
                 "started_at": "2026-09-01T00:00:00",
@@ -568,7 +591,7 @@ class TestDashboardOverview:
 
     def test_rejects_range_larger_than_ninety_days(
         self,
-        client: TestClient,
+        admin_client: TestClient,
     ) -> None:
         started_at = datetime(
             2026,
@@ -578,7 +601,7 @@ class TestDashboardOverview:
         )
         ended_at = started_at + timedelta(days=91)
 
-        response = client.get(
+        response = admin_client.get(
             "/v1/dashboard/overview",
             params={
                 "started_at": started_at.isoformat(),
@@ -594,10 +617,10 @@ class TestDashboardOverview:
 
     def test_dashboard_request_is_recorded(
         self,
-        client: TestClient,
+        admin_client: TestClient,
         test_session_factory,
     ) -> None:
-        response = client.get("/v1/dashboard/overview")
+        response = admin_client.get("/v1/dashboard/overview")
         import uuid
 
         trace_id = uuid.UUID(response.headers["X-Trace-ID"])

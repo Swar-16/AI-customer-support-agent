@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from uuid6 import uuid7
+from typing import Any
 
 from apps.api.app.main import create_api_app
 from packages.application.composition.application_factory import ApplicationServices, create_application
@@ -14,7 +15,6 @@ from packages.database.models.ai.llm_call import LLMCallModel
 from packages.database.models.ai.run import AIRunModel
 from packages.database.models.support.conversation import ConversationModel
 from packages.database.models.support.message import MessageModel
-from packages.database.models.support.user import UserModel
 from packages.ai.intent.taxonomy import IntentType
 from packages.ai.decision.schemas import DecisionType
 from packages.ai.orchestration.state import PipelineStage
@@ -48,32 +48,80 @@ def live_client(monkeypatch: pytest.MonkeyPatch, live_application_services: Appl
     app = create_api_app()
     with TestClient(app) as client:
         yield client
+        
+@pytest.fixture()
+def live_customer(
+    live_client: TestClient,
+) -> dict[str, Any]:
+    email = f"live-groq-{uuid7()}@example.com"
+
+    response = live_client.post(
+        "/v1/auth/register",
+        json={
+            "email": email,
+            "password": "Live-Groq-Smoke-Password-47!",
+            "display_name": "Live Groq Customer",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+
+    body = response.json()
+
+    return {
+        "user_id": uuid.UUID(body["user"]["id"]),
+        "headers": {
+            "Authorization": (
+                f"Bearer {body['tokens']['access_token']}"
+            )
+        },
+    }
 
 @pytest.fixture()
-def live_conversation(test_session_factory) -> uuid.UUID:
-    user_id = uuid7()
+def live_conversation(
+    test_session_factory,
+    live_customer: dict[str, Any],
+) -> uuid.UUID:
     conversation_id = uuid7()
 
     with test_session_factory() as session:
-        user = UserModel(id=user_id)
-        session.add(user)
-        session.flush()
-        conversation = ConversationModel(id=conversation_id, user_id=user_id)
-        session.add(conversation)
+        session.add(
+            ConversationModel(
+                id=conversation_id,
+                user_id=live_customer["user_id"],
+                status="open",
+                channel="web",
+                title="Live Groq API smoke test",
+            )
+        )
         session.commit()
 
     return conversation_id
 
 class TestLiveGroqAPI:
-    def test_customer_message_reaches_real_groq_and_persists_result(self, live_client: TestClient, live_conversation: uuid.UUID, test_session_factory) -> None:
+    def test_customer_message_reaches_real_groq_and_persists_result(
+        self,
+        live_client: TestClient,
+        live_conversation: uuid.UUID,
+        live_customer: dict[str, Any],
+        test_session_factory,
+    ) -> None:
         trace_id = uuid7()
         response = live_client.post(
             f"/v1/conversations/{live_conversation}/messages",
-            headers={ "X-Trace-ID": str(trace_id) },
-            json={ "message": "Please tell me the current status of order ORD-12345." },
+            headers={
+                **live_customer["headers"],
+                "X-Trace-ID": str(trace_id),
+            },
+            json={
+                "message": (
+                    "Please tell me the current status "
+                    "of order ORD-12345."
+                ),
+            },
         )
 
-        assert response.status_code == 200
+        assert response.status_code == 200#, response.text
 
         body = response.json()
 
