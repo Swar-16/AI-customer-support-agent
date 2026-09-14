@@ -32,6 +32,50 @@ class KnowledgeReadAccessDeniedError(RuntimeError):
 class KnowledgeMutationAccessDeniedError(RuntimeError):
     """Raised when a caller cannot initiate a KM mutation."""
 
+# Upload Document
+class KnowledgeDocumentUploadError(RuntimeError):
+    """Base application error for knowledge-file upload failures."""
+
+class KnowledgeUploadConfigurationError(KnowledgeDocumentUploadError):
+    """Raised when the server-side upload policy is invalid."""
+
+class InvalidKnowledgeUploadFilenameError(KnowledgeDocumentUploadError):
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
+
+class UnsupportedKnowledgeUploadTypeError(KnowledgeDocumentUploadError):
+    def __init__(self, *, filename: str, allowed_extensions: tuple[str, ...]) -> None:
+        self.filename = filename
+        self.allowed_extensions = allowed_extensions
+        super().__init__("Unsupported knowledge-file extension. Allowed extensions: "+ ", ".join(allowed_extensions))
+
+class UnsupportedKnowledgeUploadMediaTypeError(KnowledgeDocumentUploadError):
+    def __init__(self, *, filename: str, media_type: str | None, allowed_media_types: tuple[str, ...]) -> None:
+        self.filename = filename
+        self.media_type = media_type
+        self.allowed_media_types = allowed_media_types
+        super().__init__("The declared media type does not match the uploaded file type.")
+
+class EmptyKnowledgeUploadError(KnowledgeDocumentUploadError):
+    def __init__(self) -> None:
+        super().__init__("The uploaded knowledge file is empty.")
+
+class KnowledgeUploadTooLargeError(KnowledgeDocumentUploadError):
+    def __init__(self, *, actual_bytes: int, maximum_bytes: int) -> None:
+        self.actual_bytes = actual_bytes
+        self.maximum_bytes = maximum_bytes
+        super().__init__(f"The uploaded knowledge file exceeds the {maximum_bytes}-byte limit.")
+
+class InvalidKnowledgeUploadEncodingError(KnowledgeDocumentUploadError):
+    def __init__(self) -> None:
+        super().__init__("Knowledge text files must use valid UTF-8 encoding.")
+
+class UnsafeKnowledgeUploadContentError(KnowledgeDocumentUploadError):
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
+
 # Get Version
 class GetKnowledgeVersionError(RuntimeError):
     """Base application error for knowledge-version retrieval."""

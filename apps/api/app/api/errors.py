@@ -66,6 +66,9 @@ from packages.knowledge.application.exceptions import KnowledgeProcessingDocumen
 from packages.knowledge.application.exceptions import KnowledgeReadAccessDeniedError, KnowledgeVersionNotFoundError as ProcessedKnowledgeVersionNotFoundError
 from packages.knowledge.application.exceptions import KnowledgeVersionNotProcessableError, KnowledgeVersionProcessingConflictError, PublishKnowledgeDocumentDoesNotExistError
 from packages.knowledge.application.exceptions import PublishKnowledgeVersionDoesNotExistError, QueriedKnowledgeDocumentDoesNotExistError, QueriedKnowledgeVersionDoesNotExistError
+from packages.knowledge.application.exceptions import EmptyKnowledgeUploadError, InvalidKnowledgeUploadEncodingError, InvalidKnowledgeUploadFilenameError
+from packages.knowledge.application.exceptions import KnowledgeUploadConfigurationError, KnowledgeUploadTooLargeError, UnsafeKnowledgeUploadContentError
+from packages.knowledge.application.exceptions import UnsupportedKnowledgeUploadMediaTypeError, UnsupportedKnowledgeUploadTypeError
 from packages.knowledge.domain.errors import InvalidKnowledgeDocumentError, InvalidKnowledgeVersionError, InvalidKnowledgeVersionNumberError,KnowledgeDocumentAlreadyArchivedError
 from packages.knowledge.domain.errors import KnowledgeDocumentDeletedError, KnowledgeDocumentNotFoundError, KnowledgeDocumentTitleError, KnowledgeStateTransitionError
 from packages.knowledge.domain.errors import KnowledgeVersionAlreadyPublishedError, KnowledgeVersionConflictError, KnowledgeVersionContentError, KnowledgeVersionHasNoChunksError
@@ -114,6 +117,9 @@ ERROR_KNOWLEDGE_NOT_FOUND = "KNOWLEDGE_NOT_FOUND"
 ERROR_KNOWLEDGE_ACCESS_DENIED = "KNOWLEDGE_ACCESS_DENIED"
 ERROR_INVALID_KNOWLEDGE_OPERATION = "INVALID_KNOWLEDGE_OPERATION"
 ERROR_KNOWLEDGE_CONFLICT = "KNOWLEDGE_CONFLICT"
+ERROR_INVALID_KNOWLEDGE_UPLOAD = "INVALID_KNOWLEDGE_UPLOAD"
+ERROR_KNOWLEDGE_UPLOAD_TOO_LARGE = "KNOWLEDGE_UPLOAD_TOO_LARGE"
+ERROR_UNSUPPORTED_KNOWLEDGE_UPLOAD = "UNSUPPORTED_KNOWLEDGE_UPLOAD"
 
 # Registration
 def register_exception_handlers(app: FastAPI) -> None:
@@ -287,11 +293,19 @@ def register_exception_handlers(app: FastAPI) -> None:
     for exception_type in (
         KnowledgeProcessingContractError, KnowledgeProcessingPersistenceError, EmbeddingArtifactConflictError, EmbeddingBatchConfigurationError,
         EmbeddingProviderIdentityMismatchError, EmbeddingResponseCardinalityError, EmbeddingResponseOrderingError, EmbeddingVersionError,
+        KnowledgeUploadConfigurationError,
     ):
-        app.add_exception_handler(
-            exception_type,
-            knowledge_internal_error_handler,
-        )
+        app.add_exception_handler(exception_type, knowledge_internal_error_handler)
+
+    for exception_type in (
+        EmptyKnowledgeUploadError, InvalidKnowledgeUploadEncodingError, InvalidKnowledgeUploadFilenameError, UnsafeKnowledgeUploadContentError,
+    ):
+        app.add_exception_handler(exception_type, invalid_knowledge_upload_handler)
+
+    app.add_exception_handler(KnowledgeUploadTooLargeError, knowledge_upload_too_large_handler)
+
+    for exception_type in (UnsupportedKnowledgeUploadTypeError, UnsupportedKnowledgeUploadMediaTypeError):
+        app.add_exception_handler(exception_type, unsupported_knowledge_upload_handler)
 
     # Must remain last conceptually: this is the safety net for unexpected failures.
     app.add_exception_handler(Exception, unhandled_exception_handler)
@@ -1207,5 +1221,63 @@ async def knowledge_internal_error_handler(request: Request, exc: Exception) -> 
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         code=ERROR_INTERNAL,
         message="An unexpected internal error occurred.",
+        trace_id=trace_id,
+    )
+
+async def invalid_knowledge_upload_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "invalid_knowledge_upload",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        code=ERROR_INVALID_KNOWLEDGE_UPLOAD,
+        message="The uploaded knowledge file is invalid.",
+        trace_id=trace_id,
+    )
+
+async def knowledge_upload_too_large_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "knowledge_upload_too_large",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+        # status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        code=ERROR_KNOWLEDGE_UPLOAD_TOO_LARGE,
+        message="The uploaded knowledge file exceeds the permitted size.",
+        trace_id=trace_id,
+    )
+
+async def unsupported_knowledge_upload_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "unsupported_knowledge_upload",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+        code=ERROR_UNSUPPORTED_KNOWLEDGE_UPLOAD,
+        message="Only supported UTF-8 knowledge-file formats may be uploaded.",
         trace_id=trace_id,
     )

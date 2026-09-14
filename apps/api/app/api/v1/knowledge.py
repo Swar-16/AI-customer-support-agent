@@ -1,7 +1,9 @@
 # AI-customer-support-agent\apps\api\app\api\v1\knowledge.py
 from __future__ import annotations
 from uuid import UUID
-from fastapi import APIRouter, Path, Query, status
+from fastapi import APIRouter, File, Form, Response, UploadFile, Path, Query, status
+from typing import Annotated
+from starlette.concurrency import run_in_threadpool
 
 from apps.api.app.api.dependencies import AdminPrincipalDependency, ApplicationServicesDependency, TraceIdDependency
 from apps.api.app.api.schemas.errors import APIErrorResponse
@@ -9,10 +11,12 @@ from apps.api.app.api.v1.schemas.knowledge import ArchiveKnowledgeDocumentRespon
 from apps.api.app.api.v1.schemas.knowledge import CreateKnowledgeVersionRequest, CreateKnowledgeVersionResponse, EmbedKnowledgeVersionResponse
 from apps.api.app.api.v1.schemas.knowledge import KnowledgeDocumentDetailResponse, KnowledgeDocumentListResponse, KnowledgeVersionDetailResponse
 from apps.api.app.api.v1.schemas.knowledge import KnowledgeVersionListResponse, ProcessKnowledgeVersionResponse, PublishKnowledgeVersionResponse
+from apps.api.app.api.v1.schemas.knowledge import UploadKnowledgeDocumentResponse, UploadKnowledgeVersionResponse
 from packages.knowledge.application.archive_document import ArchiveKnowledgeDocumentCommand
 from packages.knowledge.application.create_document import CreateKnowledgeDocumentCommand
 from packages.knowledge.application.create_version import CreateKnowledgeVersionCommand
 from packages.knowledge.application.embed_version import EmbedKnowledgeVersionCommand
+from packages.knowledge.application.exceptions import KnowledgeUploadTooLargeError
 from packages.knowledge.application.get_document import GetKnowledgeDocumentQuery
 from packages.knowledge.application.get_version import GetKnowledgeVersionQuery
 from packages.knowledge.application.list_documents import ListKnowledgeDocumentsQuery
@@ -20,6 +24,8 @@ from packages.knowledge.application.list_versions import ListKnowledgeVersionsQu
 from packages.knowledge.application.mutation_context import KnowledgeMutationContext
 from packages.knowledge.application.process_version import ProcessKnowledgeVersionCommand
 from packages.knowledge.application.publish_version import PublishKnowledgeVersionCommand
+from packages.knowledge.application.upload_document import UploadKnowledgeDocumentCommand
+from packages.knowledge.application.upload_version import UploadKnowledgeVersionCommand
 from packages.knowledge.domain.enums import KnowledgeContentType, KnowledgeDocumentStatus, KnowledgeIngestionStatus
 from packages.knowledge.domain.enums import KnowledgeSourceType, KnowledgeVersionStatus, KnowledgeVisibility
 
@@ -63,6 +69,53 @@ _MUTATION_RESPONSES = {
     },
 }
 
+_UPLOAD_RESPONSES = {
+    **_MUTATION_RESPONSES,
+    400: {
+        "model": APIErrorResponse,
+        "description": "Invalid filename, empty content, invalid UTF-8, or unsafe text content",
+    },
+    413: {
+        "model": APIErrorResponse,
+        "description": "Uploaded file exceeds the configured limit",
+    },
+    415: {
+        "model": APIErrorResponse,
+        "description": "Unsupported file extension or media type",
+    },
+}
+
+# Document Upload
+@router.post(
+    "/documents/upload",
+    response_model=UploadKnowledgeDocumentResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload a new knowledge document",
+    responses=_UPLOAD_RESPONSES,
+)
+async def upload_knowledge_document(services: ApplicationServicesDependency, principal: AdminPrincipalDependency, 
+                                    trace_id: TraceIdDependency, file: Annotated[UploadFile, File(...)], title: Annotated[str, Form(...)],
+                                    content_type: Annotated[KnowledgeContentType, Form(...)],
+                                    visibility: Annotated[KnowledgeVisibility, Form(...)], description: Annotated[str | None, Form()] = None,
+) -> UploadKnowledgeDocumentResponse:
+    filename = file.filename or ""
+    media_type = file.content_type or ""
+    
+    content = await _read_upload_with_limit(file=file, maximum_bytes=services.upload_knowledge_document.max_upload_bytes)
+    command = UploadKnowledgeDocumentCommand(
+        context=KnowledgeMutationContext.from_admin(principal=principal, trace_id=trace_id),
+        filename=filename,
+        media_type=media_type,
+        content=content,
+        title=title,
+        content_type=content_type,
+        visibility=visibility,
+        description=description,
+    )
+
+    result = await run_in_threadpool(services.upload_knowledge_document.execute, command)
+
+    return UploadKnowledgeDocumentResponse.from_application(result)
 
 # Document queries
 @router.get(
@@ -104,6 +157,73 @@ def get_knowledge_document(services: ApplicationServicesDependency, principal: A
     result = services.get_knowledge_document.execute(GetKnowledgeDocumentQuery(principal=principal, document_id=document_id))
 
     return KnowledgeDocumentDetailResponse.from_application(result)
+
+# Version upload
+@router.post(
+    "/documents/{document_id}/versions/upload",
+    response_model=UploadKnowledgeVersionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload a new knowledge document version",
+    responses={
+        **_UPLOAD_RESPONSES,
+        200: {
+            "model": UploadKnowledgeVersionResponse,
+            "description": "Identical version already exists",
+        },
+    },
+)
+async def upload_knowledge_version(response: Response, services: ApplicationServicesDependency, principal: AdminPrincipalDependency,
+                                   trace_id: TraceIdDependency, file: Annotated[UploadFile, File(...)], document_id: UUID = Path(...),
+) -> UploadKnowledgeVersionResponse:
+    filename = file.filename or ""
+    media_type = file.content_type or ""
+
+    content = await _read_upload_with_limit(file=file, maximum_bytes=services.upload_knowledge_version.max_upload_bytes)
+    command = UploadKnowledgeVersionCommand(
+        context=KnowledgeMutationContext.from_admin(principal=principal, trace_id=trace_id),
+        document_id=document_id,
+        filename=filename,
+        media_type=media_type,
+        content=content,
+    )
+
+    result = await run_in_threadpool(services.upload_knowledge_version.execute, command)
+
+    response.status_code = status.HTTP_201_CREATED if result.created else status.HTTP_200_OK
+
+    return UploadKnowledgeVersionResponse.from_application(result)
+
+# Version creation
+@router.post(
+    "/documents/{document_id}/versions",
+    response_model=CreateKnowledgeVersionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a knowledge document version",
+    responses=_MUTATION_RESPONSES,
+)
+def create_knowledge_version(payload: CreateKnowledgeVersionRequest, services: ApplicationServicesDependency, 
+                             principal: AdminPrincipalDependency, trace_id: TraceIdDependency, document_id: UUID = Path(...)
+) -> CreateKnowledgeVersionResponse:
+    context = KnowledgeMutationContext.from_admin(principal=principal, trace_id=trace_id)
+    result = services.create_knowledge_version.execute(
+        CreateKnowledgeVersionCommand(
+            context=context,
+            document_id=document_id,
+            source_type=payload.source_type,
+            source_content=payload.source_content,
+            source_name=payload.source_name,
+            source_uri=None,
+            metadata={},
+        )
+    )
+
+    return CreateKnowledgeVersionResponse(
+        version_id=result.version_id,
+        document_id=result.document_id,
+        version_number=result.version_number,
+        content_hash=result.content_hash,
+        created_at=result.created_at,
+    )
 
 # Version queries
 @router.get(
@@ -172,38 +292,6 @@ def create_knowledge_document(payload: CreateKnowledgeDocumentRequest, services:
     )
 
     return CreateKnowledgeDocumentResponse(document_id=result.document_id, created_at=result.created_at)
-
-@router.post(
-    "/documents/{document_id}/versions",
-    response_model=CreateKnowledgeVersionResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Create a knowledge document version",
-    responses=_MUTATION_RESPONSES,
-)
-def create_knowledge_version(payload: CreateKnowledgeVersionRequest, services: ApplicationServicesDependency, 
-                             principal: AdminPrincipalDependency, trace_id: TraceIdDependency, document_id: UUID = Path(...)
-) -> CreateKnowledgeVersionResponse:
-    context = KnowledgeMutationContext.from_admin(principal=principal, trace_id=trace_id)
-    result = services.create_knowledge_version.execute(
-        CreateKnowledgeVersionCommand(
-            context=context,
-            document_id=document_id,
-            source_type=payload.source_type,
-            source_content=payload.source_content,
-            source_name=payload.source_name,
-            source_uri=None,
-            metadata={},
-        )
-    )
-
-    return CreateKnowledgeVersionResponse(
-        version_id=result.version_id,
-        document_id=result.document_id,
-        version_number=result.version_number,
-        content_hash=result.content_hash,
-        created_at=result.created_at,
-    )
-
 
 # Version lifecycle
 @router.post(
@@ -296,3 +384,26 @@ def archive_knowledge_document(services: ApplicationServicesDependency, principa
         archived_at=result.archived_at,
         superseded_version_id=result.superseded_version_id,
     )
+
+_UPLOAD_READ_CHUNK_BYTES = 64 * 1024
+
+async def _read_upload_with_limit(*, file: UploadFile, maximum_bytes: int) -> bytes:
+    content = bytearray()
+    try:
+        while True:
+            remaining = maximum_bytes + 1 - len(content)
+            if remaining <= 0:
+                raise KnowledgeUploadTooLargeError(actual_bytes=len(content), maximum_bytes=maximum_bytes)
+
+            chunk = await file.read(min(_UPLOAD_READ_CHUNK_BYTES, remaining))
+            if not chunk:
+                break
+
+            content.extend(chunk)
+            if len(content) > maximum_bytes:
+                raise KnowledgeUploadTooLargeError(actual_bytes=len(content), maximum_bytes=maximum_bytes)
+
+        return bytes(content)
+    
+    finally:
+        await file.close()

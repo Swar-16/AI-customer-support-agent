@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     embedding_dimensions: int = 1024
     embedding_batch_size: int = 16
     
+    ## Knowledge uploads
+    knowledge_upload_max_bytes: int = 1_048_576  # 1 MiB
+    
     ## Jina / Embeddings
     jina_api_key: str | None = None
     jina_embedding_model: str = "jina-embeddings-v4"
@@ -113,6 +116,12 @@ class Settings(BaseSettings):
             raise ValueError("jina_embedding_model must not be blank.")
 
         self.jina_embedding_model = self.jina_embedding_model.strip()
+        
+        if self.knowledge_upload_max_bytes <= 0:
+            raise ValueError("knowledge_upload_max_bytes must be greater than zero.")
+
+        if self.knowledge_upload_max_bytes > 10 * 1_024 * 1_024:
+            raise ValueError("knowledge_upload_max_bytes cannot exceed 10 MiB.")
         
         if self.rag_context_max_tokens <= 0:
             raise ValueError("rag_context_max_tokens must be greater than zero.")

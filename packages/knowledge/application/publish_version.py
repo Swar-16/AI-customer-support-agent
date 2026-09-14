@@ -10,7 +10,7 @@ from packages.knowledge.application.exceptions import KnowledgeDocumentNotPublis
 from packages.knowledge.application.exceptions import PublishKnowledgeDocumentDoesNotExistError, PublishKnowledgeVersionDoesNotExistError
 from packages.knowledge.application.mutation_context import KnowledgeMutationContext
 from packages.knowledge.domain.enums import KnowledgeDocumentStatus, KnowledgeVersionStatus
-from packages.knowledge.domain.errors import KnowledgeVersionHasNoChunksError
+from packages.knowledge.domain.errors import KnowledgeVersionHasNoChunksError, KnowledgeVersionNotReadyError
 from packages.knowledge.domain.version import KnowledgeDocumentVersion
 from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
 
@@ -73,6 +73,9 @@ class PublishKnowledgeVersion:
 
             if target.document_id != document.id:
                 raise KnowledgePublicationConflictError("Target knowledge version no longer belongs to the locked document.")
+            
+            if target.status is not KnowledgeVersionStatus.READY:
+                raise KnowledgeVersionNotReadyError(target.id, current_status=target.status.value)
 
             current_published = uow.versions.get_published_for_document(document.id)
             if current_published is not None and current_published.id == target.id:

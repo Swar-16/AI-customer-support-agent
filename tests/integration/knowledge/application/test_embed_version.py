@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID
+from uuid6 import uuid7
 
 import pytest
 
@@ -54,9 +55,33 @@ from packages.knowledge.repositories.embedding_repository import (
     KnowledgeEmbeddingRepository,
 )
 from packages.knowledge.embeddings import EmbeddingInputBuilder, EmbeddingProvider
+from packages.application.auth.models import (
+    AuthenticatedPrincipal,
+    AuthRole,
+)
+from packages.knowledge.application.mutation_context import (
+    KnowledgeMutationContext,
+)
 
 
 pytestmark = pytest.mark.integration
+
+def embed_command(
+    version_id: UUID,
+) -> EmbedKnowledgeVersionCommand:
+    principal = AuthenticatedPrincipal(
+        user_id=uuid7(),
+        session_id=uuid7(),
+        role=AuthRole.ADMIN,
+    )
+
+    return EmbedKnowledgeVersionCommand(
+        context=KnowledgeMutationContext.from_admin(
+            principal=principal,
+            trace_id=uuid7(),
+        ),
+        version_id=version_id,
+    )
 
 
 # ============================================================================
@@ -202,8 +227,8 @@ def seed_ready_version(
     uow_factory,
     chunk_count: int = 2,
 ):
-    document_id = uuid4()
-    version_id = uuid4()
+    document_id = uuid7()
+    version_id = uuid7()
 
     now = datetime.now(
         timezone.utc
@@ -251,7 +276,7 @@ def seed_ready_version(
 
     chunks = [
         KnowledgeChunk(
-            id=uuid4(),
+            id=uuid7(),
             version_id=version_id,
             chunk_index=index,
             content=(
@@ -405,9 +430,7 @@ class TestEmbedKnowledgeVersionIntegration:
             )
 
             result = service.execute(
-                EmbedKnowledgeVersionCommand(
-                    version_id=version.id
-                )
+                embed_command(version.id)
             )
 
             assert (
@@ -526,15 +549,11 @@ class TestEmbedKnowledgeVersionIntegration:
             )
 
             first = service.execute(
-                EmbedKnowledgeVersionCommand(
-                    version_id=version.id
-                )
+                embed_command(version.id)
             )
 
             second = service.execute(
-                EmbedKnowledgeVersionCommand(
-                    version_id=version.id
-                )
+                embed_command(version.id)
             )
 
             assert (
@@ -666,17 +685,13 @@ class TestEmbedKnowledgeVersionIntegration:
 
             first_result = (
                 first_service.execute(
-                    EmbedKnowledgeVersionCommand(
-                        version_id=version.id
-                    )
+                    embed_command(version.id)
                 )
             )
 
             second_result = (
                 second_service.execute(
-                    EmbedKnowledgeVersionCommand(
-                        version_id=version.id
-                    )
+                    embed_command(version.id)
                 )
             )
 

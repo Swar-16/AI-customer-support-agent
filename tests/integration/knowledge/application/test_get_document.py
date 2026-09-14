@@ -20,11 +20,17 @@ from packages.database.unit_of_work.knowledge import (
 from packages.knowledge.application.get_document import (
     GetKnowledgeDocument,
     GetKnowledgeDocumentQuery,
-    KnowledgeDocumentDoesNotExistError,
+)
+from packages.knowledge.application.exceptions import (
+    QueriedKnowledgeDocumentDoesNotExistError,
 )
 from packages.knowledge.domain.enums import (
     KnowledgeDocumentStatus,
     KnowledgeVersionStatus,
+)
+from packages.application.auth.models import (
+    AuthenticatedPrincipal,
+    AuthRole,
 )
 
 
@@ -215,6 +221,22 @@ def build_service(
             session_factory
         )
     )
+    
+def admin_principal() -> AuthenticatedPrincipal:
+    return AuthenticatedPrincipal(
+        user_id=uuid7(),
+        session_id=uuid7(),
+        role=AuthRole.ADMIN,
+    )
+
+
+def get_document_query(
+    document_id: UUID,
+) -> GetKnowledgeDocumentQuery:
+    return GetKnowledgeDocumentQuery(
+        principal=admin_principal(),
+        document_id=document_id,
+    )
 
 
 # ===========================================================================
@@ -238,9 +260,7 @@ class TestGetDocument:
         )
 
         result = service.execute(
-            GetKnowledgeDocumentQuery(
-                document_id=document_id
-            )
+            get_document_query(document_id)
         )
 
         assert result.document.id == document_id
@@ -251,7 +271,7 @@ class TestGetDocument:
             is KnowledgeDocumentStatus.ACTIVE
         )
 
-        assert result.versions == ()
+        assert result.version_count == 0
         assert result.published_version_id is None
 
 
@@ -266,9 +286,7 @@ class TestGetDocument:
         result = build_service(
             test_session_factory
         ).execute(
-            GetKnowledgeDocumentQuery(
-                document_id=document_id
-            )
+            get_document_query(document_id)
         )
 
         assert result.document.id == document_id
@@ -278,149 +296,6 @@ class TestGetDocument:
                 "integration_test"
             ]
             is True
-        )
-
-
-# ===========================================================================
-# Version history
-# ===========================================================================
-
-
-class TestVersionHistory:
-
-    def test_returns_all_versions_for_document(
-        self,
-        test_session_factory: sessionmaker[Session],
-    ) -> None:
-        document_id = seed_document(
-            test_session_factory
-        )
-
-        version_1 = seed_version(
-            test_session_factory,
-            document_id=document_id,
-            version_number=1,
-            status="superseded",
-        )
-
-        version_2 = seed_version(
-            test_session_factory,
-            document_id=document_id,
-            version_number=2,
-            status="ready",
-        )
-
-        result = build_service(
-            test_session_factory
-        ).execute(
-            GetKnowledgeDocumentQuery(
-                document_id=document_id
-            )
-        )
-
-        ids = {
-            version.id
-            for version in result.versions
-        }
-
-        assert ids == {
-            version_1,
-            version_2,
-        }
-
-        assert len(result.versions) == 2
-
-
-    def test_versions_from_another_document_are_not_returned(
-        self,
-        test_session_factory: sessionmaker[Session],
-    ) -> None:
-        first_document_id = seed_document(
-            test_session_factory,
-            title="Refund Policy",
-        )
-
-        second_document_id = seed_document(
-            test_session_factory,
-            title="Shipping Policy",
-        )
-
-        expected_version_id = seed_version(
-            test_session_factory,
-            document_id=first_document_id,
-            version_number=1,
-            status="ready",
-        )
-
-        other_version_id = seed_version(
-            test_session_factory,
-            document_id=second_document_id,
-            version_number=1,
-            status="ready",
-        )
-
-        result = build_service(
-            test_session_factory
-        ).execute(
-            GetKnowledgeDocumentQuery(
-                document_id=first_document_id
-            )
-        )
-
-        ids = {
-            version.id
-            for version in result.versions
-        }
-
-        assert expected_version_id in ids
-        assert other_version_id not in ids
-
-        assert len(ids) == 1
-
-
-    def test_preserves_historical_version_states(
-        self,
-        test_session_factory: sessionmaker[Session],
-    ) -> None:
-        document_id = seed_document(
-            test_session_factory
-        )
-
-        superseded_id = seed_version(
-            test_session_factory,
-            document_id=document_id,
-            version_number=1,
-            status="superseded",
-        )
-
-        ready_id = seed_version(
-            test_session_factory,
-            document_id=document_id,
-            version_number=2,
-            status="ready",
-        )
-
-        result = build_service(
-            test_session_factory
-        ).execute(
-            GetKnowledgeDocumentQuery(
-                document_id=document_id
-            )
-        )
-
-        by_id = {
-            version.id: version
-            for version in result.versions
-        }
-
-        assert (
-            by_id[superseded_id].status
-            is KnowledgeVersionStatus.SUPERSEDED
-        )
-
-        assert (
-            by_id[ready_id].status
-            is KnowledgeVersionStatus.READY
         )
 
 
@@ -449,9 +324,7 @@ class TestPublishedVersionResolution:
         result = build_service(
             test_session_factory
         ).execute(
-            GetKnowledgeDocumentQuery(
-                document_id=document_id
-            )
+            get_document_query(document_id)
         )
 
         assert (
@@ -459,11 +332,7 @@ class TestPublishedVersionResolution:
             == published_version_id
         )
 
-        assert any(
-            version.id == published_version_id
-            and version.is_published
-            for version in result.versions
-        )
+        assert result.version_count == 1
 
 
     def test_ready_version_is_not_reported_as_published(
@@ -484,9 +353,7 @@ class TestPublishedVersionResolution:
         result = build_service(
             test_session_factory
         ).execute(
-            GetKnowledgeDocumentQuery(
-                document_id=document_id
-            )
+            get_document_query(document_id)
         )
 
         assert result.published_version_id is None
@@ -510,9 +377,7 @@ class TestPublishedVersionResolution:
         result = build_service(
             test_session_factory
         ).execute(
-            GetKnowledgeDocumentQuery(
-                document_id=document_id
-            )
+            get_document_query(document_id)
         )
 
         assert result.published_version_id is None
@@ -537,9 +402,7 @@ class TestAdministrativeVisibility:
         result = build_service(
             test_session_factory
         ).execute(
-            GetKnowledgeDocumentQuery(
-                document_id=document_id
-            )
+            get_document_query(document_id)
         )
 
         assert result.document.id == document_id
@@ -564,9 +427,7 @@ class TestAdministrativeVisibility:
         result = build_service(
             test_session_factory
         ).execute(
-            GetKnowledgeDocumentQuery(
-                document_id=document_id
-            )
+            get_document_query(document_id)
         )
 
         assert result.document.id == document_id
@@ -597,12 +458,10 @@ class TestMissingDocument:
         )
 
         with pytest.raises(
-            KnowledgeDocumentDoesNotExistError
+            QueriedKnowledgeDocumentDoesNotExistError
         ) as exc_info:
             service.execute(
-                GetKnowledgeDocumentQuery(
-                    document_id=missing_id
-                )
+                get_document_query(missing_id)
             )
 
         assert (
@@ -640,9 +499,7 @@ class TestReadSidePersistence:
         build_service(
             test_session_factory
         ).execute(
-            GetKnowledgeDocumentQuery(
-                document_id=document_id
-            )
+            get_document_query(document_id)
         )
 
         with test_session_factory() as session:

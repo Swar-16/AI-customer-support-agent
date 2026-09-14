@@ -12,6 +12,8 @@ from packages.knowledge.domain.document import KnowledgeDocument
 from packages.knowledge.domain.enums import KnowledgeContentType, KnowledgeDocumentStatus, KnowledgeIngestionStatus
 from packages.knowledge.domain.enums import KnowledgeSourceType, KnowledgeVersionStatus, KnowledgeVisibility
 from packages.knowledge.domain.version import KnowledgeDocumentVersion
+from packages.knowledge.application.upload_document import UploadKnowledgeDocumentResult
+from packages.knowledge.application.upload_version import UploadKnowledgeVersionResult
 
 MAX_SOURCE_CONTENT_LENGTH = 2_000_000
 
@@ -106,7 +108,7 @@ class KnowledgeVersionSummaryResponse(KnowledgeAPIModel):
     version_number: int = Field(ge=1)
     source_type: KnowledgeSourceType
     source_name: str | None = None
-    content_hash: str = Field(min_length=64, max_length=64)
+    content_hash: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
     status: KnowledgeVersionStatus
     ingestion_status: KnowledgeIngestionStatus
     created_at: datetime
@@ -262,6 +264,72 @@ class CreateKnowledgeVersionRequest(KnowledgeAPIModel):
 
         return value
 
+class UploadKnowledgeDocumentResponse(KnowledgeAPIModel):
+    document_id: UUID
+    version_id: UUID
+    version_number: int = Field(ge=1)
+    filename: str = Field(min_length=1, max_length=255)
+    source_type: KnowledgeSourceType
+    content_hash: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    uploaded_size_bytes: int = Field(ge=1)
+    document_status: KnowledgeDocumentStatus
+    version_status: KnowledgeVersionStatus
+    ingestion_status: KnowledgeIngestionStatus
+    created_at: datetime
+
+    @classmethod
+    def from_application(cls, result: UploadKnowledgeDocumentResult) -> "UploadKnowledgeDocumentResponse":
+        if not isinstance(result, UploadKnowledgeDocumentResult):
+            raise TypeError("result must be an UploadKnowledgeDocumentResult.")
+        
+        return cls(
+            document_id=result.document_id,
+            version_id=result.version_id,
+            version_number=result.version_number,
+            filename=result.filename,
+            source_type=result.source_type,
+            content_hash=result.content_hash,
+            uploaded_size_bytes=result.uploaded_size_bytes,
+            document_status=result.document_status,
+            version_status=result.version_status,
+            ingestion_status=result.ingestion_status,
+            created_at=result.created_at,
+        )
+
+class UploadKnowledgeVersionResponse(KnowledgeAPIModel):
+    document_id: UUID
+    version_id: UUID
+    version_number: int = Field(ge=1)
+    source_name: str | None = Field(default=None, max_length=500)
+    source_type: KnowledgeSourceType
+    content_hash: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    uploaded_size_bytes: int = Field(ge=1)
+    status: KnowledgeVersionStatus
+    ingestion_status: KnowledgeIngestionStatus
+    created: bool
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_application(cls, result: UploadKnowledgeVersionResult) -> "UploadKnowledgeVersionResponse":
+        if not isinstance(result, UploadKnowledgeVersionResult):
+            raise TypeError("result must be an UploadKnowledgeVersionResult.")
+        
+        return cls(
+            document_id=result.document_id,
+            version_id=result.version_id,
+            version_number=result.version_number,
+            source_name=result.source_name,
+            source_type=result.source_type,
+            content_hash=result.content_hash,
+            uploaded_size_bytes=result.uploaded_size_bytes,
+            status=result.status,
+            ingestion_status=result.ingestion_status,
+            created=result.created,
+            created_at=result.created_at,
+            updated_at=result.updated_at,
+        )
+
 # Mutation responses
 class CreateKnowledgeDocumentResponse(KnowledgeAPIModel):
     document_id: UUID
@@ -271,7 +339,7 @@ class CreateKnowledgeVersionResponse(KnowledgeAPIModel):
     version_id: UUID
     document_id: UUID
     version_number: int = Field(ge=1)
-    content_hash: str = Field(min_length=64, max_length=64)
+    content_hash: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
     created_at: datetime
 
 class ProcessKnowledgeVersionResponse(KnowledgeAPIModel):

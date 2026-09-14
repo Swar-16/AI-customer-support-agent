@@ -9,6 +9,7 @@ from packages.database.models.knowledge.document_version import KnowledgeDocumen
 from packages.database.repositories.knowledge.mappers import update_version_model, version_to_domain, version_to_model
 from packages.knowledge.domain.version import KnowledgeDocumentVersion
 from packages.knowledge.repositories.version_repository import KnowledgeVersionListFilter
+from packages.knowledge.domain.enums import KnowledgeSourceType
 
 
 class SQLAlchemyKnowledgeVersionRepository:
@@ -46,14 +47,45 @@ class SQLAlchemyKnowledgeVersionRepository:
             PROCESSING -> FAILED
             READY -> PUBLISHED
 
-        The lock prevents two concurrent workers from successfully claiming
-        or completing the same version at the same time.
+        The lock prevents two concurrent workers from successfully claiming or completing the same version at the same time.
 
         Transaction ownership remains with the surrounding Unit of Work.
         """
         statement = (select(KnowledgeDocumentVersionModel)
                      .where(KnowledgeDocumentVersionModel.id == version_id)
                      .with_for_update()
+        )
+
+        model = self._session.scalar(statement)
+        if model is None:
+            return None
+
+        return version_to_domain(model)
+    
+    def get_by_document_and_content_hash(self, *, document_id: UUID, source_type: KnowledgeSourceType, content_hash: str) -> KnowledgeDocumentVersion | None:
+        if not isinstance(document_id, UUID):
+            raise TypeError("document_id must be a UUID.")
+
+        if not isinstance(content_hash, str):
+            raise TypeError("content_hash must be a string.")
+
+        normalized_hash = content_hash.strip().lower()
+        if len(normalized_hash) != 64:
+            raise ValueError("content_hash must be a 64-character SHA-256 digest.")
+
+        try:
+            int(normalized_hash, 16)
+            
+        except ValueError as exc:
+            raise ValueError("content_hash must be a hexadecimal SHA-256 digest.") from exc
+
+        statement = (select(KnowledgeDocumentVersionModel)
+                     .where(KnowledgeDocumentVersionModel.document_id == document_id,
+                            KnowledgeDocumentVersionModel.source_type == source_type.value,
+                            KnowledgeDocumentVersionModel.content_hash == normalized_hash)
+                     .order_by(KnowledgeDocumentVersionModel.version_number.desc(),
+                               KnowledgeDocumentVersionModel.id.desc())
+                     .limit(1)
         )
 
         model = self._session.scalar(statement)

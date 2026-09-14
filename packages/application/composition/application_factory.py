@@ -61,6 +61,8 @@ from packages.knowledge.application.list_documents import ListKnowledgeDocuments
 from packages.knowledge.application.list_versions import ListKnowledgeVersions
 from packages.knowledge.application.process_version import ProcessKnowledgeVersion
 from packages.knowledge.application.publish_version import PublishKnowledgeVersion
+from packages.knowledge.application.upload_document import UploadKnowledgeDocument
+from packages.knowledge.application.upload_version import UploadKnowledgeVersion
 
 SessionFactory = sessionmaker[Session]
 ProviderFactory = Callable[..., LLMProvider]
@@ -142,6 +144,8 @@ class ApplicationServices:
     embed_knowledge_version: EmbedKnowledgeVersion
     publish_knowledge_version: PublishKnowledgeVersion
     archive_knowledge_document: ArchiveKnowledgeDocument
+    upload_knowledge_document: UploadKnowledgeDocument
+    upload_knowledge_version: UploadKnowledgeVersion
 
 class ApplicationConfigurationError(RuntimeError):
     """
@@ -214,14 +218,6 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
     list_conversations = ListConversations(uow_factory=uow_factory)
     get_conversation = GetConversation(uow_factory=uow_factory)
     get_conversation_messages = GetConversationMessages(uow_factory=uow_factory)
-    process_customer_message = ProcessCustomerMessage(
-        uow_factory=uow_factory,
-        pipeline_factory=pipeline_factory,
-        embedding_provider=embedding_services.provider,
-        embedding_input_descriptor=embedding_input_builder.descriptor,
-        retrieval_profile=retrieval_profile,
-        grounding_context_budget=grounding_budget,
-    )
     
     close_conversation = CloseConversation(uow_factory=uow_factory)
     password_hasher = Argon2PasswordHasher()
@@ -293,6 +289,17 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         embedding_provider=embedding_services.provider,
         embedding_input_builder=embedding_input_builder,
         embedding_batch_size=settings.embedding_batch_size,
+        knowledge_upload_max_bytes=settings.knowledge_upload_max_bytes,
+    )
+    
+    process_customer_message = ProcessCustomerMessage(
+        uow_factory=uow_factory,
+        pipeline_factory=pipeline_factory,
+        embedding_provider=embedding_services.provider,
+        embedding_input_descriptor=embedding_input_builder.descriptor,
+        retrieval_profile=retrieval_profile,
+        grounding_context_budget=grounding_budget,
+        knowledge_application=knowledge_application,
     )
 
     return ApplicationServices(
@@ -348,6 +355,8 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         embed_knowledge_version=knowledge_application.embed_version,
         publish_knowledge_version=knowledge_application.publish_version,
         archive_knowledge_document=knowledge_application.archive_document,
+        upload_knowledge_document=knowledge_application.upload_document,
+        upload_knowledge_version=knowledge_application.upload_version,
     )
 
 def _resolve_provider(*, settings: Settings, base_provider: LLMProvider | None) -> LLMProvider:

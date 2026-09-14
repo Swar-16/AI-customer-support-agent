@@ -44,6 +44,7 @@ from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
 from packages.application.conversations.query_conversations import ConversationQueryAccessDeniedError, ConversationRequesterDoesNotExistError
 from packages.application.conversations.query_conversations import ConversationRequesterNotActiveError, ConversationRequesterRoleMismatchError
 from packages.database.repositories.support.user_repository import UserRepository
+from packages.application.composition.knowledge_application_factory import KnowledgeApplicationComponents
 
 
 # Internal repository bundle
@@ -169,7 +170,8 @@ class ProcessCustomerMessage:
     CUSTOMER_RESPONSE_STAGES: Final[frozenset[PipelineStage]] = frozenset({PipelineStage.GUARDRAILS_COMPLETED,})
 
     def __init__(self, *, uow_factory: UnitOfWorkFactory, pipeline_factory: AIPipelineFactory, embedding_provider: EmbeddingProvider,
-                 embedding_input_descriptor: EmbeddingInputDescriptor, retrieval_profile: RetrievalProfile, grounding_context_budget: GroundingContextBudget,
+                 embedding_input_descriptor: EmbeddingInputDescriptor, retrieval_profile: RetrievalProfile,
+                 grounding_context_budget: GroundingContextBudget, knowledge_application: KnowledgeApplicationComponents
     ) -> None:
         if uow_factory is None:
             raise TypeError("uow_factory cannot be None")
@@ -206,6 +208,9 @@ class ProcessCustomerMessage:
 
         if not isinstance(grounding_context_budget, GroundingContextBudget):
             raise TypeError("grounding_context_budget must be a GroundingContextBudget")
+        
+        if not isinstance(knowledge_application, KnowledgeApplicationComponents):
+            raise TypeError("knowledge_application must be a KnowledgeApplicationComponents instance.")
 
         self._uow_factory = uow_factory
         self._pipeline_factory = pipeline_factory
@@ -213,6 +218,7 @@ class ProcessCustomerMessage:
         self._embedding_input_descriptor = embedding_input_descriptor
         self._retrieval_profile = retrieval_profile
         self._grounding_context_budget = grounding_context_budget
+        self._knowledge_application = knowledge_application
 
     # Public API
     def execute(self, command: ProcessCustomerMessageCommand) -> ProcessCustomerMessageResult:
@@ -311,6 +317,8 @@ class ProcessCustomerMessage:
                         },
                     ),
                 )
+                
+                knowledge_application=self._knowledge_application
 
                 components = create_answer_service_components(
                     session=session,
@@ -319,8 +327,9 @@ class ProcessCustomerMessage:
                     response_generator=response_generator,
                     embedding_provider=instrumented_embedding_provider,
                     embedding_input_descriptor=self._embedding_input_descriptor,
+                    knowledge_application=knowledge_application,
                     retrieval_telemetry_recorder=retrieval_recorder,
-                    reranker_telemetry_recorder=reranker_recorder
+                    reranker_telemetry_recorder=reranker_recorder,
                 )
 
                 return components.answer_service

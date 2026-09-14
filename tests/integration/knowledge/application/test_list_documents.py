@@ -6,7 +6,12 @@ from uuid6 import uuid7
 
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
+from typing import Any
 
+from packages.application.auth.models import (
+    AuthenticatedPrincipal,
+    AuthRole,
+)
 from packages.database.models.knowledge.document import (
     KnowledgeDocumentModel,
 )
@@ -99,6 +104,22 @@ def build_service(
             session_factory
         )
     )
+    
+def admin_principal() -> AuthenticatedPrincipal:
+    return AuthenticatedPrincipal(
+        user_id=uuid7(),
+        session_id=uuid7(),
+        role=AuthRole.ADMIN,
+    )
+
+
+def list_documents_query(
+    **kwargs: Any,
+) -> ListKnowledgeDocumentsQuery:
+    return ListKnowledgeDocumentsQuery(
+        principal=admin_principal(),
+        **kwargs,
+    )
 
 
 # ===========================================================================
@@ -125,7 +146,7 @@ class TestListDocuments:
         result = build_service(
             test_session_factory
         ).execute(
-            ListKnowledgeDocumentsQuery()
+            list_documents_query()
         )
 
         ids = {
@@ -148,7 +169,7 @@ class TestListDocuments:
         result = build_service(
             test_session_factory
         ).execute(
-            ListKnowledgeDocumentsQuery()
+            list_documents_query()
         )
 
         assert result.documents == ()
@@ -182,7 +203,7 @@ class TestStatusFiltering:
         result = build_service(
             test_session_factory
         ).execute(
-            ListKnowledgeDocumentsQuery(
+            list_documents_query(
                 status=KnowledgeDocumentStatus.ACTIVE
             )
         )
@@ -221,7 +242,7 @@ class TestStatusFiltering:
         result = build_service(
             test_session_factory
         ).execute(
-            ListKnowledgeDocumentsQuery(
+            list_documents_query(
                 status=KnowledgeDocumentStatus.ARCHIVED
             )
         )
@@ -254,7 +275,7 @@ class TestStatusFiltering:
         result = build_service(
             test_session_factory
         ).execute(
-            ListKnowledgeDocumentsQuery(
+            list_documents_query(
                 status=KnowledgeDocumentStatus.DELETED
             )
         )
@@ -294,7 +315,7 @@ class TestContentTypeFiltering:
         result = build_service(
             test_session_factory
         ).execute(
-            ListKnowledgeDocumentsQuery(
+            list_documents_query(
                 content_type=KnowledgeContentType.POLICY
             )
         )
@@ -340,7 +361,7 @@ class TestVisibilityFiltering:
         result = build_service(
             test_session_factory
         ).execute(
-            ListKnowledgeDocumentsQuery(
+            list_documents_query(
                 visibility=KnowledgeVisibility.CUSTOMER
             )
         )
@@ -406,7 +427,7 @@ class TestCombinedFiltering:
         result = build_service(
             test_session_factory
         ).execute(
-            ListKnowledgeDocumentsQuery(
+            list_documents_query(
                 status=KnowledgeDocumentStatus.ACTIVE,
                 content_type=KnowledgeContentType.POLICY,
                 visibility=KnowledgeVisibility.CUSTOMER,
@@ -445,7 +466,7 @@ class TestPagination:
         result = build_service(
             test_session_factory
         ).execute(
-            ListKnowledgeDocumentsQuery(
+            list_documents_query(
                 limit=2,
                 offset=0,
             )
@@ -481,7 +502,7 @@ class TestPagination:
         first_page = build_service(
             test_session_factory
         ).execute(
-            ListKnowledgeDocumentsQuery(
+            list_documents_query(
                 limit=2,
                 offset=0,
             )
@@ -490,7 +511,7 @@ class TestPagination:
         second_page = build_service(
             test_session_factory
         ).execute(
-            ListKnowledgeDocumentsQuery(
+            list_documents_query(
                 limit=2,
                 offset=2,
             )
@@ -527,7 +548,7 @@ class TestPagination:
         result = build_service(
             test_session_factory
         ).execute(
-            ListKnowledgeDocumentsQuery(
+            list_documents_query(
                 limit=2,
                 offset=4,
             )
@@ -550,7 +571,7 @@ class TestPagination:
         result = build_service(
             test_session_factory
         ).execute(
-            ListKnowledgeDocumentsQuery(
+            list_documents_query(
                 limit=10,
                 offset=100,
             )
@@ -599,7 +620,7 @@ class TestOrdering:
         result = build_service(
             test_session_factory
         ).execute(
-            ListKnowledgeDocumentsQuery()
+            list_documents_query()
         )
 
         result_ids = [
@@ -642,7 +663,7 @@ class TestFilteredCount:
         result = build_service(
             test_session_factory
         ).execute(
-            ListKnowledgeDocumentsQuery(
+            list_documents_query(
                 status=KnowledgeDocumentStatus.ARCHIVED
             )
         )
@@ -681,7 +702,7 @@ class TestReadOnlyBehavior:
         build_service(
             test_session_factory
         ).execute(
-            ListKnowledgeDocumentsQuery()
+            list_documents_query()
         )
 
         with test_session_factory() as session:

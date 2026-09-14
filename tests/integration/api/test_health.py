@@ -64,6 +64,19 @@ def make_application_services(*, provider_healthy: bool = True) -> ApplicationSe
         ai_pipeline_factory=Mock(),
         base_llm_provider=provider,
         orchestration_observer=Mock(),
+        
+        list_knowledge_documents=Mock(),
+        get_knowledge_document=Mock(),
+        list_knowledge_versions=Mock(),
+        get_knowledge_version=Mock(),
+        create_knowledge_document=Mock(),
+        create_knowledge_version=Mock(),
+        process_knowledge_version=Mock(),
+        embed_knowledge_version=Mock(),
+        publish_knowledge_version=Mock(),
+        archive_knowledge_document=Mock(),
+        upload_knowledge_document=Mock(),
+        upload_knowledge_version=Mock(),
     )
 
 

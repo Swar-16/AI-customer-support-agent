@@ -16,6 +16,9 @@ from packages.knowledge.application.list_documents import ListKnowledgeDocuments
 from packages.knowledge.application.list_versions import ListKnowledgeVersions
 from packages.knowledge.application.process_version import ProcessKnowledgeVersion
 from packages.knowledge.application.publish_version import PublishKnowledgeVersion
+from packages.knowledge.application.knowledge_upload_policy import KnowledgeUploadPolicy
+from packages.knowledge.application.upload_document import UploadKnowledgeDocument
+from packages.knowledge.application.upload_version import UploadKnowledgeVersion
 from packages.knowledge.embeddings import EmbeddingInputBuilder, EmbeddingProvider
 from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
 
@@ -43,11 +46,14 @@ class KnowledgeApplicationComponents:
     embed_version: EmbedKnowledgeVersion
     publish_version: PublishKnowledgeVersion
     archive_document: ArchiveKnowledgeDocument
+    
+    upload_document: UploadKnowledgeDocument
+    upload_version: UploadKnowledgeVersion
 
     ingestion: KnowledgeIngestionComponents
 
 def create_knowledge_application_components(*, uow_factory: KnowledgeUnitOfWorkFactory, embedding_provider: EmbeddingProvider, 
-                                            embedding_input_builder: EmbeddingInputBuilder, embedding_batch_size: int, 
+                                            embedding_input_builder: EmbeddingInputBuilder, embedding_batch_size: int, knowledge_upload_max_bytes: int,
                                             ingestion: KnowledgeIngestionComponents | None = None,
                                             ai_request_factory: AIKnowledgeRetrievalRequestFactory | None = None,
                                             retrieval_context_factory: KnowledgeRetrievalContextFactory | None = None
@@ -67,6 +73,10 @@ def create_knowledge_application_components(*, uow_factory: KnowledgeUnitOfWorkF
         ai_request_factory=ai_request_factory,
         retrieval_context_factory=retrieval_context_factory,
     )
+    
+    upload_policy = KnowledgeUploadPolicy(max_upload_bytes=knowledge_upload_max_bytes)
+    upload_document = UploadKnowledgeDocument(uow_factory=uow_factory, upload_policy=upload_policy)
+    upload_version = UploadKnowledgeVersion(uow_factory=uow_factory, upload_policy=upload_policy)
 
     effective_ingestion = ingestion if ingestion is not None else create_knowledge_ingestion_components()
     effective_ai_request_factory = ai_request_factory if ai_request_factory is not None else AIKnowledgeRetrievalRequestFactory()
@@ -100,6 +110,9 @@ def create_knowledge_application_components(*, uow_factory: KnowledgeUnitOfWorkF
         ),
         publish_version=PublishKnowledgeVersion(uow_factory=uow_factory),
         archive_document=ArchiveKnowledgeDocument(uow_factory=uow_factory),
+        
+        upload_document=upload_document,
+        upload_version=upload_version,
 
         ingestion=effective_ingestion,
     )

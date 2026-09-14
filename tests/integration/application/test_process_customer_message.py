@@ -60,6 +60,12 @@ from packages.application.auth.models import (
     AuthenticatedPrincipal,
     AuthRole,
 )
+from packages.application.composition.knowledge_application_factory import (
+    create_knowledge_application_components,
+)
+from packages.knowledge.embeddings.input.contextual import (
+    ContextualEmbeddingInputBuilder,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -393,6 +399,24 @@ def grounding_context_budget():
         max_blocks=8,
     )
 
+@pytest.fixture
+def knowledge_application(
+    test_session_factory,
+    embedding_provider,
+):
+    def knowledge_uow_factory():
+        return SqlAlchemyUnitOfWork(
+            session_factory=test_session_factory
+        )
+
+    return create_knowledge_application_components(
+        uow_factory=knowledge_uow_factory,
+        embedding_provider=embedding_provider,
+        embedding_input_builder=ContextualEmbeddingInputBuilder(),
+        embedding_batch_size=32,
+        knowledge_upload_max_bytes=2_000_000,
+    )
+
 
 @pytest.fixture
 def service(
@@ -402,6 +426,7 @@ def service(
     embedding_input_descriptor,
     retrieval_profile,
     grounding_context_budget,
+    knowledge_application,
 ):
     pipeline_factory = AIPipelineFactory(
         base_provider=mock_llm_provider
@@ -416,13 +441,10 @@ def service(
         uow_factory=uow_factory,
         pipeline_factory=pipeline_factory,
         embedding_provider=embedding_provider,
-        embedding_input_descriptor=(
-            embedding_input_descriptor
-        ),
+        embedding_input_descriptor=embedding_input_descriptor,
         retrieval_profile=retrieval_profile,
-        grounding_context_budget=(
-            grounding_context_budget
-        ),
+        grounding_context_budget=grounding_context_budget,
+        knowledge_application=knowledge_application,
     )
     
 def _customer_principal(
@@ -849,6 +871,7 @@ def test_clarification_decision_completes_without_assistant_message(
     embedding_input_descriptor,
     retrieval_profile,
     grounding_context_budget,
+    knowledge_application
 ):
     """
     A successful workflow decision does not imply that an assistant message
@@ -904,13 +927,10 @@ def test_clarification_decision_completes_without_assistant_message(
         uow_factory=uow_factory,
         pipeline_factory=pipeline_factory,
         embedding_provider=embedding_provider,
-        embedding_input_descriptor=(
-            embedding_input_descriptor
-        ),
+        embedding_input_descriptor=embedding_input_descriptor,
         retrieval_profile=retrieval_profile,
-        grounding_context_budget=(
-            grounding_context_budget
-        ),
+        grounding_context_budget=grounding_context_budget,
+        knowledge_application=knowledge_application,
     )
 
     conversation_id = (
@@ -975,6 +995,7 @@ def test_provider_timeout_persists_failed_run_without_assistant_message(
     embedding_input_descriptor,
     retrieval_profile,
     grounding_context_budget,
+    knowledge_application,
 ):
     provider = MockLLMProvider()
 
@@ -1000,6 +1021,7 @@ def test_provider_timeout_persists_failed_run_without_assistant_message(
         grounding_context_budget=(
             grounding_context_budget
         ),
+        knowledge_application=knowledge_application,
     )
 
     conversation_id = (
