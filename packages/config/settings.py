@@ -6,6 +6,7 @@ from datetime import timedelta
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
+from urllib.parse import urlsplit
 
 class Settings(BaseSettings):
     app_env: str = "development"
@@ -20,6 +21,8 @@ class Settings(BaseSettings):
     auth_clock_skew_seconds: int = 30
     auth_login_max_failed_attempts: int = 5
     auth_login_lockout_minutes: int = 15
+    browser_allowed_origins: tuple[str, ...] = ()
+    auth_refresh_cookie_secure: bool = True
 
     ## Database
     database_host: str = "localhost"
@@ -152,6 +155,47 @@ class Settings(BaseSettings):
         if self.rag_context_max_blocks <= 0:
             raise ValueError("rag_context_max_blocks must be greater than zero.")
         
+        return self
+    
+    @model_validator(mode="after")
+    def validate_browser_configuration(self) -> "Settings":
+        environment = self.app_env.strip().lower()
+        local_environment = environment in {"development", "test"}
+        if not self.auth_refresh_cookie_secure and not local_environment:
+            raise ValueError("Refresh cookies must be secure outside development and test.")
+
+        normalized_origins: list[str] = []
+
+        for origin in self.browser_allowed_origins:
+            if not origin or origin != origin.strip() or any(character.isspace() for character in origin) or any(character in origin for character in ("*", "\\", "?", "#")):
+                raise ValueError("Browser origins must be explicit HTTP(S) origins.")
+
+            try:
+                parsed = urlsplit(origin)
+                port = parsed.port
+                
+            except ValueError as exc:
+                raise ValueError("Browser origin is malformed.") from exc
+
+            if (parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username is not None or parsed.password is not None
+                or parsed.path or parsed.query or parsed.fragment):
+                raise ValueError("Browser origins must contain only scheme, host, and optional port.")
+
+            hostname = parsed.hostname.lower()
+            if parsed.scheme == "http" and (not local_environment or hostname not in {"localhost", "127.0.0.1", "::1"}):
+                raise ValueError("HTTP browser origins are allowed only for loopback development and test.")
+
+            if parsed.netloc.endswith(":") or (port is not None and port < 1):
+                raise ValueError("Browser origin port is invalid.")
+
+            host = f"[{hostname}]" if ":" in hostname else hostname
+            default_port = 80 if parsed.scheme == "http" else 443
+            port_suffix = f":{port}" if port is not None and port != default_port else ""
+            normalized = f"{parsed.scheme}://{host}{port_suffix}"
+            if normalized not in normalized_origins:
+                normalized_origins.append(normalized)
+
+        self.browser_allowed_origins = tuple(normalized_origins)
         return self
     
     @property

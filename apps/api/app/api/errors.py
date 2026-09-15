@@ -82,6 +82,8 @@ from packages.application.dashboard.analytics_contract import InvalidAnalyticsTi
 from packages.application.conversations.process_customer_message import CustomerMessagePipelineFailedError, CustomerMessagePipelineTimeoutError
 from packages.application.conversations.process_customer_message import CustomerMessagePipelineUnavailableError, CustomerMessageValidationError
 from packages.application.dashboard.analytics_contract import DashboardAnalyticsQueryTimeoutError, UnsupportedAnalyticsBucketError
+from apps.api.app.api.browser_auth import clear_refresh_cookie
+from packages.config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -1021,13 +1023,19 @@ async def invalid_refresh_token_handler(request: Request, exc: InvalidRefreshTok
         },
     )
 
-    return _error_response(
+    response = _error_response(
         status_code=status.HTTP_401_UNAUTHORIZED,
         code=ERROR_INVALID_REFRESH_TOKEN,
         message="The refresh token is invalid or expired.",
         trace_id=trace_id,
         headers={"WWW-Authenticate": "Bearer",},
     )
+    
+    settings = getattr(request.app.state, "settings", None)
+    if isinstance(settings, Settings):
+        clear_refresh_cookie(response, settings=settings)
+
+    return response
 
 async def current_user_unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
     trace_id = _resolve_trace_id(request)

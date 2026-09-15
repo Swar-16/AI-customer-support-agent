@@ -11,6 +11,8 @@ from uuid6 import uuid7
 from packages.application.auth.authenticate_access_token import AccessAuthenticationRejectedError, AuthenticateAccessTokenCommand
 from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
 from packages.application.composition.application_factory import ApplicationServices
+from apps.api.app.api.browser_auth import require_browser_origin
+from packages.config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,34 @@ def get_services(request: Request) -> ApplicationServices:
     return services
 
 ApplicationServicesDependency = Annotated[ApplicationServices, Depends(get_services)]
+
+def get_api_settings(request: Request) -> Settings:
+    settings = getattr(request.app.state, "settings", None)
+    if not isinstance(settings, Settings):
+        raise RuntimeError("API settings have not been initialized.")
+    
+    return settings
+
+APISettingsDependency = Annotated[Settings, Depends(get_api_settings)]
+
+def get_browser_auth_settings(request: Request, settings: APISettingsDependency) -> Settings:
+    require_browser_origin(request, settings)
+    return settings
+
+BrowserAuthSettingsDependency = Annotated[Settings, Depends(get_browser_auth_settings)]
+
+async def require_empty_refresh_body(request: Request, settings: BrowserAuthSettingsDependency) -> None:
+    """Reject legacy refresh bodies before consuming the cookie."""
+    async for chunk in request.stream():
+        if chunk:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "INVALID_REQUEST",
+                    "message": "Refresh requests must have an empty body.",
+                },
+                headers={"Cache-Control": "no-store"},
+            )
 
 # Trace / correlation ID
 TRACE_HEADER_NAME = "X-Trace-ID"

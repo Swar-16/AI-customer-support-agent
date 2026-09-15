@@ -20,7 +20,7 @@ from packages.database.models.support.user import UserModel
 from packages.database.models.support.user_credential import (
     UserCredentialModel,
 )
-
+from apps.api.app.api.browser_auth import REFRESH_COOKIE_NAME
 
 STRONG_PASSWORD = "Correct-Horse-Battery-Staple-47!"
 
@@ -77,7 +77,7 @@ class TestRegistration:
         assert body["user"]["status"] == "active"
 
         assert body["tokens"]["access_token"]
-        assert body["tokens"]["refresh_token"]
+        assert "refresh_token" not in body["tokens"]
         assert body["tokens"]["token_type"] == "Bearer"
 
         serialized = response.text.lower()
@@ -87,7 +87,7 @@ class TestRegistration:
         assert "token_family_id" not in serialized
 
         refresh_token_hash = TokenService.hash_refresh_token(
-            body["tokens"]["refresh_token"]
+            client.cookies.get(REFRESH_COOKIE_NAME)
         )
 
         with test_session_factory() as session:
@@ -226,7 +226,7 @@ class TestLogin:
         assert body["user"]["id"] == registered_user_id
         assert body["user"]["email"] == email
         assert body["tokens"]["access_token"]
-        assert body["tokens"]["refresh_token"]
+        assert client.cookies.get(REFRESH_COOKIE_NAME)
 
         user_id = uuid.UUID(registered_user_id)
 
@@ -393,21 +393,16 @@ class TestRefreshRotation:
 
         original = registration.json()
         user_id = uuid.UUID(original["user"]["id"])
-        original_refresh = original["tokens"]["refresh_token"]
+        original_refresh = client.cookies.get(REFRESH_COOKIE_NAME)
 
-        response = client.post(
-            "/v1/auth/refresh",
-            json={
-                "refresh_token": original_refresh,
-            },
-        )
+        response = client.post("/v1/auth/refresh")
 
         assert response.status_code == 200
 
         rotated = response.json()
 
         assert (
-            rotated["tokens"]["refresh_token"]
+            client.cookies.get(REFRESH_COOKIE_NAME)
             != original_refresh
         )
         assert (
@@ -419,7 +414,7 @@ class TestRefreshRotation:
             original_refresh
         )
         replacement_hash = TokenService.hash_refresh_token(
-            rotated["tokens"]["refresh_token"]
+            client.cookies.get(REFRESH_COOKIE_NAME)
         )
 
         with test_session_factory() as session:
@@ -476,14 +471,9 @@ class TestRefreshRotation:
         _, registration = _register(client)
         original = registration.json()
 
-        original_refresh = original["tokens"]["refresh_token"]
+        original_refresh = client.cookies.get(REFRESH_COOKIE_NAME)
 
-        rotation = client.post(
-            "/v1/auth/refresh",
-            json={
-                "refresh_token": original_refresh,
-            },
-        )
+        rotation = client.post("/v1/auth/refresh")
         assert rotation.status_code == 200
 
         rotated = rotation.json()
@@ -493,8 +483,8 @@ class TestRefreshRotation:
 
         reuse = client.post(
             "/v1/auth/refresh",
-            json={
-                "refresh_token": original_refresh,
+            headers={
+                "Cookie": f"{REFRESH_COOKIE_NAME}={original_refresh}",
             },
         )
 
@@ -503,6 +493,7 @@ class TestRefreshRotation:
             reuse.json()["error"]["code"]
             == "INVALID_REFRESH_TOKEN"
         )
+        assert client.cookies.get(REFRESH_COOKIE_NAME) is None
 
         # Reuse detection revokes the active replacement, making its access
         # token fail the persisted-session validation immediately.
@@ -550,7 +541,7 @@ class TestLogout:
         body = registration.json()
 
         access_token = body["tokens"]["access_token"]
-        refresh_token = body["tokens"]["refresh_token"]
+        refresh_token = client.cookies.get(REFRESH_COOKIE_NAME)
 
         response = client.post(
             "/v1/auth/logout",
@@ -559,6 +550,7 @@ class TestLogout:
 
         assert response.status_code == 200
         assert response.json()["logged_out"] is True
+        assert client.cookies.get(REFRESH_COOKIE_NAME) is None
 
         refresh_token_hash = TokenService.hash_refresh_token(
             refresh_token
@@ -620,3 +612,87 @@ class TestAuthenticationRequestAudit:
             api_request.route_template
             == "/v1/auth/register"
         )
+        
+def test_registration_rejects_untrusted_origin_before_creating_user(
+    client: TestClient,
+    test_session_factory,
+) -> None:
+    email = _unique_email()
+
+    response = client.post(
+        "/v1/auth/register",
+        headers={"Origin": "https://untrusted.example"},
+        json={"email": email, "password": STRONG_PASSWORD},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "BROWSER_ORIGIN_FORBIDDEN"
+    assert "set-cookie" not in response.headers
+
+    with test_session_factory() as session:
+        assert session.scalar(
+            select(UserCredentialModel).where(
+                UserCredentialModel.email_normalized == email
+            )
+        ) is None
+
+
+def test_refresh_rejects_json_body_without_consuming_session(
+    client: TestClient,
+) -> None:
+    _, registration = _register(client)
+    assert registration.status_code == 201
+    original_cookie = client.cookies.get(REFRESH_COOKIE_NAME)
+
+    rejected = client.post(
+        "/v1/auth/refresh",
+        json={"refresh_token": "legacy-body-token"},
+    )
+
+    assert rejected.status_code == 422
+    assert client.cookies.get(REFRESH_COOKIE_NAME) == original_cookie
+
+    refreshed = client.post("/v1/auth/refresh")
+    assert refreshed.status_code == 200
+    assert "refresh_token" not in refreshed.json()["tokens"]
+
+
+def test_missing_origin_is_rejected(client: TestClient) -> None:
+    client.headers.pop("Origin")
+
+    response = client.post("/v1/auth/refresh")
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "BROWSER_ORIGIN_FORBIDDEN"
+
+
+def test_missing_refresh_cookie_returns_safe_401(
+    client: TestClient,
+) -> None:
+    response = client.post("/v1/auth/refresh")
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "INVALID_REFRESH_TOKEN"
+    assert response.json()["error"]["trace_id"] == response.headers["X-Trace-ID"]
+    assert "no-store" in response.headers["Cache-Control"]
+
+
+def test_refresh_invalidates_previous_access_token(
+    client: TestClient,
+) -> None:
+    _, registration = _register(client)
+    assert registration.status_code == 201
+    old_access = registration.json()["tokens"]["access_token"]
+
+    refreshed = client.post("/v1/auth/refresh")
+    assert refreshed.status_code == 200
+
+    assert client.get(
+        "/v1/auth/me",
+        headers=_bearer(old_access),
+    ).status_code == 401
+
+    assert client.get(
+        "/v1/auth/me",
+        headers=_bearer(refreshed.json()["tokens"]["access_token"]),
+    ).status_code == 200

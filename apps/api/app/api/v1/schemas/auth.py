@@ -91,6 +91,32 @@ class AuthenticationResponse(BaseModel):
             ),
         )
 
+class BrowserAccessTokenResponse(BaseModel):
+    """Access credentials for transient, in-memory browser use."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    access_token: str = Field(repr=False)
+    token_type: str
+    access_token_expires_at: datetime
+    refresh_token_expires_at: datetime
+
+class BrowserAuthenticationResponse(BaseModel):
+    """Authentication result with refresh material excluded from JSON."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    user: AuthenticatedUserResponse
+    tokens: BrowserAccessTokenResponse
+
+    @classmethod
+    def from_application(cls, result: AuthenticationResult) -> "BrowserAuthenticationResponse":
+        return cls(
+            user=AuthenticatedUserResponse.from_application(result.user),
+            tokens=BrowserAccessTokenResponse(
+                access_token=result.tokens.access_token,
+                token_type=result.tokens.token_type,
+                access_token_expires_at=result.tokens.access_token_expires_at,
+                refresh_token_expires_at=result.tokens.refresh_token_expires_at,
+            ),
+        )
+
 class LogoutResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     logged_out: bool

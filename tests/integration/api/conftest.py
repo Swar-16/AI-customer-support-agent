@@ -70,12 +70,31 @@ def application_services(test_settings, test_session_factory, mock_llm_provider)
 
 
 @pytest.fixture()
-def client(monkeypatch: pytest.MonkeyPatch, application_services: ApplicationServices) -> Generator[TestClient, None, None]:
+def client(monkeypatch: pytest.MonkeyPatch, application_services: ApplicationServices, test_settings: Settings) -> Generator[TestClient, None, None]:
+    values = test_settings.model_dump()
+    values.update(
+        app_env="test",
+        browser_allowed_origins=("https://testserver",),
+        auth_refresh_cookie_secure=True,
+    )
+    browser_settings = Settings(_env_file=None, **values)
 
-    monkeypatch.setattr("apps.api.app.main.get_application_services", lambda: application_services)
+    monkeypatch.setattr(
+        "apps.api.app.main.get_application_services",
+        lambda: application_services,
+    )
+    monkeypatch.setattr(
+        "apps.api.app.main.get_runtime_settings",
+        lambda: browser_settings,
+    )
+
     app = create_api_app()
 
-    with TestClient(app) as test_client:
+    with TestClient(
+        app,
+        base_url="https://testserver",
+        headers={"Origin": "https://testserver"},
+    ) as test_client:
         yield test_client
 
 @pytest.fixture()
