@@ -23,6 +23,10 @@ class IntentPredictionModel(Base):
         ),
 
         Index(
+            "idx_intent_predictions_created_at",
+            "created_at"
+        ),
+        Index(
             "idx_intent_predictions_ai_run",
             "ai_run_id",
         ),

@@ -78,9 +78,10 @@ from packages.knowledge.embeddings.errors import EmbeddingArtifactConflictError,
 from packages.knowledge.embeddings.errors import EmbeddingResponseCardinalityError, EmbeddingResponseOrderingError, EmbeddingVersionError
 from packages.knowledge.embeddings.errors import EmbeddingVersionHasNoChunksError, EmbeddingVersionNotFoundError, EmbeddingVersionNotReadyError
 from packages.application.dashboard.analytics_contract import AnalyticsRangeTooLargeError, DashboardAnalyticsAccessDeniedError
-from packages.application.dashboard.analytics_contract import InvalidAnalyticsTimestampError, InvalidAnalyticsWindowError, UnsupportedAnalyticsBucketError
+from packages.application.dashboard.analytics_contract import InvalidAnalyticsTimestampError, InvalidAnalyticsWindowError
 from packages.application.conversations.process_customer_message import CustomerMessagePipelineFailedError, CustomerMessagePipelineTimeoutError
 from packages.application.conversations.process_customer_message import CustomerMessagePipelineUnavailableError, CustomerMessageValidationError
+from packages.application.dashboard.analytics_contract import DashboardAnalyticsQueryTimeoutError, UnsupportedAnalyticsBucketError
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,7 @@ ERROR_DASHBOARD_ANALYTICS_ACCESS_DENIED = "DASHBOARD_ANALYTICS_ACCESS_DENIED"
 ERROR_AI_PROVIDER_TIMEOUT = "AI_PROVIDER_TIMEOUT"
 ERROR_AI_SERVICE_UNAVAILABLE = "AI_SERVICE_UNAVAILABLE"
 ERROR_AI_PIPELINE_FAILED = "AI_PIPELINE_FAILED"
+ERROR_DASHBOARD_ANALYTICS_UNAVAILABLE = "DASHBOARD_ANALYTICS_UNAVAILABLE"
 
 # Registration
 def register_exception_handlers(app: FastAPI) -> None:
@@ -327,6 +329,8 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(CustomerMessagePipelineTimeoutError, customer_message_pipeline_timeout_handler)
     app.add_exception_handler(CustomerMessagePipelineUnavailableError, customer_message_pipeline_unavailable_handler)
     app.add_exception_handler(CustomerMessagePipelineFailedError, customer_message_pipeline_failed_handler)
+    
+    app.add_exception_handler(DashboardAnalyticsQueryTimeoutError, dashboard_analytics_timeout_handler)
 
     # Must remain last conceptually: this is the safety net for unexpected failures.
     app.add_exception_handler(Exception, unhandled_exception_handler)
@@ -1397,3 +1401,25 @@ async def dashboard_analytics_access_denied_handler(request: Request, exc: Excep
         message="You are not permitted to access dashboard analytics.",
         trace_id=trace_id,
     )
+
+async def dashboard_analytics_timeout_handler(request: Request, exc: DashboardAnalyticsQueryTimeoutError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.warning(
+        "dashboard_analytics_query_timeout",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "timeout_ms": exc.timeout_ms,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    response = _error_response(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        code=ERROR_DASHBOARD_ANALYTICS_UNAVAILABLE,
+        message="Dashboard analytics are temporarily unavailable.",
+        trace_id=trace_id,
+    )
+    response.headers["Retry-After"] = "5"
+    return response

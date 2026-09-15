@@ -2,9 +2,12 @@
 from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
+from collections.abc import Generator
+from contextlib import contextmanager
 from typing import Any, Final
 from sqlalchemy import distinct, func, select, text
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.exc import DBAPIError
 
 from packages.application.dashboard.analytics_contract import AnalyticsBucket, AnalyticsWindow
 from packages.application.dashboard.analytics_models import AIAnalyticsResult, AnalyticsMetadata, CategoryCount, SupportAnalyticsPoint
@@ -29,6 +32,7 @@ from packages.database.models.knowledge.chunk import KnowledgeChunkModel
 from packages.database.models.knowledge.chunk_embedding import KnowledgeChunkEmbeddingModel
 from packages.database.models.knowledge.document import KnowledgeDocumentModel
 from packages.database.models.knowledge.document_version import KnowledgeDocumentVersionModel
+from packages.application.dashboard.analytics_contract import DashboardAnalyticsQueryTimeoutError
 
 UTC: Final = timezone.utc
 _BUCKET_INTERVALS: Final[dict[AnalyticsBucket, str]] = {
@@ -36,14 +40,59 @@ _BUCKET_INTERVALS: Final[dict[AnalyticsBucket, str]] = {
     AnalyticsBucket.DAY: "1 day",
     AnalyticsBucket.WEEK: "1 week",
 }
+_QUERY_CANCELED_SQLSTATE: Final = "57014"
+_MAX_STATEMENT_TIMEOUT_MS: Final = 120_000
 
 class SQLAlchemyDashboardAnalyticsRepository(DashboardAnalyticsRepository):
     """PostgreSQL-backed dashboard aggregate repository."""
-    def __init__(self, *, session_factory: sessionmaker[Session]) -> None:
+    def __init__(self, *, session_factory: sessionmaker[Session], statement_timeout_ms: int) -> None:
         if not callable(session_factory):
             raise TypeError("session_factory must be callable.")
 
+        if isinstance(statement_timeout_ms, bool) or not isinstance(statement_timeout_ms, int):
+            raise TypeError("statement_timeout_ms must be an integer.")
+
+        if not 1 <= statement_timeout_ms <= _MAX_STATEMENT_TIMEOUT_MS:
+            raise ValueError(f"statement_timeout_ms must be between 1 and {_MAX_STATEMENT_TIMEOUT_MS}.")
+
         self._session_factory = session_factory
+        self._statement_timeout_ms = statement_timeout_ms
+        
+    @contextmanager
+    def _analytics_session(self) -> Generator[Session, None, None]:
+        """
+        Open an analytics session with a transaction-local PostgreSQL statement timeout.
+
+        set_config(..., true) is equivalent to SET LOCAL. The timeout is discarded when the
+        transaction ends and cannot leak through the connection pool.
+        """
+        with self._session_factory() as session:
+            try:
+                session.execute(
+                    text("SELECT set_config('statement_timeout', :timeout_value, true)"),
+                    {"timeout_value": f"{self._statement_timeout_ms}ms",},
+                )
+
+                yield session
+
+            except DBAPIError as exc:
+                # Explicit rollback clears the aborted transaction before the pooled connection is returned.
+                session.rollback()
+
+                if self._is_query_cancellation(exc):
+                    raise DashboardAnalyticsQueryTimeoutError(timeout_ms=self._statement_timeout_ms) from exc
+
+                raise
+
+    @staticmethod
+    def _is_query_cancellation(error: DBAPIError) -> bool:
+        original = error.orig
+        sqlstate = getattr(original, "sqlstate", None)
+        if sqlstate is None:
+            # Compatibility with DBAPIs exposing the legacy PostgreSQL name.
+            sqlstate = getattr(original, "pgcode", None)
+
+        return sqlstate == _QUERY_CANCELED_SQLSTATE
 
     def get_conversation_analytics(self, *, window: AnalyticsWindow) -> ConversationAnalyticsResult:
         if not isinstance(window, AnalyticsWindow):
@@ -51,7 +100,7 @@ class SQLAlchemyDashboardAnalyticsRepository(DashboardAnalyticsRepository):
 
         generated_at = datetime.now(UTC)
 
-        with self._session_factory() as session:
+        with self._analytics_session() as session:
             total_conversations = self._count_conversations_created(session=session, window=window)
             closed_conversations = self._count_conversations_closed(session=session, window=window)
             escalated_conversations = self._count_escalated_conversations(session=session, window=window)
@@ -85,7 +134,7 @@ class SQLAlchemyDashboardAnalyticsRepository(DashboardAnalyticsRepository):
 
         generated_at = datetime.now(UTC)
 
-        with self._session_factory() as session:
+        with self._analytics_session() as session:
             run_totals = self._get_ai_run_totals(session=session, window=window)
             llm_totals = self._get_llm_totals(session=session, window=window)
             retrieval_totals = self._get_retrieval_totals(session=session, window=window)
@@ -298,7 +347,7 @@ class SQLAlchemyDashboardAnalyticsRepository(DashboardAnalyticsRepository):
             raise TypeError("window must be an AnalyticsWindow.")
 
         snapshot_measured_at = datetime.now(UTC)
-        with self._session_factory() as session:
+        with self._analytics_session() as session:
             ticket_totals = self._get_ticket_totals(session=session, window=window)
             escalation_totals = self._get_escalation_totals(session=session, window=window)
             feedback_totals = self._get_feedback_totals(session=session, window=window)
@@ -360,7 +409,7 @@ class SQLAlchemyDashboardAnalyticsRepository(DashboardAnalyticsRepository):
             raise TypeError("window must be an AnalyticsWindow.")
 
         snapshot_measured_at = datetime.now(UTC)
-        with self._session_factory() as session:
+        with self._analytics_session() as session:
             inventory = self._get_knowledge_inventory(session=session)
             document_status_distribution = self._get_current_category_distribution(session=session, category_column=KnowledgeDocumentModel.status)
             document_content_type_distribution = self._get_current_category_distribution(session=session, category_column=KnowledgeDocumentModel.content_type)

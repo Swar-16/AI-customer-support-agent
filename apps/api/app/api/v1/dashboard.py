@@ -51,6 +51,12 @@ _ANALYTICS_RESPONSES = {
         "model": APIErrorResponse,
         "description": "Unexpected internal failure",
     },
+    503: {
+        "model": APIErrorResponse,
+        "description": (
+            "Dashboard analytics temporarily unavailable"
+        ),
+    },
 }
 
 @router.get(

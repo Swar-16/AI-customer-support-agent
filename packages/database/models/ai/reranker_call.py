@@ -96,6 +96,10 @@ class RerankerCallModel(Base):
         ),
 
         Index(
+            "idx_reranker_calls_started_at",
+            "started_at"
+        ),
+        Index(
             "idx_reranker_calls_retrieval_run",
             "retrieval_run_id",
             "started_at",

@@ -26,16 +26,23 @@ class MessageModel(Base):
             """,
             name="valid_role",
         ),
+        
         UniqueConstraint(
             "conversation_id",
             "sequence_number",
             name="uq_messages_conversation_sequence",
+        ),
+        
+        Index(
+            "idx_messages_created_at",
+            "created_at"
         ),
         Index(
             "idx_messages_conversation_sequence",
             "conversation_id",
             "sequence_number",
         ),
+        
         {"schema": "support"},
     )
 

@@ -63,6 +63,10 @@ class LLMCallModel(Base):
         ),
 
         Index(
+            "idx_llm_calls_started_at", 
+            "started_at"
+        ),
+        Index(
             "idx_llm_calls_ai_run",
             "ai_run_id",
         ),

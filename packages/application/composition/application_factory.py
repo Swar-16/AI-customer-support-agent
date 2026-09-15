@@ -68,6 +68,8 @@ from packages.application.dashboard.get_ai_analytics import GetAIAnalytics
 from packages.application.dashboard.get_support_analytics import GetSupportAnalytics
 from packages.application.dashboard.get_knowledge_health import GetKnowledgeHealth
 from packages.database.repositories.dashboard.sqlalchemy_analytics_repository import SQLAlchemyDashboardAnalyticsRepository
+from packages.application.dashboard.analytics_cache import CachingDashboardAnalyticsRepository
+from packages.application.dashboard.analytics_repository import DashboardAnalyticsRepository
 
 SessionFactory = sessionmaker[Session]
 ProviderFactory = Callable[..., LLMProvider]
@@ -224,8 +226,19 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         """
         return SQLAlchemyKnowledgeUnitOfWork(session_factory=session_factory)
     
-    def dashboard_analytics_repository_factory() -> SQLAlchemyDashboardAnalyticsRepository:
-        return SQLAlchemyDashboardAnalyticsRepository(session_factory=session_factory)
+    dashboard_analytics_repository = SQLAlchemyDashboardAnalyticsRepository(
+        session_factory=session_factory,
+        statement_timeout_ms=settings.dashboard_analytics_statement_timeout_ms,
+    )
+
+    cached_dashboard_analytics_repository = CachingDashboardAnalyticsRepository(
+        repository=dashboard_analytics_repository,
+        ttl_seconds=settings.dashboard_analytics_cache_ttl_seconds,
+        max_entries=settings.dashboard_analytics_cache_max_entries,
+    )
+
+    def dashboard_analytics_repository_factory() -> DashboardAnalyticsRepository:
+        return cached_dashboard_analytics_repository
 
     get_conversation_analytics = GetConversationAnalytics(repository_factory=dashboard_analytics_repository_factory)
     get_ai_analytics = GetAIAnalytics(repository_factory=dashboard_analytics_repository_factory)

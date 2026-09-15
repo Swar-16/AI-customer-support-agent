@@ -35,6 +35,10 @@ class AIDecisionModel(Base):
         ),
 
         Index(
+            "idx_ai_decisions_created_at", 
+            "created_at"
+        ),
+        Index(
             "idx_ai_decisions_run",
             "ai_run_id",
         ),

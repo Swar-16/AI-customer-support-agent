@@ -162,6 +162,10 @@ class RetrievalRunModel(Base):
         ),
 
         Index(
+            "idx_retrieval_runs_started_at",
+            "started_at"
+        ),
+        Index(
             "idx_retrieval_runs_ai_run_started",
             "ai_run_id",
             "started_at",

@@ -35,6 +35,16 @@ class DashboardAnalyticsAccessDeniedError(PermissionError):
     def __init__(self) -> None:
         super().__init__("Dashboard analytics are restricted to administrators.")
 
+class DashboardAnalyticsQueryTimeoutError(RuntimeError):
+    """
+    Raised when PostgreSQL cancels an analytics statement because its configured statement timeout elapsed.
+    """
+    def __init__(self, *, timeout_ms: int) -> None:
+        if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or timeout_ms <= 0:
+            raise ValueError("timeout_ms must be a positive integer.")
+
+        self.timeout_ms = timeout_ms
+        super().__init__("Dashboard analytics exceeded the configured database statement timeout.")
 
 class AnalyticsBucket(str, Enum):
     HOUR = "hour"

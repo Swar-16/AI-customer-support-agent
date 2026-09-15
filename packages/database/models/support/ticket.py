@@ -168,6 +168,20 @@ class TicketModel(Base):
         ),
         
         Index(
+            "idx_tickets_created_at",
+            "created_at"
+        ),
+        Index(
+            "idx_tickets_resolved_at",
+            "resolved_at",
+            postgresql_where=text("resolved_at IS NOT NULL"),
+        ),
+        Index(
+            "idx_tickets_closed_at",
+            "closed_at",
+            postgresql_where=text("closed_at IS NOT NULL"),
+        ),
+        Index(
             "uq_tickets_escalation",
             "escalation_id",
             unique=True,

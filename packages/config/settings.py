@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     database_password: str
     database_echo: bool = False
     
+    # Dashboard analytics
+    dashboard_analytics_statement_timeout_ms: int = 5_000
+    dashboard_analytics_cache_ttl_seconds: int = 15
+    dashboard_analytics_cache_max_entries: int = 256
+    
     llm_provider: str = "groq"
     
     ## Groq / LLM
@@ -93,6 +98,24 @@ class Settings(BaseSettings):
 
         if self.auth_login_lockout_minutes <= 0:
             raise ValueError("auth_login_lockout_minutes must be greater than zero.")
+        
+        if self.dashboard_analytics_statement_timeout_ms <= 0:
+            raise ValueError("dashboard_analytics_statement_timeout_ms must be greater than zero.")
+
+        if self.dashboard_analytics_statement_timeout_ms > 120_000:
+            raise ValueError("dashboard_analytics_statement_timeout_ms cannot exceed 120000 milliseconds.")
+        
+        if self.dashboard_analytics_cache_ttl_seconds < 0:
+            raise ValueError("dashboard_analytics_cache_ttl_seconds cannot be negative.")
+
+        if self.dashboard_analytics_cache_ttl_seconds > 300:
+            raise ValueError("dashboard_analytics_cache_ttl_seconds cannot exceed 300 seconds.")
+
+        if self.dashboard_analytics_cache_max_entries <= 0:
+            raise ValueError("dashboard_analytics_cache_max_entries must be greater than zero.")
+
+        if self.dashboard_analytics_cache_max_entries > 4_096:
+            raise ValueError("dashboard_analytics_cache_max_entries cannot exceed 4096.")
 
         if not self.llm_provider:
             raise ValueError("llm_provider must not be blank.")
