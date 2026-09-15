@@ -76,6 +76,17 @@ class ConversationDoesNotExistError(ProcessCustomerMessageError):
         self.conversation_id = conversation_id
         super().__init__(f"Conversation does not exist: {conversation_id}")
 
+class CustomerMessagePipelineFailedError(ProcessCustomerMessageError):
+    def __init__(self, *, failure_code: str) -> None:
+        self.failure_code = failure_code
+        super().__init__("The AI support pipeline could not complete.")
+
+class CustomerMessagePipelineTimeoutError(CustomerMessagePipelineFailedError):
+    pass
+
+class CustomerMessagePipelineUnavailableError(CustomerMessagePipelineFailedError):
+    pass
+
 class ConversationNotProcessableError(ProcessCustomerMessageError):
     """Raised when the conversation exists but its current lifecycle state does not permit another customer message."""
 
@@ -128,6 +139,26 @@ class ProcessCustomerMessageResult:
     escalation_id: uuid.UUID | None
     response: str | None
     succeeded: bool
+    failure_code: str | None
+    failure_retryable: bool | None
+    
+    def __post_init__(self) -> None:
+        if self.succeeded:
+            if self.failure_code is not None:
+                raise ValueError("Successful results cannot contain failure_code.")
+
+            if self.failure_retryable is not None:
+                raise ValueError("Successful results cannot contain failure_retryable.")
+
+        else:
+            if self.pipeline_stage is not PipelineStage.FAILED:
+                raise ValueError("Unsuccessful results must have FAILED stage.")
+
+            if self.failure_code is None:
+                raise ValueError("Unsuccessful results require failure_code.")
+
+            if self.failure_retryable is None:
+                raise ValueError("Unsuccessful results require failure_retryable.")
 
 # Application service
 class ProcessCustomerMessage:
@@ -404,6 +435,8 @@ class ProcessCustomerMessage:
             
             # Commit once
             uow.commit()
+            
+            final_error = state.errors[-1] if state.stage is PipelineStage.FAILED else None
 
             return ProcessCustomerMessageResult(
                 conversation_id=command.conversation_id,
@@ -417,6 +450,8 @@ class ProcessCustomerMessage:
                 escalation_id=escalation_id,
                 response=response,
                 succeeded=state.stage is not PipelineStage.FAILED,
+                failure_code=final_error.code if final_error is not None else None,
+                failure_retryable=final_error.retryable if final_error is not None else None,
             )
 
     # Persistence

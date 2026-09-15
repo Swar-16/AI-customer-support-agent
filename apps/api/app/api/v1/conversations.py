@@ -2,7 +2,11 @@
 from __future__ import annotations
 import uuid
 from fastapi import APIRouter, Path, status, Query
+from typing import NoReturn
 
+from packages.application.conversations.process_customer_message import CustomerMessagePipelineFailedError, CustomerMessagePipelineTimeoutError
+from packages.application.conversations.process_customer_message import CustomerMessagePipelineUnavailableError, ProcessCustomerMessageCommand
+from packages.application.conversations.process_customer_message import ProcessCustomerMessageResult
 from apps.api.app.api.dependencies import ApplicationServicesDependency, CurrentPrincipalDependency, CustomerPrincipalDependency, TraceIdDependency
 from apps.api.app.api.schemas.errors import APIErrorResponse
 from apps.api.app.api.v1.schemas.conversations import ConversationChannel, ConversationListResponse, ConversationResponse, ConversationStatus
@@ -15,6 +19,28 @@ from packages.application.conversations.get_conversation_messages import GetConv
 from packages.application.conversations.close_conversation import CloseConversationCommand
 
 router = APIRouter(tags=["conversations"])
+
+def _raise_for_pipeline_failure(result: ProcessCustomerMessageResult) -> NoReturn:
+    """
+    Translate an already-committed pipeline failure into a safe application exception.
+
+    This function must only run after ProcessCustomerMessage.execute() has committed its telemetry transaction.
+    """
+    if result.succeeded:
+        raise ValueError("A successful result cannot be raised as a failure.")
+
+    failure_code = result.failure_code
+    if failure_code is None:
+        raise CustomerMessagePipelineFailedError(failure_code="AI_PIPELINE_FAILED")
+
+    normalized_code = failure_code.strip().upper()
+    if normalized_code == "TIMEOUT" or normalized_code.endswith("_TIMEOUT"):
+        raise CustomerMessagePipelineTimeoutError(failure_code=normalized_code)
+
+    if normalized_code.endswith("_UNAVAILABLE") or normalized_code.endswith("_RATE_LIMITED") or result.failure_retryable is True:
+        raise CustomerMessagePipelineUnavailableError(failure_code=normalized_code)
+
+    raise CustomerMessagePipelineFailedError(failure_code=normalized_code)
 
 @router.post(
     "/conversations",
@@ -191,6 +217,14 @@ def list_conversation_messages(
             "model": APIErrorResponse,
             "description": "Unexpected internal failure",
         },
+        503: {
+            "model": APIErrorResponse,
+            "description": "The AI support service is temporarily unavailable",
+        },
+        504: {
+            "model": APIErrorResponse,
+            "description": "The AI support provider did not respond in time",
+        },
     },
 )
 def send_message(payload: SendMessageRequest, services: ApplicationServicesDependency, trace_id: TraceIdDependency, principal: CustomerPrincipalDependency,
@@ -210,6 +244,9 @@ def send_message(payload: SendMessageRequest, services: ApplicationServicesDepen
     )
 
     result = services.process_customer_message.execute(command)
+    if not result.succeeded:
+        _raise_for_pipeline_failure(result)
+        
     return SendMessageResponse(
         conversation_id=result.conversation_id,
         customer_message_id=result.customer_message_id,

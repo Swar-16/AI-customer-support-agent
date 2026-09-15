@@ -1041,6 +1041,8 @@ def test_provider_timeout_persists_failed_run_without_assistant_message(
     # ------------------------------------------------------------------
 
     assert result.succeeded is False
+    assert result.failure_code == "INTENT_PROVIDER_TIMEOUT"
+    assert result.failure_retryable is True
     assert result.intent is None
     assert result.decision is None
 

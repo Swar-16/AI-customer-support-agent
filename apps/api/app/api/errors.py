@@ -10,7 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from apps.api.app.api.dependencies import TRACE_HEADER_NAME
-from packages.application.conversations.process_customer_message import ConversationDoesNotExistError, ConversationNotProcessableError, CustomerMessageValidationError
+from packages.application.conversations.process_customer_message import ConversationDoesNotExistError, ConversationNotProcessableError
 from packages.application.escalations.create_escalation import CreateEscalationContractError, CreateEscalationError, EscalationIdempotencyConflictError
 from packages.application.escalations.query_escalations import EscalationDoesNotExistError as QueriedEscalationDoesNotExistError
 from packages.application.escalations.query_escalations import EscalationQueryContractError, EscalationQueryError
@@ -77,6 +77,10 @@ from packages.knowledge.domain.errors import PublishedVersionConflictError
 from packages.knowledge.embeddings.errors import EmbeddingArtifactConflictError, EmbeddingBatchConfigurationError, EmbeddingProviderIdentityMismatchError
 from packages.knowledge.embeddings.errors import EmbeddingResponseCardinalityError, EmbeddingResponseOrderingError, EmbeddingVersionError
 from packages.knowledge.embeddings.errors import EmbeddingVersionHasNoChunksError, EmbeddingVersionNotFoundError, EmbeddingVersionNotReadyError
+from packages.application.dashboard.analytics_contract import AnalyticsRangeTooLargeError, DashboardAnalyticsAccessDeniedError
+from packages.application.dashboard.analytics_contract import InvalidAnalyticsTimestampError, InvalidAnalyticsWindowError, UnsupportedAnalyticsBucketError
+from packages.application.conversations.process_customer_message import CustomerMessagePipelineFailedError, CustomerMessagePipelineTimeoutError
+from packages.application.conversations.process_customer_message import CustomerMessagePipelineUnavailableError, CustomerMessageValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +124,11 @@ ERROR_KNOWLEDGE_CONFLICT = "KNOWLEDGE_CONFLICT"
 ERROR_INVALID_KNOWLEDGE_UPLOAD = "INVALID_KNOWLEDGE_UPLOAD"
 ERROR_KNOWLEDGE_UPLOAD_TOO_LARGE = "KNOWLEDGE_UPLOAD_TOO_LARGE"
 ERROR_UNSUPPORTED_KNOWLEDGE_UPLOAD = "UNSUPPORTED_KNOWLEDGE_UPLOAD"
+ERROR_INVALID_ANALYTICS_WINDOW = "INVALID_ANALYTICS_WINDOW"
+ERROR_DASHBOARD_ANALYTICS_ACCESS_DENIED = "DASHBOARD_ANALYTICS_ACCESS_DENIED"
+ERROR_AI_PROVIDER_TIMEOUT = "AI_PROVIDER_TIMEOUT"
+ERROR_AI_SERVICE_UNAVAILABLE = "AI_SERVICE_UNAVAILABLE"
+ERROR_AI_PIPELINE_FAILED = "AI_PIPELINE_FAILED"
 
 # Registration
 def register_exception_handlers(app: FastAPI) -> None:
@@ -306,6 +315,18 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     for exception_type in (UnsupportedKnowledgeUploadTypeError, UnsupportedKnowledgeUploadMediaTypeError):
         app.add_exception_handler(exception_type, unsupported_knowledge_upload_handler)
+        
+    # Dashboard Analytics
+    for exception_type in (
+        InvalidAnalyticsTimestampError, InvalidAnalyticsWindowError, AnalyticsRangeTooLargeError, UnsupportedAnalyticsBucketError,
+    ):
+        app.add_exception_handler(exception_type, invalid_analytics_window_handler)
+
+    app.add_exception_handler(DashboardAnalyticsAccessDeniedError, dashboard_analytics_access_denied_handler)
+    
+    app.add_exception_handler(CustomerMessagePipelineTimeoutError, customer_message_pipeline_timeout_handler)
+    app.add_exception_handler(CustomerMessagePipelineUnavailableError, customer_message_pipeline_unavailable_handler)
+    app.add_exception_handler(CustomerMessagePipelineFailedError, customer_message_pipeline_failed_handler)
 
     # Must remain last conceptually: this is the safety net for unexpected failures.
     app.add_exception_handler(Exception, unhandled_exception_handler)
@@ -486,6 +507,63 @@ async def conversation_not_processable_handler(request: Request, exc: Conversati
         status_code=status.HTTP_409_CONFLICT,
         code=ERROR_CONVERSATION_NOT_PROCESSABLE,
         message="The conversation cannot accept a new customer message in its current state.",
+        trace_id=trace_id,
+    )
+    
+async def customer_message_pipeline_timeout_handler(request: Request, exc: CustomerMessagePipelineTimeoutError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.warning(
+        "customer_message_pipeline_timeout",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "failure_code": exc.failure_code,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+        code=ERROR_AI_PROVIDER_TIMEOUT,
+        message="The support assistant did not respond in time. Please try again.",
+        trace_id=trace_id,
+    )
+
+async def customer_message_pipeline_unavailable_handler(request: Request, exc: CustomerMessagePipelineUnavailableError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.warning(
+        "customer_message_pipeline_unavailable",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "failure_code": exc.failure_code,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        code=ERROR_AI_SERVICE_UNAVAILABLE,
+        message="The support assistant is temporarily unavailable. Please try again.",
+        trace_id=trace_id,
+    )
+
+async def customer_message_pipeline_failed_handler(request: Request, exc: CustomerMessagePipelineFailedError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.error(
+        "customer_message_pipeline_failed",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "failure_code": exc.failure_code,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        code=ERROR_AI_PIPELINE_FAILED,
+        message="The support assistant could not complete the request.",
         trace_id=trace_id,
     )
 
@@ -1279,5 +1357,43 @@ async def unsupported_knowledge_upload_handler(request: Request, exc: Exception)
         status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
         code=ERROR_UNSUPPORTED_KNOWLEDGE_UPLOAD,
         message="Only supported UTF-8 knowledge-file formats may be uploaded.",
+        trace_id=trace_id,
+    )
+    
+async def invalid_analytics_window_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "invalid_dashboard_analytics_window",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        code=ERROR_INVALID_ANALYTICS_WINDOW,
+        message="The supplied analytics time window is invalid.",
+        trace_id=trace_id,
+    )
+
+async def dashboard_analytics_access_denied_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.warning(
+        "dashboard_analytics_access_denied",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_403_FORBIDDEN,
+        code=ERROR_DASHBOARD_ANALYTICS_ACCESS_DENIED,
+        message="You are not permitted to access dashboard analytics.",
         trace_id=trace_id,
     )

@@ -39,6 +39,11 @@ def make_application_services(*, provider_healthy: bool = True) -> ApplicationSe
         query_dashboard_api_requests=Mock(),
         query_dashboard_audit_events=Mock(),
         
+        get_conversation_analytics=Mock(),
+        get_ai_analytics=Mock(),
+        get_support_analytics=Mock(),
+        get_knowledge_health=Mock(),
+        
         get_audit_event=Mock(),
         list_audit_events=Mock(),
         get_entity_audit_history=Mock(),

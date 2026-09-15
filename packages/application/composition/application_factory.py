@@ -63,6 +63,11 @@ from packages.knowledge.application.process_version import ProcessKnowledgeVersi
 from packages.knowledge.application.publish_version import PublishKnowledgeVersion
 from packages.knowledge.application.upload_document import UploadKnowledgeDocument
 from packages.knowledge.application.upload_version import UploadKnowledgeVersion
+from packages.application.dashboard.get_conversation_analytics import GetConversationAnalytics
+from packages.application.dashboard.get_ai_analytics import GetAIAnalytics
+from packages.application.dashboard.get_support_analytics import GetSupportAnalytics
+from packages.application.dashboard.get_knowledge_health import GetKnowledgeHealth
+from packages.database.repositories.dashboard.sqlalchemy_analytics_repository import SQLAlchemyDashboardAnalyticsRepository
 
 SessionFactory = sessionmaker[Session]
 ProviderFactory = Callable[..., LLMProvider]
@@ -106,6 +111,11 @@ class ApplicationServices:
     query_dashboard_retrieval_runs: QueryDashboardRetrievalRuns
     query_dashboard_api_requests: QueryDashboardAPIRequests
     query_dashboard_audit_events: QueryDashboardAuditEvents
+    
+    get_conversation_analytics: GetConversationAnalytics
+    get_ai_analytics: GetAIAnalytics
+    get_support_analytics: GetSupportAnalytics
+    get_knowledge_health: GetKnowledgeHealth
     
     get_audit_event: GetAuditEvent
     list_audit_events: ListAuditEvents
@@ -213,6 +223,14 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         This UoW exposes documents, versions, chunks, embeddings, embedding_calls, and audit_events.
         """
         return SQLAlchemyKnowledgeUnitOfWork(session_factory=session_factory)
+    
+    def dashboard_analytics_repository_factory() -> SQLAlchemyDashboardAnalyticsRepository:
+        return SQLAlchemyDashboardAnalyticsRepository(session_factory=session_factory)
+
+    get_conversation_analytics = GetConversationAnalytics(repository_factory=dashboard_analytics_repository_factory)
+    get_ai_analytics = GetAIAnalytics(repository_factory=dashboard_analytics_repository_factory)
+    get_support_analytics = GetSupportAnalytics(repository_factory=dashboard_analytics_repository_factory)
+    get_knowledge_health = GetKnowledgeHealth(repository_factory=dashboard_analytics_repository_factory)
     
     create_conversation = CreateConversation(uow_factory=uow_factory)
     list_conversations = ListConversations(uow_factory=uow_factory)
@@ -324,6 +342,10 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         query_dashboard_retrieval_runs=query_dashboard_retrieval_runs,
         query_dashboard_api_requests=query_dashboard_api_requests,
         query_dashboard_audit_events=query_dashboard_audit_events,
+        get_conversation_analytics=get_conversation_analytics,
+        get_ai_analytics=get_ai_analytics,
+        get_support_analytics=get_support_analytics,
+        get_knowledge_health=get_knowledge_health,
         get_audit_event=get_audit_event,
         list_audit_events=list_audit_events,
         get_entity_audit_history=get_entity_audit_history,
