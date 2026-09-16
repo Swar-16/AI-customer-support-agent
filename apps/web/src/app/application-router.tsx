@@ -8,8 +8,10 @@ import { useSession } from '../shared/auth/session-context';
 import { canOpenWorkspace, homePath } from '../shared/auth/workspace-access';
 import type { Workspace } from '../shared/auth/workspace-access';
 import { LoginPage } from '../features/auth/login-page';
+import { LogoutPage } from '../features/auth/logout-page';
 import { loginDestination } from '../features/auth/login-destination';
 import { RouteErrorBoundary } from './route-error-boundary';
+import { LogoutDialogProvider } from '../features/auth/logout-dialog';
 
 const ChatPage = lazy(() => import('../features/chat/chat-page'));
 const OperationsPage = lazy(() => import('../features/operations/operations-page'));
@@ -105,57 +107,68 @@ export function ApplicationRoutes() {
   const location = useLocation();
 
   return (
-    <RouteErrorBoundary key={location.pathname}>
-      <Suspense
-        fallback={
-          <Notice title="Opening workspace">
-            <p role="status">Loading the application screen…</p>
-          </Notice>
-        }
-      >
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/login" element={<LoginEntry />} />
+    <LogoutDialogProvider>
+      <RouteErrorBoundary key={location.pathname}>
+        <Suspense
+          fallback={
+            <Notice title="Opening workspace">
+              <p role="status">Loading the application screen…</p>
+            </Notice>
+          }
+        >
+          <Routes>
+            <Route path="/" element={<Home />} />
+            <Route path="/login" element={<LoginEntry />} />
+            <Route path="/logout" element={<LogoutPage />} />
 
-          <Route
-            path="/chat"
-            element={
-              <RequireWorkspace workspace="chat">
-                <ChatPage />
-              </RequireWorkspace>
-            }
-          />
+            <Route
+              path="/chat"
+              element={
+                <RequireWorkspace workspace="chat">
+                  <ChatPage />
+                </RequireWorkspace>
+              }
+            />
+            <Route
+              path="/chat/:conversationId"
+              element={
+                <RequireWorkspace workspace="chat">
+                  <ChatPage />
+                </RequireWorkspace>
+              }
+            />
 
-          <Route
-            path="/operations"
-            element={
-              <RequireWorkspace workspace="operations">
-                <OperationsPage />
-              </RequireWorkspace>
-            }
-          />
+            <Route
+              path="/operations"
+              element={
+                <RequireWorkspace workspace="operations">
+                  <OperationsPage />
+                </RequireWorkspace>
+              }
+            />
 
-          <Route
-            path="/knowledge"
-            element={
-              <RequireWorkspace workspace="knowledge">
-                <KnowledgePage />
-              </RequireWorkspace>
-            }
-          />
+            <Route
+              path="/knowledge"
+              element={
+                <RequireWorkspace workspace="knowledge">
+                  <KnowledgePage />
+                </RequireWorkspace>
+              }
+            />
 
-          <Route
-            path="*"
-            element={
-              <Notice title="Page not found">
-                <p>This address does not match an available page.</p>
-                <Link to="/">Go to your workspace</Link>
-              </Notice>
-            }
-          />
-        </Routes>
-      </Suspense>
-    </RouteErrorBoundary>
+            <Route
+              path="*"
+              element={
+                <Notice title="Page not found">
+                  <p>This address does not match an available page.</p>
+                  <Link to="/">Go to your workspace</Link>
+                </Notice>
+              }
+            />
+          </Routes>
+        </Suspense>
+      </RouteErrorBoundary>
+    </LogoutDialogProvider>
   );
 }
 

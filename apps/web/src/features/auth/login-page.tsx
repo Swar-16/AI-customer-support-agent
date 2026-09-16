@@ -9,6 +9,7 @@ import { useSession, useSessionController } from '../../shared/auth/session-cont
 import type { SessionOutcome } from '../../shared/auth/session-controller';
 import { identity } from '../../shared/branding/identity';
 import { loginSchema } from './login-schema';
+import { LoginAtmosphere } from './login-atmosphere';
 
 import './login-page.css';
 
@@ -90,7 +91,9 @@ export function LoginPage() {
   }
 
   return (
-    <main className="login-page" aria-labelledby="login-title">
+    <main className="login-page login-page--immersive" aria-labelledby="login-title">
+      <LoginAtmosphere />
+
       <section className="login-page__panel">
         <div className="login-page__brand">
           <svg width="32" height="32" viewBox="0 0 48 48" aria-hidden="true" focusable="false">

@@ -1,7 +1,7 @@
 // apps/web/src/features/auth/login.test.tsx
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AuthUser } from '../../shared/auth/auth-contract';
 import { SafeApiError } from '../../shared/api/safe-error';
@@ -45,6 +45,24 @@ function fillCredentials() {
 
 beforeEach(() => {
   login.mockReset();
+
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(() => true),
+    })),
+  );
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe('login validation', () => {

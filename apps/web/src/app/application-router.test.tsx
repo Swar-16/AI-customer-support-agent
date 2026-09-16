@@ -16,6 +16,16 @@ vi.mock('../shared/auth/session-context', () => ({
   }),
 }));
 
+vi.mock('../features/chat/chat-page', async () => {
+  const { WorkspaceEntry } = await import('../shared/components/workspace-entry');
+
+  return {
+    default: function ChatRouteFixture() {
+      return <WorkspaceEntry workspace="chat" description="Customer workspace route fixture." />;
+    },
+  };
+});
+
 function authenticated(role: AuthUser['role']): SessionSnapshot {
   return {
     phase: 'authenticated',

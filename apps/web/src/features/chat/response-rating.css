@@ -1,0 +1,326 @@
+/* apps/web/src/features/chat/response-rating.css */
+.chat-rating {
+  box-sizing: border-box;
+  max-width: 100%;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid #efd8e6;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #fffafd, #ffffff);
+  color: #342832;
+}
+
+.chat-rating > fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.chat-rating legend {
+  padding: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.chat-rating .chat-rating__help {
+  margin: 6px 0 12px;
+  color: #766571;
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+
+.rating-stars {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin-bottom: 12px;
+}
+
+.rating-stars__choices {
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.rating-stars__choice {
+  position: relative;
+  display: block;
+  width: 44px;
+  height: 44px;
+  cursor: pointer;
+}
+
+.rating-stars__input {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+
+.rating-stars__surface {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  color: #b81777;
+  pointer-events: none;
+}
+
+.rating-stars__icon {
+  fill: transparent;
+  transition:
+    fill 150ms ease,
+    filter 150ms ease;
+}
+
+.rating-stars__choice[data-lit='true'] .rating-stars__surface {
+  background: #fcebf5;
+}
+
+.rating-stars__choice[data-lit='true'] .rating-stars__icon {
+  fill: #ef9dcb;
+}
+
+.rating-stars__input:focus-visible + .rating-stars__surface {
+  outline: 2px solid #b81777;
+  outline-offset: -2px;
+}
+
+.rating-stars__choice[data-disabled='true'] {
+  cursor: default;
+}
+
+.rating-stars__word {
+  min-width: 9ch;
+  color: #84205d;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.rating-stars__choice[data-mood='1'] .rating-stars__icon {
+  animation: rating-sigh 550ms ease-out;
+}
+
+.rating-stars__choice[data-mood='2'] .rating-stars__icon {
+  animation: rating-tilt 450ms ease-out;
+}
+
+.rating-stars__choice[data-mood='3'] .rating-stars__icon {
+  animation: rating-nod 400ms ease-out;
+}
+
+.rating-stars__choice[data-mood='4'] .rating-stars__icon {
+  animation: rating-bounce 500ms ease-out;
+}
+
+.rating-stars__choice[data-mood='5'] .rating-stars__icon {
+  animation: rating-celebrate 650ms ease-out;
+}
+
+.rating-stars__confetti {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.rating-stars__confetti i {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 7px;
+  border-radius: 2px;
+  background: #d6208f;
+  opacity: 0;
+  animation: rating-confetti 650ms ease-out;
+}
+
+.rating-stars__confetti i:nth-child(1) {
+  --confetti-x: -23px;
+  --confetti-y: -22px;
+}
+
+.rating-stars__confetti i:nth-child(2) {
+  --confetti-x: -10px;
+  --confetti-y: -30px;
+  background: #c279a8;
+}
+
+.rating-stars__confetti i:nth-child(3) {
+  --confetti-x: 12px;
+  --confetti-y: -29px;
+  background: #dcaf74;
+}
+
+.rating-stars__confetti i:nth-child(4) {
+  --confetti-x: 24px;
+  --confetti-y: -16px;
+}
+
+.rating-stars__confetti i:nth-child(5) {
+  --confetti-x: 25px;
+  --confetti-y: 12px;
+  background: #c279a8;
+}
+
+.rating-stars__confetti i:nth-child(6) {
+  --confetti-x: -24px;
+  --confetti-y: 10px;
+  background: #dcaf74;
+}
+
+.chat-rating button.chat-rating__submit {
+  min-height: 44px;
+  padding: 10px 18px;
+  border: 1px solid #b81777;
+  border-radius: 12px;
+  background: #b81777;
+  color: #ffffff;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.chat-rating button.chat-rating__submit:hover:not(:disabled) {
+  background: #951260;
+  box-shadow: 0 4px 12px rgb(184 23 119 / 16%);
+}
+
+.chat-rating button.chat-rating__submit:disabled {
+  border-color: #e2dce0;
+  background: #eee9ed;
+  color: #766d74;
+  opacity: 1;
+  cursor: default;
+  box-shadow: none;
+}
+
+.chat-rating button:focus-visible {
+  outline: 2px solid #b81777;
+  outline-offset: 3px;
+}
+
+.chat-rating > [role='status'],
+.chat-rating > [role='alert'],
+.chat-rating__recovery p {
+  margin: 12px 0 0;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+.chat-rating > [role='status'] {
+  color: #84205d;
+}
+
+.chat-rating > [role='status']:empty {
+  margin: 0;
+}
+
+.chat-rating [role='alert'] {
+  color: #a32e42;
+}
+
+.chat-rating__recovery button {
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid #b81777;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #b81777;
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+@keyframes rating-sigh {
+  40% {
+    transform: translateY(4px) rotate(-12deg) scale(0.94);
+  }
+}
+
+@keyframes rating-tilt {
+  40% {
+    transform: rotate(-9deg);
+  }
+  70% {
+    transform: rotate(5deg);
+  }
+}
+
+@keyframes rating-nod {
+  45% {
+    transform: translateY(-2px) scale(1.06);
+  }
+}
+
+@keyframes rating-bounce {
+  40% {
+    transform: translateY(-5px) rotate(7deg);
+  }
+  70% {
+    transform: translateY(1px);
+  }
+}
+
+@keyframes rating-celebrate {
+  30% {
+    transform: translateY(-7px) rotate(-13deg) scale(1.12);
+  }
+  60% {
+    transform: translateY(-3px) rotate(12deg) scale(1.08);
+  }
+}
+
+@keyframes rating-confetti {
+  10% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(0.5);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--confetti-x), var(--confetti-y)) rotate(140deg) scale(0.8);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rating-stars__choice .rating-stars__icon,
+  .rating-stars__confetti i {
+    animation: none;
+    transition: none;
+  }
+
+  .rating-stars__confetti {
+    display: none;
+  }
+
+  .chat-rating button.chat-rating__submit {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .rating-stars__surface {
+    color: ButtonText;
+  }
+
+  .rating-stars__choice[data-lit='true'] .rating-stars__surface {
+    outline: 1px solid Highlight;
+    outline-offset: -4px;
+  }
+
+  .rating-stars__choice[data-lit='true'] .rating-stars__icon {
+    fill: Highlight;
+  }
+}

@@ -7,6 +7,8 @@ import { createAuthApi } from '../shared/auth/auth-api';
 import { createSessionController } from '../shared/auth/session-controller';
 import type { SessionOutcome } from '../shared/auth/session-controller';
 import type { createSessionCoordinator } from '../shared/auth/session-coordinator';
+import { SafeApiError } from '../shared/api/safe-error';
+import type { TransportRequest, TransportResult } from '../shared/api/transport';
 
 interface RuntimeOptions {
   /** Supply apiOrigin from readPublicConfig. */
@@ -31,20 +33,23 @@ export function createApplicationRuntime(options: RuntimeOptions) {
     },
   });
 
+  let sessionGeneration = 0;
+  let readAccessToken: () => string | null = () => null;
+
+  const transport = createTransport({
+    apiOrigin: options.apiOrigin,
+    getAccessToken: () => readAccessToken(),
+    ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
+  });
+
   const session = createSessionController({
     createApi(getAccessToken) {
-      return createAuthApi(
-        createTransport({
-          apiOrigin: options.apiOrigin,
-          getAccessToken,
-          ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
-        }),
-      );
+      readAccessToken = getAccessToken;
+      return createAuthApi(transport);
     },
 
     clearPrivateState() {
-      // Clears queries and mutation records. Destroyed queries cancel their
-      // retryers and abort query signals consumed by their request functions.
+      sessionGeneration += 1;
       queryClient.clear();
     },
 
@@ -55,10 +60,52 @@ export function createApplicationRuntime(options: RuntimeOptions) {
 
   let startup: Promise<SessionOutcome> | null = null;
   let disposed = false;
+  async function request<T>(input: TransportRequest<T>): Promise<TransportResult<T>> {
+    const snapshot = session.getSnapshot();
+
+    if (disposed || snapshot.phase !== 'authenticated') {
+      return {
+        ok: false,
+        error: SafeApiError.fromHttp(401, null),
+        retryAfterMs: null,
+      };
+    }
+
+    // Feature requests use bearer authentication. Cookie-based auth
+    // operations remain private to the session controller.
+    if (input.authentication !== 'bearer') {
+      return {
+        ok: false,
+        error: SafeApiError.fromLocal('invalid-response'),
+        retryAfterMs: null,
+      };
+    }
+
+    const generation = sessionGeneration;
+    const result = await transport(input);
+    const current = session.getSnapshot();
+
+    if (
+      disposed ||
+      generation !== sessionGeneration ||
+      current.phase !== 'authenticated' ||
+      current.user?.id !== snapshot.user?.id ||
+      current.user?.role !== snapshot.user?.role
+    ) {
+      return {
+        ok: false,
+        error: SafeApiError.fromLocal('aborted'),
+        retryAfterMs: null,
+      };
+    }
+
+    return result;
+  }
 
   return {
     queryClient,
     session,
+    request,
 
     /**
      * Call explicitly during application bootstrap, outside React rendering.

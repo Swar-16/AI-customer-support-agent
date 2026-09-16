@@ -1,7 +1,7 @@
 // apps/web/src/shared/components/workspace-entry.tsx
 
 import { useEffect, useRef } from 'react';
-import { NavLink } from 'react-router';
+import { Link, NavLink } from 'react-router';
 
 import { useSession } from '../auth/session-context';
 import { allowedWorkspaces, workspaceNames } from '../auth/workspace-access';
@@ -48,6 +48,11 @@ export function WorkspaceEntry({ workspace, description }: WorkspaceEntryProps) 
               {workspaceNames[item]}
             </NavLink>
           ))}
+        </nav>
+        <nav aria-label="Account">
+          <Link to="/logout" className="workspace-entry__link">
+            Sign out
+          </Link>
         </nav>
       </aside>
 
