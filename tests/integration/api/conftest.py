@@ -44,11 +44,18 @@ def _structured_llm_resolver(system_prompt: str, user_prompt: str, response_mode
 
     if response_model is IntentResult:
         return {
-            "intent": "order_status",
+            "intent": "return_exchange",
             "confidence": 0.99,
-            "entities": { "order_id": "ORD-12345"},
+            "entities": {
+                "order_id": None,
+                "transaction_id": None,
+                "subscription_id": None,
+                "account_id": None,
+                "issue_type": None,
+                "attributes": {},
+            },
             "needs_clarification": False,
-            "reason_summary": "Customer is asking for the status of a specific order.",
+            "reason_summary": "Customer is asking about the return policy.",
         }
 
     raise AssertionError(f"Unexpected structured response model: {response_model.__name__}")

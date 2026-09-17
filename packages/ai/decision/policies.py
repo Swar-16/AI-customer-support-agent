@@ -178,6 +178,20 @@ _INTENT_DECISION_POLICIES: Final[dict[IntentType, IntentDecisionPolicy]] = {
         potentially_actionable=False,
     ),
 
+    IntentType.CONVERSATIONAL: IntentDecisionPolicy(
+        intent=IntentType.CONVERSATIONAL,
+        default_decision=DecisionType.ANSWER,
+        reason_code=DecisionReasonCode.DIRECT_INFORMATIONAL_RESPONSE,
+        potentially_actionable=False,
+    ),
+
+    IntentType.OUT_OF_SCOPE: IntentDecisionPolicy(
+        intent=IntentType.OUT_OF_SCOPE,
+        default_decision=DecisionType.ANSWER,
+        reason_code=DecisionReasonCode.UNSUPPORTED_REQUEST,
+        potentially_actionable=False,
+    ),
+
     IntentType.UNKNOWN: IntentDecisionPolicy(
         intent=IntentType.UNKNOWN,
         default_decision=DecisionType.ASK_CLARIFICATION,

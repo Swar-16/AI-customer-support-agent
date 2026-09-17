@@ -243,6 +243,21 @@ class IntentClassifier:
             "is missing, preserve the correct intent and set "
             "needs_clarification=true.\n\n"
 
+            "Use CONVERSATIONAL only for greetings, thanks, goodbyes, "
+            "and questions about the assistant's customer-support capabilities.\n"
+
+            "Use GENERAL_QUESTION only for supported company, service, "
+            "or policy-related informational questions that require trusted "
+            "knowledge.\n"
+
+            "Use OUT_OF_SCOPE when the request is unrelated to customer "
+            "support. Do not classify an unrelated but understandable request "
+            "as UNKNOWN.\n"
+
+            "Use UNKNOWN only when the customer's intended support goal cannot "
+            "be determined reliably. UNKNOWN is not a substitute for "
+            "OUT_OF_SCOPE.\n\n"
+
             "The confidence field is a classification confidence signal "
             "between 0 and 1. Avoid artificial certainty for ambiguous "
             "messages.\n\n"

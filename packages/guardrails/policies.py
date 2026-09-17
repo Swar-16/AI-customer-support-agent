@@ -27,12 +27,10 @@ class ResponsePresencePolicy(GuardrailPolicy):
     """
     Ensure response-producing decisions actually have customer-visible text.
 
-    At the moment, ANSWER and RETRIEVE_INFORMATION are expected to eventually produce a response before guardrail evaluation.
-
-    Clarification/escalation/refusal/action paths may have separate response generation strategies later and therefore are not handled here.
+    ANSWER and RETRIEVE_INFORMATION require an answer. ASK_CLARIFICATION requires a deterministic customer-facing clarification prompt.
     """
     policy_id = "response_presence"
-    _RESPONSE_REQUIRED_DECISIONS = frozenset({DecisionType.ANSWER, DecisionType.RETRIEVE_INFORMATION,})
+    _RESPONSE_REQUIRED_DECISIONS = frozenset({DecisionType.ANSWER, DecisionType.RETRIEVE_INFORMATION, DecisionType.ASK_CLARIFICATION,})
 
     def evaluate(self, context: GuardrailContext) -> GuardrailResult | None:
         if context.decision.decision not in self._RESPONSE_REQUIRED_DECISIONS:
@@ -50,12 +48,13 @@ class ResponsePresencePolicy(GuardrailPolicy):
 
 class DecisionCompatibilityPolicy(GuardrailPolicy):
     """
-    Prevent a generated answer from being exposed for a workflow decision that should not produce a normal authoritative customer answer.
+    Prevent customer-visible text from being exposed for a workflow decision that does not permit a response.
 
-    This protects orchestration boundaries: generation must not silently override a deterministic escalation, refusal, or clarification decision.
+    Clarification is response-compatible because orchestration constructs its text from an application-controlled allowlist.
+    Escalation and action paths remain incompatible with generated customer responses.
     """
     policy_id = "decision_compatibility"
-    _DIRECT_RESPONSE_DECISIONS = frozenset({DecisionType.ANSWER, DecisionType.RETRIEVE_INFORMATION,})
+    _DIRECT_RESPONSE_DECISIONS = frozenset({DecisionType.ANSWER, DecisionType.RETRIEVE_INFORMATION, DecisionType.ASK_CLARIFICATION,})
 
     def evaluate(self, context: GuardrailContext) -> GuardrailResult | None:
         if context.generated_response is None:

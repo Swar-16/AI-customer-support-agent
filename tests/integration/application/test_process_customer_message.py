@@ -860,11 +860,11 @@ def test_customer_message_persists_complete_ai_trace_and_assistant_response(
 
 
 # ---------------------------------------------------------------------------
-# No-generated-response path
+# Clarification-response path
 # ---------------------------------------------------------------------------
 
 
-def test_clarification_decision_completes_without_assistant_message(
+def test_clarification_decision_persists_safe_assistant_message(
     test_session_factory,
     seeded_conversation,
     embedding_provider,
@@ -873,13 +873,7 @@ def test_clarification_decision_completes_without_assistant_message(
     grounding_context_budget,
     knowledge_application
 ):
-    """
-    A successful workflow decision does not imply that an assistant message
-    exists.
-
-    The current pipeline can stop at DECISION_MADE for clarification because
-    dedicated clarification-response generation has not yet been added.
-    """
+    """Clarification is a completed customer-visible response, not a silent success."""
 
     def structured_resolver(
         system_prompt: str,
@@ -947,15 +941,10 @@ def test_clarification_decision_completes_without_assistant_message(
 
     assert result.succeeded is True
 
-    assert (
-        result.pipeline_stage
-        is PipelineStage.DECISION_MADE
-    )
-
+    assert result.pipeline_stage is PipelineStage.GUARDRAILS_COMPLETED
     assert result.decision == "ask_clarification"
-
-    assert result.assistant_message_id is None
-    assert result.response is None
+    assert result.assistant_message_id is not None
+    assert result.response == "Could you tell me what you need help with?"
 
     with test_session_factory() as session:
         messages = tuple(
@@ -968,9 +957,11 @@ def test_clarification_decision_completes_without_assistant_message(
             )
         )
 
-        # Only the triggering customer message exists.
-        assert len(messages) == 1
+        assert len(messages) == 2
         assert messages[0].role == "customer"
+        assert messages[1].role == "assistant"
+        assert messages[1].content == result.response
+        assert messages[1].id == result.assistant_message_id
 
         ai_run = session.get(
             AIRunModel,
@@ -980,6 +971,110 @@ def test_clarification_decision_completes_without_assistant_message(
         assert ai_run is not None
         assert ai_run.status == "completed"
 
+        assert ai_run.response_message_id == result.assistant_message_id
+
+        llm_calls = tuple(
+            session.scalars(
+                select(LLMCallModel).where(
+                    LLMCallModel.ai_run_id == result.ai_run_id
+                )
+            )
+        )
+
+        # The clarification copy is deterministic and allowlisted. Only intent
+        # classification invokes the provider.
+        assert len(llm_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Unsupported operational-retrieval path
+# ---------------------------------------------------------------------------
+
+
+def test_unsupported_operational_retrieval_persists_honest_failure(
+    test_session_factory,
+    seeded_conversation,
+    embedding_provider,
+    embedding_input_descriptor,
+    retrieval_profile,
+    grounding_context_budget,
+    knowledge_application,
+):
+    def structured_resolver(
+        system_prompt: str,
+        user_prompt: str,
+        response_model,
+    ):
+        if response_model is IntentResult:
+            return {
+                "intent": "order_status",
+                "confidence": 0.99,
+                "entities": {
+                    "order_id": "ORD-12345",
+                    "transaction_id": None,
+                    "subscription_id": None,
+                    "account_id": None,
+                    "issue_type": None,
+                    "attributes": {},
+                },
+                "needs_clarification": False,
+                "reason_summary": "The customer requested an order status.",
+            }
+
+        raise AssertionError(
+            "Generation must not be invoked for unsupported operational retrieval."
+        )
+
+    provider = MockLLMProvider(structured_resolver=structured_resolver)
+    pipeline_factory = AIPipelineFactory(base_provider=provider)
+
+    def uow_factory():
+        return SqlAlchemyUnitOfWork(session_factory=test_session_factory)
+
+    service = ProcessCustomerMessage(
+        uow_factory=uow_factory,
+        pipeline_factory=pipeline_factory,
+        embedding_provider=embedding_provider,
+        embedding_input_descriptor=embedding_input_descriptor,
+        retrieval_profile=retrieval_profile,
+        grounding_context_budget=grounding_context_budget,
+        knowledge_application=knowledge_application,
+    )
+    conversation_id = seeded_conversation["conversation_id"]
+
+    result = service.execute(
+        ProcessCustomerMessageCommand(
+            conversation_id=conversation_id,
+            customer_message="Where is order ORD-12345?",
+            principal=_customer_principal(seeded_conversation),
+        )
+    )
+
+    assert result.succeeded is False
+    assert result.pipeline_stage is PipelineStage.FAILED
+    assert result.failure_code == "RETRIEVAL_KIND_UNSUPPORTED"
+    assert result.failure_retryable is False
+    assert result.assistant_message_id is None
+    assert result.response is None
+    assert result.escalation_id is None
+
+    with test_session_factory() as session:
+        messages = tuple(
+            session.scalars(
+                select(MessageModel)
+                .where(MessageModel.conversation_id == conversation_id)
+                .order_by(MessageModel.sequence_number)
+            )
+        )
+        ai_run = session.get(AIRunModel, result.ai_run_id)
+
+        # The accepted customer message and failed run remain recoverable and
+        # auditable, but no fabricated assistant answer is persisted.
+        assert len(messages) == 1
+        assert messages[0].role == "customer"
+        assert ai_run is not None
+        assert ai_run.status == "failed"
+        assert ai_run.error_code == "RETRIEVAL_KIND_UNSUPPORTED"
         assert ai_run.response_message_id is None
 
 

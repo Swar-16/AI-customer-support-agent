@@ -45,7 +45,7 @@ class TestSendCustomerMessage:
         response = client.post(
             f"/v1/conversations/{seeded_conversation}/messages",
             headers={**customer_auth_headers, "X-Trace-ID": str(trace_id) },
-            json={ "message": "Where is my order ORD-12345?" },
+            json={ "message": "What is your return policy?" },
         )
 
         assert response.status_code == 200
@@ -57,15 +57,18 @@ class TestSendCustomerMessage:
         assert uuid.UUID(body["ai_run_id"])
         assert body["trace_id"] == str(trace_id)
         assert body["succeeded"] is True
-        assert body["pipeline_stage"] == PipelineStage.DECISION_MADE.value
-        assert body["intent"] == IntentType.ORDER_STATUS.value
+        assert body["pipeline_stage"] == PipelineStage.GUARDRAILS_COMPLETED.value
+        assert body["intent"] == IntentType.RETURN_EXCHANGE.value
         assert body["decision"] == DecisionType.RETRIEVE_INFORMATION.value
+        assert uuid.UUID(body["assistant_message_id"])
+        assert body["escalation_id"] is None
+        assert body["response"]
 
     def test_persists_customer_message(self, client: TestClient, seeded_conversation: uuid.UUID, test_session_factory, customer_auth_headers: dict[str, str],) -> None:
         response = client.post(
             f"/v1/conversations/{seeded_conversation}/messages",
             headers=customer_auth_headers,
-            json={ "message": "Where is my order ORD-12345?" },
+            json={ "message": "What is your return policy?" },
         )
 
         assert response.status_code == 200
@@ -78,7 +81,7 @@ class TestSendCustomerMessage:
             assert message is not None
             assert message.conversation_id == seeded_conversation
             assert message.role == "customer"
-            assert message.content == "Where is my order ORD-12345?"
+            assert message.content == "What is your return policy?"
 
     def test_creates_completed_ai_run(self, client: TestClient, seeded_conversation: uuid.UUID, test_session_factory, customer_auth_headers: dict[str, str],) -> None:
         trace_id = uuid7()
@@ -86,7 +89,7 @@ class TestSendCustomerMessage:
         response = client.post(
             f"/v1/conversations/{seeded_conversation}/messages",
             headers={**customer_auth_headers, "X-Trace-ID": str(trace_id) },
-            json={ "message": "Where is my order ORD-12345?" },
+            json={ "message": "What is your return policy?" },
         )
 
         assert response.status_code == 200
@@ -104,7 +107,7 @@ class TestSendCustomerMessage:
         response = client.post(
             f"/v1/conversations/{seeded_conversation}/messages",
             headers=customer_auth_headers,
-            json={ "message": "Where is my order ORD-12345?" },
+            json={ "message": "What is your return policy?" },
         )
 
         assert response.status_code == 200
@@ -135,7 +138,7 @@ class TestSendCustomerMessage:
         response = client.post(
             f"/v1/conversations/{seeded_conversation}/messages",
             headers=customer_auth_headers,
-            json={ "message": "Where is my order ORD-12345?" },
+            json={ "message": "What is your return policy?" },
         )
 
         assert response.status_code == 200

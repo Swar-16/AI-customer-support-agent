@@ -9,6 +9,7 @@ from packages.ai.decision.engine import DecisionEngine, DecisionEngineConfig
 from packages.ai.generation.generator import GroundedResponseGenerator
 from packages.ai.generation.prompts import GroundedGenerationPromptBuilder
 from packages.ai.intent.classifier import IntentClassifier, IntentClassifierConfig
+from packages.ai.orchestration.direct_response import DirectResponseResolver
 from packages.ai.orchestration.orchestrator import AIOrchestrator, AIOrchestratorConfig, OrchestrationObserver
 from packages.ai.providers.base import LLMProvider
 from packages.ai.providers.instrumented import InstrumentedLLMProvider, LLMCallContext
@@ -203,6 +204,7 @@ class AIPipelineFactory:
     - decision-engine configuration;
     - orchestrator configuration;
     - generation prompt builder;
+    - deterministic direct-response resolver;
     - optional orchestration observer;
     - composition configuration.
     - guardrail evaluator;
@@ -240,10 +242,12 @@ class AIPipelineFactory:
 
     Both wrappers use the same base provider and recorder while preserving distinct telemetry identity.
     """
-    def __init__(self, *, base_provider: LLMProvider, intent_classifier_config: IntentClassifierConfig | None = None,
+    def __init__(self, *, base_provider: LLMProvider, intent_classifier_config: IntentClassifierConfig | None = None, 
                  decision_engine_config: DecisionEngineConfig | None = None, orchestrator_config: AIOrchestratorConfig | None = None,
-                 generation_prompt_builder: GroundedGenerationPromptBuilder | None = None, guardrail_evaluator: GuardrailEvaluator | None = None,
-                 observer: OrchestrationObserver | None = None, config: AIPipelineFactoryConfig | None = None) -> None:
+                 generation_prompt_builder: GroundedGenerationPromptBuilder | None = None,
+                 direct_response_resolver: DirectResponseResolver | None = None, guardrail_evaluator: GuardrailEvaluator | None = None,
+                 observer: OrchestrationObserver | None = None, config: AIPipelineFactoryConfig | None = None
+    ) -> None:
         if not isinstance(base_provider, LLMProvider):
             raise TypeError("base_provider must implement LLMProvider")
 
@@ -259,6 +263,9 @@ class AIPipelineFactory:
         if generation_prompt_builder is not None and not isinstance(generation_prompt_builder, GroundedGenerationPromptBuilder):
             raise TypeError("generation_prompt_builder must be a GroundedGenerationPromptBuilder instance or None")
         
+        if direct_response_resolver is not None and not isinstance(direct_response_resolver, DirectResponseResolver):
+            raise TypeError("direct_response_resolver must be a DirectResponseResolver instance or None")
+        
         if guardrail_evaluator is not None and not isinstance(guardrail_evaluator, GuardrailEvaluator):
             raise TypeError("guardrail_evaluator must be a GuardrailEvaluator instance or None")
 
@@ -270,6 +277,7 @@ class AIPipelineFactory:
         self._decision_engine_config = decision_engine_config or DecisionEngineConfig()
         self._orchestrator_config = orchestrator_config or AIOrchestratorConfig()
         self._generation_prompt_builder = generation_prompt_builder or GroundedGenerationPromptBuilder()
+        self._direct_response_resolver = direct_response_resolver if direct_response_resolver is not None else DirectResponseResolver()
         self._guardrail_evaluator = guardrail_evaluator if guardrail_evaluator is not None else GuardrailEvaluator()
         self._observer = observer
         self._config = config or AIPipelineFactoryConfig()
@@ -320,6 +328,7 @@ class AIPipelineFactory:
             intent_classifier=intent_classifier,
             decision_engine=decision_engine,
             answer_service=answer_service,
+            direct_response_resolver=self._direct_response_resolver,
             guardrail_evaluator=self._guardrail_evaluator,
             observer=orchestration_observer,
             config=self._orchestrator_config,

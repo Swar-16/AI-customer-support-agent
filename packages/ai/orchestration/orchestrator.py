@@ -4,7 +4,7 @@
 from __future__ import annotations
 import uuid
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Final, Protocol, runtime_checkable
 
 from packages.ai.decision.engine import DecisionEngine
 from packages.ai.decision.schemas import DecisionType
@@ -16,7 +16,17 @@ from packages.application.ai.answer_service import AnswerService, AnswerServiceE
 from packages.application.ai.answer_service import UnsupportedAnswerDecisionError, UnsupportedRetrievalKindError
 from packages.guardrails.evaluator import GuardrailEvaluator
 from packages.guardrails.models import GuardrailContext, GuardrailOutcome
-from packages.ai.decision.policies import RetrievalKind
+from packages.ai.orchestration.direct_response import DirectResponseResolutionError, DirectResponseResolver
+
+_DEFAULT_CLARIFICATION_RESPONSE: Final[str] = "Could you provide a little more detail so I can help you correctly?"
+
+_CLARIFICATION_RESPONSES: Final[dict[str, str]] = {
+    "customer_intent": "Could you tell me what you need help with?",
+    "clarification": _DEFAULT_CLARIFICATION_RESPONSE,
+    "order_id": "Could you provide the order ID so I can help with this request?",
+    "order_id_or_transaction_id": "Could you provide the order ID or transaction ID so I can help with this request?",
+    "subscription_id": "Could you provide the subscription ID so I can help with this request?",
+}
 
 
 # Observer contract
@@ -99,21 +109,33 @@ class AIOrchestrator:
               v
         DecisionResult
               |
-              +------------------------------+
-              |                              |
-              | RETRIEVE_INFORMATION         | other decision
-              v                              v
-        AnswerService                  DECISION_MADE
+              +--> ANSWER
+              |      |
+              |      +--> deterministic direct response
               |
-              +--> retrieval
-              +--> evidence mapping
-              +--> grounded generation
+              +--> RETRIEVE_INFORMATION
+              |      |
+              |      +--> AnswerService
               |
-              v
-        RETRIEVAL_COMPLETED
+              +--> ASK_CLARIFICATION
+              |      |
+              |      +--> deterministic clarification response
+              |
+              +--> ESCALATE
+                      |
+                      +--> human-review disposition
+
+     Response-producing paths
               |
               v
         RESPONSE_GENERATED
+              |
+              v
+        GuardrailEvaluator
+              |
+              +--> GUARDRAILS_COMPLETED
+              +--> ESCALATED
+              +--> FAILED
 
 
     AnswerService owns the implementation boundary for retrieval and grounded generation. The orchestrator therefore does not know about:
@@ -134,7 +156,9 @@ class AIOrchestrator:
         - escalation.
     """
     def __init__(self, *, intent_classifier: IntentClassifier, decision_engine: DecisionEngine, answer_service: AnswerService | None = None,
-                 guardrail_evaluator: GuardrailEvaluator | None = None, observer: OrchestrationObserver | None = None, config: AIOrchestratorConfig | None = None) -> None:
+                 direct_response_resolver: DirectResponseResolver | None = None, guardrail_evaluator: GuardrailEvaluator | None = None,
+                 observer: OrchestrationObserver | None = None, config: AIOrchestratorConfig | None = None
+    ) -> None:
         if intent_classifier is None:
             raise TypeError("intent_classifier cannot be None")
 
@@ -143,6 +167,9 @@ class AIOrchestrator:
 
         if answer_service is not None and not isinstance(answer_service, AnswerService):
             raise TypeError("answer_service must be an AnswerService instance or None")
+        
+        if direct_response_resolver is not None and not isinstance(direct_response_resolver, DirectResponseResolver):
+            raise TypeError("direct_response_resolver must be a DirectResponseResolver instance or None")
         
         if guardrail_evaluator is not None and not isinstance(guardrail_evaluator, GuardrailEvaluator):
             raise TypeError("guardrail_evaluator must be a GuardrailEvaluator instance or None")
@@ -156,6 +183,7 @@ class AIOrchestrator:
         self._intent_classifier = intent_classifier
         self._decision_engine = decision_engine
         self._answer_service = answer_service
+        self._direct_response_resolver = direct_response_resolver if direct_response_resolver is not None else DirectResponseResolver()
         self._guardrail_evaluator = guardrail_evaluator
         self._observer = observer if observer is not None else NullOrchestrationObserver()
         self._config = config if config is not None else AIOrchestratorConfig()
@@ -168,13 +196,11 @@ class AIOrchestrator:
 
         The caller owns persistence and creates/persists run identifiers before invoking this orchestrator.
 
-        Successful V1 outcomes may currently stop at:
+        Every decision is converted into an explicit terminal disposition:
 
-            DECISION_MADE
-
-        or, for supported retrieval decisions:
-
-            RESPONSE_GENERATED
+            - an approved customer response;
+            - an escalation request; or
+            - a typed FAILED state.
 
         Known operational failures are converted into PipelineError instances and represented by a FAILED AIState.
 
@@ -285,24 +311,108 @@ class AIOrchestrator:
 
         Knowledge retrieval is implemented through AnswerService.
 
-        Operational retrieval is not implemented yet, so those requests remain successfully routed at DECISION_MADE.
-        A future operational service can continue processing from that decision.
+        Unsupported decisions fail explicitly rather than escaping as a false-success DECISION_MADE state.
         """
         if state.decision_result is None:
             raise RuntimeError("Decision execution reached without decision_result")
 
         decision = state.decision_result.decision
+        
+        if decision is DecisionType.ANSWER:
+            return self._answer_directly(state)
+        
         if decision is DecisionType.RETRIEVE_INFORMATION:
-            retrieval_kind = state.decision_result.metadata.get("retrieval_kind")
-            if retrieval_kind == RetrievalKind.OPERATIONAL.value:
-                return state
-
             return self._retrieve_and_generate(state)
+
+        if decision is DecisionType.ASK_CLARIFICATION:
+            return self._request_clarification(state)
 
         if decision is DecisionType.ESCALATE:
             return self._escalate_from_decision(state)
 
-        return state
+        return self._fail(
+            state=state,
+            stage=PipelineStage.DECISION_MADE,
+            code="DECISION_WORKFLOW_UNSUPPORTED",
+            message="The selected workflow is not implemented by this pipeline version.",
+            retryable=False,
+            metadata={"decision": decision.value},
+        )
+
+    def _answer_directly(self, state: AIState) -> AIState:
+        """
+        Produce an application-controlled direct response.
+
+        This workflow is limited to intents explicitly supported by DirectResponseResolver.
+        It performs no knowledge retrieval, provider generation, operational lookup, or business action.
+
+        The selected response still passes through the normal response-generation lifecycle and guardrails before it becomes eligible for persistence.
+        """
+        intent_result = state.intent_result
+        if intent_result is None:
+            raise RuntimeError("Direct-answer workflow reached without intent_result")
+
+        decision_result = state.decision_result
+        if decision_result is None:
+            raise RuntimeError("Direct-answer workflow reached without decision_result")
+
+        if decision_result.decision is not DecisionType.ANSWER:
+            raise RuntimeError("Direct-answer workflow requires an ANSWER decision")
+
+        try:
+            direct_response = self._direct_response_resolver.resolve(
+                customer_message=state.customer_message, intent_result=intent_result, decision_result=decision_result
+            )
+
+        except DirectResponseResolutionError as exc:
+            return self._fail(
+                state=state,
+                stage=PipelineStage.RESPONSE_GENERATED,
+                code="DIRECT_RESPONSE_UNAVAILABLE",
+                message="A safe direct customer response could not be resolved.",
+                retryable=False,
+                metadata={
+                    "exception_type": type(exc).__name__,
+                    "intent": intent_result.intent.value,
+                    "decision": decision_result.decision.value,
+                },
+            )
+
+        generated_state = self._complete_generation(state=state, answer=direct_response.text)
+
+        return self._evaluate_guardrails(generated_state)
+
+    def _request_clarification(self, state: AIState) -> AIState:
+        """Create an allowlisted clarification response without another provider call."""
+        decision = state.decision_result
+        if decision is None:
+            raise RuntimeError("Clarification reached without decision_result")
+
+        if decision.decision is not DecisionType.ASK_CLARIFICATION:
+            raise RuntimeError("Clarification requires an ASK_CLARIFICATION decision")
+
+        response = self._resolve_clarification_response(
+            required_information=decision.required_information,
+        )
+        generated_state = self._complete_generation(
+            state=state,
+            answer=response,
+        )
+
+        return self._evaluate_guardrails(generated_state)
+
+    @staticmethod
+    def _resolve_clarification_response(*, required_information: tuple[str, ...]) -> str:
+        """
+        Resolve only application-controlled response text.
+
+        Unknown requirement keys deliberately fall back to generic wording;
+        internal routing vocabulary is never interpolated into customer text.
+        """
+        if len(required_information) != 1:
+            return _DEFAULT_CLARIFICATION_RESPONSE
+
+        return _CLARIFICATION_RESPONSES.get(required_information[0], _DEFAULT_CLARIFICATION_RESPONSE)
     
     def _escalate_from_decision(self, state: AIState) -> AIState:
         """

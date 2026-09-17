@@ -150,6 +150,23 @@ class ProcessCustomerMessageResult:
             if self.failure_retryable is not None:
                 raise ValueError("Successful results cannot contain failure_retryable.")
 
+            if self.pipeline_stage is PipelineStage.GUARDRAILS_COMPLETED:
+                if self.assistant_message_id is None or self.response is None:
+                    raise ValueError("Approved response results require assistant_message_id and response.")
+
+                if self.escalation_id is not None:
+                    raise ValueError("Approved response results cannot contain escalation_id.")
+
+            elif self.pipeline_stage is PipelineStage.ESCALATED:
+                if self.escalation_id is None:
+                    raise ValueError("Escalated results require escalation_id.")
+
+                if self.assistant_message_id is not None or self.response is not None:
+                    raise ValueError("Escalated results cannot expose an unapproved assistant response.")
+
+            else:
+                raise ValueError("Successful results require an approved response or escalation terminal stage.")
+
         else:
             if self.pipeline_stage is not PipelineStage.FAILED:
                 raise ValueError("Unsuccessful results must have FAILED stage.")
@@ -159,6 +176,12 @@ class ProcessCustomerMessageResult:
 
             if self.failure_retryable is None:
                 raise ValueError("Unsuccessful results require failure_retryable.")
+
+            if self.assistant_message_id is not None or self.response is not None:
+                raise ValueError("Failed results cannot expose an assistant response.")
+
+            if self.escalation_id is not None:
+                raise ValueError("Failed results cannot contain escalation_id.")
 
 # Application service
 class ProcessCustomerMessage:
@@ -199,6 +222,8 @@ class ProcessCustomerMessage:
         {"open", "waiting_for_customer", "waiting_for_agent", "escalated"})
     
     CUSTOMER_RESPONSE_STAGES: Final[frozenset[PipelineStage]] = frozenset({PipelineStage.GUARDRAILS_COMPLETED,})
+    SUCCESSFUL_TERMINAL_STAGES: Final[frozenset[PipelineStage]] = frozenset({PipelineStage.GUARDRAILS_COMPLETED, PipelineStage.ESCALATED,})
+    TERMINAL_STAGES: Final[frozenset[PipelineStage]] = frozenset({*SUCCESSFUL_TERMINAL_STAGES, PipelineStage.FAILED,})
 
     def __init__(self, *, uow_factory: UnitOfWorkFactory, pipeline_factory: AIPipelineFactory, embedding_provider: EmbeddingProvider,
                  embedding_input_descriptor: EmbeddingInputDescriptor, retrieval_profile: RetrievalProfile,
@@ -388,6 +413,7 @@ class ProcessCustomerMessage:
                 conversation_context=None,
             )
             total_latency_ms = self._elapsed_ms(started_perf)
+            self._validate_terminal_state(state)
 
             # Persist orchestration artifacts
             self._persist_pipeline_artifacts(
@@ -449,7 +475,7 @@ class ProcessCustomerMessage:
                 assistant_message_id=assistant_message_id,
                 escalation_id=escalation_id,
                 response=response,
-                succeeded=state.stage is not PipelineStage.FAILED,
+                succeeded=state.stage in self.SUCCESSFUL_TERMINAL_STAGES,
                 failure_code=final_error.code if final_error is not None else None,
                 failure_retryable=final_error.retryable if final_error is not None else None,
             )
@@ -488,8 +514,7 @@ class ProcessCustomerMessage:
         """
         Complete the AI run and associate it with the customer-visible response when one was produced.
 
-        A completed run may legitimately have no response message yet. For example, some workflow decisions can complete before
-        their dedicated clarification, action, or escalation response stage exists.
+        A completed run without a response message is valid only for an explicitly persisted escalation disposition.
         """
         repositories.ai_runs.mark_completed(
             run,
@@ -597,6 +622,14 @@ class ProcessCustomerMessage:
         return result.escalation_id
 
     # Validation
+    @classmethod
+    def _validate_terminal_state(cls, state: AIState) -> None:
+        if not isinstance(state, AIState):
+            raise PersistenceContractError("Orchestrator returned an invalid state object")
+
+        if state.stage not in cls.TERMINAL_STAGES:
+            raise PersistenceContractError(f"Orchestrator returned a non-terminal pipeline state: {state.stage.value}")
+
     @staticmethod
     def _normalize_customer_message(message: str) -> str:
         if not isinstance(message, str):
