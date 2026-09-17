@@ -6,17 +6,34 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from time import perf_counter
-from typing import TypeVar
+from typing import Protocol, TypeVar
 from pydantic import BaseModel
 
 from packages.ai.providers.base import LLMProvider
 from packages.ai.providers.errors import LLMProviderError, LLMProviderTimeoutError
 from packages.ai.providers.types import LLMResponse, StructuredLLMResponse
-from packages.ai.telemetry.recorder import TelemetryRecorder
-from packages.database.models.ai.llm_call import LLMCallModel
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
+
+class LLMCallRecorder(Protocol):
+    def start_llm_call(self, *, ai_run_id: uuid.UUID, purpose: str, provider: str, model: str, started_at: datetime, 
+                       prompt_version_id: uuid.UUID | None = None, temperature: Decimal | None = None
+    ) -> uuid.UUID:
+        ...
+
+    def complete_llm_call(self, call_id: uuid.UUID, *, completed_at: datetime, latency_ms: int, input_tokens: int, output_tokens: int,
+                          cached_input_tokens: int = 0, estimated_cost_usd: Decimal | None = None, provider_request_id: str | None = None
+    ) -> None:
+        ...
+
+    def fail_llm_call(self, call_id: uuid.UUID, *, completed_at: datetime, latency_ms: int, error_code: str, error_message: str, provider_request_id: str | None = None) -> None:
+        ...
+
+    def timeout_llm_call(self, call_id: uuid.UUID, *, completed_at: datetime, latency_ms: int,
+                         error_message: str = "LLM provider request timed out.", provider_request_id: str | None = None
+    ) -> None:
+        ...
 
 @dataclass(frozen=True, slots=True)
 class LLMCallContext:
@@ -85,12 +102,13 @@ class InstrumentedLLMProvider(LLMProvider):
     Transaction ownership remains with the surrounding UnitOfWork.
     """
 
-    def __init__(self, *, provider: LLMProvider, recorder: TelemetryRecorder, context: LLMCallContext) -> None:
-        if provider is None:
-            raise TypeError("provider cannot be None")
+    def __init__(self, *, provider: LLMProvider, recorder: LLMCallRecorder, context: LLMCallContext) -> None:
+        if not isinstance(provider, LLMProvider):
+            raise TypeError("provider must implement LLMProvider")
 
-        if recorder is None:
-            raise TypeError("recorder cannot be None")
+        required_recorder_methods = ("start_llm_call", "complete_llm_call", "fail_llm_call", "timeout_llm_call",)
+        if not all(callable(getattr(recorder, method_name, None)) for method_name in required_recorder_methods):
+            raise TypeError("recorder must implement LLMCallRecorder")
 
         if not isinstance(context, LLMCallContext):
             raise TypeError("context must be an LLMCallContext")
@@ -118,7 +136,7 @@ class InstrumentedLLMProvider(LLMProvider):
     # Plain-text generation
     def generate(self, *, system_prompt: str, user_prompt: str) -> LLMResponse:
         self._last_call_id = None ## prevents an old successful call ID from leaking into a later failed invocation.
-        call = self._start_call()
+        call_id = self._start_call()
         started_perf = perf_counter()
 
         try:
@@ -126,52 +144,52 @@ class InstrumentedLLMProvider(LLMProvider):
 
         except LLMProviderTimeoutError as exc:
             latency_ms = self._elapsed_ms(started_perf)
-            self._record_timeout_safely(call=call, exc=exc, latency_ms=latency_ms)
+            self._record_timeout_safely(call_id=call_id, exc=exc, latency_ms=latency_ms)
             raise
 
         except LLMProviderError as exc:
             latency_ms = self._elapsed_ms(started_perf)
-            self._record_failure_safely(call=call, exc=exc, latency_ms=latency_ms)
+            self._record_failure_safely(call_id=call_id, exc=exc, latency_ms=latency_ms)
             raise
 
         except Exception as exc:
             latency_ms = self._elapsed_ms(started_perf)
-            self._record_unexpected_failure_safely(call=call, exc=exc, latency_ms=latency_ms)
+            self._record_unexpected_failure_safely(call_id=call_id, exc=exc, latency_ms=latency_ms)
             # Do not convert programming defects into provider failures.
             raise
 
         latency_ms = self._elapsed_ms(started_perf)
-        self._complete_call(call=call, response=response, latency_ms=latency_ms)
-        self._last_call_id = call.id
+        self._complete_call(call_id=call_id, response=response, latency_ms=latency_ms)
+        self._last_call_id = call_id
         return response
 
 
     # Structured generation
     def generate_structured(self, *, system_prompt: str, user_prompt: str, response_model: type[T]) -> StructuredLLMResponse[T]:
         self._last_call_id = None ## prevents an old successful call ID from leaking into a later failed invocation.
-        call = self._start_call()
+        call_id = self._start_call()
         started_perf = perf_counter()
 
         try:
             response = self._provider.generate_structured(system_prompt=system_prompt, user_prompt=user_prompt, response_model=response_model)
         except LLMProviderTimeoutError as exc:
             latency_ms = self._elapsed_ms(started_perf)
-            self._record_timeout_safely(call=call, exc=exc, latency_ms=latency_ms)
+            self._record_timeout_safely(call_id=call_id, exc=exc, latency_ms=latency_ms)
             raise
 
         except LLMProviderError as exc:
             latency_ms = self._elapsed_ms(started_perf)
-            self._record_failure_safely(call=call, exc=exc, latency_ms=latency_ms)
+            self._record_failure_safely(call_id=call_id, exc=exc, latency_ms=latency_ms)
             raise
 
         except Exception as exc:
             latency_ms = self._elapsed_ms(started_perf)
-            self._record_unexpected_failure_safely(call=call, exc=exc, latency_ms=latency_ms)
+            self._record_unexpected_failure_safely(call_id=call_id, exc=exc, latency_ms=latency_ms)
             raise
 
         latency_ms = self._elapsed_ms(started_perf)
-        self._complete_call(call=call, response=response, latency_ms=latency_ms)
-        self._last_call_id = call.id
+        self._complete_call(call_id=call_id, response=response, latency_ms=latency_ms)
+        self._last_call_id = call_id
         return response
 
     # Health
@@ -184,16 +202,14 @@ class InstrumentedLLMProvider(LLMProvider):
 
 
     # Telemetry lifecycle
-    def _start_call(self):
+    def _start_call(self) -> uuid.UUID:
         """
-        Create the telemetry row before external provider invocation.
+        Commit the STARTED telemetry record before provider execution.
 
-        If this fails, the provider is NOT called. This preserves the
-        invariant that an externally executed business LLM call should have
-        an auditable DB record.
+        If telemetry persistence fails, the provider is not invoked because
+        mandatory provider activity must not occur without an auditable record.
         """
-
-        return self._recorder.start_llm_call(
+        call_id = self._recorder.start_llm_call(
             ai_run_id=self._context.ai_run_id,
             purpose=self._context.purpose,
             provider=self.provider_name,
@@ -203,18 +219,20 @@ class InstrumentedLLMProvider(LLMProvider):
             temperature=self._context.temperature,
         )
 
-    def _complete_call(self, *, call: LLMCallModel, response: LLMResponse | StructuredLLMResponse[BaseModel],latency_ms: int) -> None:
-        """
-        Persist normalized telemetry from a successful invocation. Does NOT swallow DB failures.
+        if not isinstance(call_id, uuid.UUID):
+            raise TypeError("LLM telemetry recorder must return a UUID")
 
-        Telemetry completion errors are deliberately allowed to propagate:
-        the provider already succeeded, but failure to persist mandatory
-        audit evidence is an infrastructure failure and the surrounding
-        UnitOfWork should roll back.
-        """
+        return call_id
 
+    def _complete_call(self, *, call_id: uuid.UUID, response: LLMResponse | StructuredLLMResponse[BaseModel], latency_ms: int) -> None:
+        """
+        Commit successful provider telemetry.
+
+        Completion persistence remains mandatory. If the provider succeeded but its required audit telemetry
+        cannot be finalized, the error is allowed to propagate.
+        """
         self._recorder.complete_llm_call(
-            call,
+            call_id,
             completed_at=datetime.now(timezone.utc),
             latency_ms=latency_ms,
             input_tokens=response.usage.input_tokens,
@@ -224,12 +242,11 @@ class InstrumentedLLMProvider(LLMProvider):
             provider_request_id=response.metadata.provider_request_id,
         )
 
-
     # Failure recording
-    def _record_timeout_safely(self, *, call: LLMCallModel, exc: LLMProviderTimeoutError, latency_ms: int) -> None:
+    def _record_timeout_safely(self, *, call_id: uuid.UUID, exc: LLMProviderTimeoutError, latency_ms: int) -> None:
         try:
             self._recorder.timeout_llm_call(
-                call,
+                call_id,
                 completed_at=datetime.now(timezone.utc),
                 latency_ms=latency_ms,
                 error_message=self._safe_error_message(exc),
@@ -250,10 +267,10 @@ class InstrumentedLLMProvider(LLMProvider):
                 },
             )
 
-    def _record_failure_safely(self, *, call: LLMCallModel, exc: LLMProviderError, latency_ms: int) -> None:
+    def _record_failure_safely(self, *, call_id: uuid.UUID, exc: LLMProviderError, latency_ms: int) -> None:
         try:
             self._recorder.fail_llm_call(
-                call,
+                call_id,
                 completed_at=datetime.now(timezone.utc),
                 latency_ms=latency_ms,
                 error_code=getattr(exc, "error_code", None,) or "PROVIDER_ERROR",
@@ -272,10 +289,10 @@ class InstrumentedLLMProvider(LLMProvider):
                 },
             )
 
-    def _record_unexpected_failure_safely(self, *, call: LLMCallModel, exc: Exception, latency_ms: int) -> None:
+    def _record_unexpected_failure_safely(self, *, call_id: uuid.UUID, exc: Exception, latency_ms: int) -> None:
         try:
             self._recorder.fail_llm_call(
-                call,
+                call_id,
                 completed_at=datetime.now(timezone.utc),
                 latency_ms=latency_ms,
                 error_code="UNEXPECTED_PROVIDER_EXCEPTION",

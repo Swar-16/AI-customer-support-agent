@@ -16,6 +16,7 @@ from packages.knowledge.retrieval.profiles import RetrievalProfile
 from packages.knowledge.retrieval.reranking.base import Reranker
 from packages.ai.telemetry.retrieval_recorder import RetrievalTelemetryRecorder
 from packages.ai.telemetry.reranker_recorder import RerankerTelemetryRecorder
+from packages.database.repositories.knowledge.scoped_retrieval_repositories import RetrievalReadUnitOfWorkFactory
 
 # Composed result
 @dataclass(frozen=True, slots=True)
@@ -40,11 +41,12 @@ class AnswerServiceComponents:
     evidence_mapper: KnowledgeEvidenceMapper
 
 # Factory
-def create_answer_service_components(*, session: Session, profile: RetrievalProfile, default_context_budget: GroundingContextBudget, 
-                                     response_generator: GroundedResponseGenerator, knowledge_application: KnowledgeApplicationComponents,
-                                     embedding_provider: EmbeddingProvider | None = None, embedding_input_descriptor: EmbeddingInputDescriptor | None = None,
-                                     reranker: Reranker | None = None, token_estimator: TokenEstimator | None = None,
-                                     evidence_mapper: KnowledgeEvidenceMapper | None = None, knowledge_retrieval: KnowledgeRetrievalComponents | None = None,
+def create_answer_service_components(*, profile: RetrievalProfile, default_context_budget: GroundingContextBudget, response_generator: GroundedResponseGenerator,
+                                     knowledge_application: KnowledgeApplicationComponents, session: Session | None = None,
+                                     retrieval_uow_factory: RetrievalReadUnitOfWorkFactory | None = None, embedding_provider: EmbeddingProvider | None = None,
+                                     embedding_input_descriptor: EmbeddingInputDescriptor | None = None, reranker: Reranker | None = None, 
+                                     token_estimator: TokenEstimator | None = None, evidence_mapper: KnowledgeEvidenceMapper | None = None, 
+                                     knowledge_retrieval: KnowledgeRetrievalComponents | None = None,
                                      retrieval_telemetry_recorder: RetrievalTelemetryRecorder | None = None, reranker_telemetry_recorder: RerankerTelemetryRecorder | None = None
 ) -> AnswerServiceComponents:
     """
@@ -110,7 +112,9 @@ def create_answer_service_components(*, session: Session, profile: RetrievalProf
 
     When a precomposed `knowledge_retrieval` bundle is supplied, the retrieval-specific construction arguments are intentionally not used to rebuild that bundle.
     """
-    _validate_core_dependencies(session=session, profile=profile, default_context_budget=default_context_budget, response_generator=response_generator)
+    _validate_core_dependencies(session=session, retrieval_uow_factory=retrieval_uow_factory, profile=profile,
+                                default_context_budget=default_context_budget, response_generator=response_generator
+    )
     if not isinstance(knowledge_application, KnowledgeApplicationComponents):
         raise TypeError("knowledge_application must be a KnowledgeApplicationComponents instance.")
 
@@ -120,6 +124,7 @@ def create_answer_service_components(*, session: Session, profile: RetrievalProf
 
     effective_knowledge_retrieval = knowledge_retrieval if knowledge_retrieval is not None else create_knowledge_retrieval_components(
         session=session,
+        retrieval_uow_factory=retrieval_uow_factory,
         profile=profile,
         default_context_budget=default_context_budget,
         embedding_provider=embedding_provider,
@@ -153,22 +158,27 @@ def create_answer_service_components(*, session: Session, profile: RetrievalProf
     )
 
 # Validation
-def _validate_core_dependencies(*, session: Session, profile: RetrievalProfile, default_context_budget: GroundingContextBudget, response_generator: GroundedResponseGenerator) -> None:
-    """
-    Validate dependencies owned directly by this composition boundary.
+def _validate_core_dependencies(*, session: Session | None, retrieval_uow_factory: RetrievalReadUnitOfWorkFactory | None,
+                                profile: RetrievalProfile, default_context_budget: GroundingContextBudget, response_generator: GroundedResponseGenerator,
+) -> None:
+    if (
+        session is None
+    ) == (
+        retrieval_uow_factory is None
+    ):
+        raise ValueError("Exactly one of session or retrieval_uow_factory must be supplied")
 
-    Lower-level optional dependencies are deliberately validated by their respective lower-level factories.
+    if session is not None and not isinstance(session, Session):
+        raise TypeError("session must be a SQLAlchemy Session instance or None")
 
-    This avoids duplicating validation rules across composition roots.
-    """
-    if not isinstance(session, Session):
-        raise TypeError("session must be a SQLAlchemy Session instance.")
+    if retrieval_uow_factory is not None and not callable(retrieval_uow_factory):
+        raise TypeError("retrieval_uow_factory must be callable or None")
 
     if not isinstance(profile, RetrievalProfile):
-        raise TypeError("profile must be a RetrievalProfile instance.")
+        raise TypeError("profile must be a RetrievalProfile instance")
 
     if not isinstance(default_context_budget, GroundingContextBudget):
-        raise TypeError("default_context_budget must be a GroundingContextBudget instance.")
+        raise TypeError("default_context_budget must be a GroundingContextBudget instance")
 
     if not isinstance(response_generator, GroundedResponseGenerator):
-        raise TypeError("response_generator must be a GroundedResponseGenerator instance.")
+        raise TypeError("response_generator must be a GroundedResponseGenerator instance")

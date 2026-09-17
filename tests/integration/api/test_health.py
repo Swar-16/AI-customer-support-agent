@@ -14,6 +14,9 @@ def make_application_services(*, provider_healthy: bool = True) -> ApplicationSe
     provider.health_check.return_value = provider_healthy
 
     return ApplicationServices(
+        accept_conversation_start=Mock(),
+        start_conversation=Mock(),
+        
         create_conversation=Mock(),
         list_conversations=Mock(),
         get_conversation=Mock(),

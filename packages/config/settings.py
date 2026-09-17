@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 from datetime import timedelta
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 from urllib.parse import urlsplit
@@ -67,6 +67,20 @@ class Settings(BaseSettings):
     conversation_context_max_messages: int = 12
     conversation_context_max_characters: int = 8_000
     conversation_context_max_characters_per_message: int = 2_000
+    
+    # Idempotent conversation start
+    conversation_start_idempotency_ttl_seconds: int = Field(
+        default=86_400,
+        ge=300,
+        le=604_800,
+        description="How long a customer-scoped conversation-start idempotency record remains replayable.",
+    )
+    conversation_start_processing_lease_seconds: int = Field(
+        default=120,
+        ge=15,
+        le=600,
+        description="Duration for which one request owns conversation-start AI processing before an abandoned attempt may be reclaimed.",
+    )
     
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",

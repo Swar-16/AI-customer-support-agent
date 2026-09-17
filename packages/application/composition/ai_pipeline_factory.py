@@ -12,17 +12,10 @@ from packages.ai.intent.classifier import IntentClassifier, IntentClassifierConf
 from packages.ai.orchestration.direct_response import DirectResponseResolver
 from packages.ai.orchestration.orchestrator import AIOrchestrator, AIOrchestratorConfig, OrchestrationObserver
 from packages.ai.providers.base import LLMProvider
-from packages.ai.providers.instrumented import InstrumentedLLMProvider, LLMCallContext
-from packages.ai.telemetry.recorder import TelemetryRecorder
-from packages.database.repositories.ai.decision_repository import AIDecisionRepository
-from packages.database.repositories.ai.intent_prediction_repository import IntentPredictionRepository
-from packages.database.repositories.ai.llm_call_repository import LLMCallRepository
+from packages.ai.providers.instrumented import InstrumentedLLMProvider, LLMCallContext, LLMCallRecorder
 from packages.application.ai.answer_service import AnswerService
 from packages.guardrails.evaluator import GuardrailEvaluator
-from packages.ai.telemetry.observer import CompositeTelemetrySink, LoggingTelemetrySink, TelemetryOrchestrationObserver
-from packages.ai.telemetry.stage_event_sink import DatabaseStageEventSink
-from packages.database.repositories.ai.stage_event_repository import AIStageEventRepository
-
+from packages.ai.telemetry.observer import CompositeTelemetrySink, LoggingTelemetrySink, TelemetryOrchestrationObserver, TelemetrySink
 
 AnswerServiceBuilder = Callable[[GroundedResponseGenerator], AnswerService]
 
@@ -86,7 +79,6 @@ class AIPipeline:
     guardrail_evaluator: GuardrailEvaluator
     intent_provider: InstrumentedLLMProvider
     generation_provider: InstrumentedLLMProvider
-    telemetry_recorder: TelemetryRecorder
 
     @property
     def instrumented_provider(self) -> InstrumentedLLMProvider:
@@ -104,34 +96,6 @@ class AIPipeline:
         This alias should be removed once ProcessCustomerMessage and any older tests no longer depend on it.
         """
         return self.intent_provider
-
-# Repository dependencies
-@dataclass(frozen=True, slots=True)
-class AITelemetryRepositories:
-    """
-    Repository dependencies required by AI telemetry persistence.
-
-    The composition layer depends on this narrow bundle rather than on the concrete SqlAlchemyUnitOfWork itself.
-
-    All repositories supplied here must belong to the same active UnitOfWork and therefore the same transaction/session.
-    """
-    llm_calls: LLMCallRepository
-    intent_predictions: IntentPredictionRepository
-    ai_decisions: AIDecisionRepository
-    stage_events: AIStageEventRepository
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.llm_calls, LLMCallRepository):
-            raise TypeError("llm_calls must be an LLMCallRepository")
-
-        if not isinstance(self.intent_predictions, IntentPredictionRepository):
-            raise TypeError("intent_predictions must be an IntentPredictionRepository")
-
-        if not isinstance(self.ai_decisions, AIDecisionRepository):
-            raise TypeError("ai_decisions must be an AIDecisionRepository")
-        
-        if not isinstance(self.stage_events, AIStageEventRepository):
-            raise TypeError("stage_events must be an AIStageEventRepository")
 
 # Factory configuration
 @dataclass(frozen=True, slots=True)
@@ -283,7 +247,9 @@ class AIPipelineFactory:
         self._config = config or AIPipelineFactoryConfig()
 
     # Public construction API
-    def create(self, *, ai_run_id: uuid.UUID, repositories: AITelemetryRepositories, answer_service_builder: AnswerServiceBuilder | None = None) -> AIPipeline:
+    def create(self, *, ai_run_id: uuid.UUID, llm_call_recorder: LLMCallRecorder, 
+               answer_service_builder: AnswerServiceBuilder | None = None, stage_event_sink: TelemetrySink | None = None
+) -> AIPipeline:
         """
         Construct all request-scoped AI dependencies for one AI run.
 
@@ -293,21 +259,24 @@ class AIPipelineFactory:
         """
         if not isinstance(ai_run_id, uuid.UUID):
             raise TypeError("ai_run_id must be a UUID")
+        
+        required_recorder_methods = ("start_llm_call", "complete_llm_call", "fail_llm_call", "timeout_llm_call",)
+        if not all(callable(getattr(llm_call_recorder, method_name, None)) for method_name in required_recorder_methods):
+            raise TypeError("llm_call_recorder must implement LLMCallRecorder")
+        
+        if stage_event_sink is not None and not callable(getattr(stage_event_sink, "emit", None)):
+            raise TypeError("stage_event_sink must implement TelemetrySink or be None")
 
-        if not isinstance(repositories, AITelemetryRepositories):
-            raise TypeError("repositories must be an AITelemetryRepositories")
-
-        recorder = self._create_telemetry_recorder(repositories=repositories)
         intent_provider = self._create_instrumented_provider(
             ai_run_id=ai_run_id,
-            recorder=recorder,
+            recorder=llm_call_recorder,
             purpose=self._config.intent_purpose,
             prompt_version_id=self._config.intent_prompt_version_id,
             temperature=self._config.intent_temperature
         )
         generation_provider = self._create_instrumented_provider(
             ai_run_id=ai_run_id,
-            recorder=recorder,
+            recorder=llm_call_recorder,
             purpose=self._config.generation_purpose,
             prompt_version_id=self._config.generation_prompt_version_id,
             temperature=self._config.generation_temperature,
@@ -323,7 +292,7 @@ class AIPipelineFactory:
         if answer_service is not None and not isinstance(answer_service, AnswerService):
             raise TypeError("answer_service_builder must return an AnswerService")
         
-        orchestration_observer = self._create_orchestration_observer(repositories=repositories)
+        orchestration_observer = self._create_orchestration_observer(stage_event_sink=stage_event_sink)
         orchestrator = AIOrchestrator(
             intent_classifier=intent_classifier,
             decision_engine=decision_engine,
@@ -342,28 +311,21 @@ class AIPipelineFactory:
             guardrail_evaluator=self._guardrail_evaluator,
             intent_provider=intent_provider,
             generation_provider=generation_provider,
-            telemetry_recorder=recorder,
         )
 
-    # Internal composition helpers
-    @staticmethod
-    def _create_telemetry_recorder(*, repositories: AITelemetryRepositories) -> TelemetryRecorder:
-        return TelemetryRecorder(
-            llm_calls=repositories.llm_calls,
-            intent_predictions=repositories.intent_predictions,
-            ai_decisions=repositories.ai_decisions,
-        )
-    
-    def _create_orchestration_observer(self, *, repositories: AITelemetryRepositories) -> OrchestrationObserver:
-        telemetry_observer = TelemetryOrchestrationObserver(
-            sink=CompositeTelemetrySink((LoggingTelemetrySink(), DatabaseStageEventSink(repository=repositories.stage_events),)))
+    # Internal composition helpers    
+    def _create_orchestration_observer(self, *, stage_event_sink: TelemetrySink | None) -> OrchestrationObserver:
+        sinks: list[TelemetrySink] = [LoggingTelemetrySink()]
+        if stage_event_sink is not None:
+            sinks.append(stage_event_sink)
 
+        telemetry_observer = TelemetryOrchestrationObserver(sink=CompositeTelemetrySink(tuple(sinks)))
         if self._observer is None:
             return telemetry_observer
 
         return CompositeOrchestrationObserver((telemetry_observer, self._observer,))
 
-    def _create_instrumented_provider(self, *, ai_run_id: uuid.UUID, recorder: TelemetryRecorder, purpose: str,
+    def _create_instrumented_provider(self, *, ai_run_id: uuid.UUID, recorder: LLMCallRecorder, purpose: str,
                                       prompt_version_id: uuid.UUID | None, temperature: Decimal | None) -> InstrumentedLLMProvider:
         """
         Build one purpose-scoped instrumentation decorator.

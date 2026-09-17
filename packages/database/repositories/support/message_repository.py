@@ -102,6 +102,30 @@ class MessageRepository:
         messages = tuple(self._session.scalars(statement))
         return tuple(reversed(messages))
     
+    def get_recent_before_sequence(self, conversation_id: uuid.UUID, *, before_sequence_number: int, limit: int = 20) -> Sequence[MessageModel]:
+        """
+        Return the most recent messages strictly before a triggering message.
+
+        This supports processing a customer message that was committed in an earlier acceptance transaction.
+        The triggering message is excluded from conversation context, preventing it from appearing both as
+        ``customer_message`` and inside ``conversation_context``.
+
+        The database query reads newest-to-oldest for efficiency, while the returned collection is chronological.
+        """
+        self._validate_uuid(conversation_id, field_name="conversation_id")
+        self._validate_sequence_number(before_sequence_number)
+        self._validate_limit(limit)
+        statement = (select(MessageModel)
+                     .where(MessageModel.conversation_id == conversation_id,
+                            MessageModel.sequence_number < before_sequence_number)
+                     .order_by(MessageModel.sequence_number.desc(),
+                               MessageModel.id.desc())
+                     .limit(limit)
+        )
+
+        messages = tuple(self._session.scalars(statement))
+        return tuple(reversed(messages))
+    
     def list_visible_by_conversation(self, conversation_id: uuid.UUID, *, limit: int = 50, offset: int = 0) -> Sequence[MessageModel]:
         """
         Return customer-visible conversation messages chronologically.
@@ -216,6 +240,14 @@ class MessageRepository:
 
         if limit <= 0:
             raise ValueError("limit must be greater than zero")
+    
+    @staticmethod
+    def _validate_sequence_number(sequence_number: int) -> None:
+        if isinstance(sequence_number, bool) or not isinstance(sequence_number, int):
+            raise TypeError("before_sequence_number must be an integer")
+
+        if sequence_number <= 0:
+            raise ValueError("before_sequence_number must be greater than zero")
 
     @staticmethod
     def _normalize_required_string(value: str, *, field_name: str) -> str:

@@ -19,6 +19,7 @@ from packages.application.composition.ai_pipeline_factory import (
     AIPipelineFactory,
 )
 from packages.application.conversations.process_customer_message import (
+    ProcessAcceptedCustomerMessageCommand,
     ProcessCustomerMessage,
     ProcessCustomerMessageCommand,
 )
@@ -133,6 +134,88 @@ class DeterministicEmbeddingProvider(EmbeddingProvider):
         text: str,
     ) -> list[float]:
         return [1.0, 0.0, 0.0]
+    
+class UoWActivityTracker:
+    def __init__(self) -> None:
+        self.active_count = 0
+        self.maximum_active_count = 0
+
+    def entered(self) -> None:
+        self.active_count += 1
+        self.maximum_active_count = max(
+            self.maximum_active_count,
+            self.active_count,
+        )
+
+    def exited(self) -> None:
+        if self.active_count <= 0:
+            raise AssertionError(
+                "Unit-of-work activity counter became unbalanced."
+            )
+
+        self.active_count -= 1
+
+
+class TrackingUnitOfWork:
+    def __init__(
+        self,
+        *,
+        session_factory,
+        tracker: UoWActivityTracker,
+    ) -> None:
+        self._inner = SqlAlchemyUnitOfWork(
+            session_factory=session_factory,
+        )
+        self._tracker = tracker
+        self._entered = False
+
+    def __enter__(self):
+        entered_uow = self._inner.__enter__()
+
+        self._tracker.entered()
+        self._entered = True
+
+        # Return the real UoW so existing repository validation and
+        # attribute access remain unchanged.
+        return entered_uow
+
+    def __exit__(
+        self,
+        exception_type,
+        exception,
+        traceback,
+    ):
+        try:
+            return self._inner.__exit__(
+                exception_type,
+                exception,
+                traceback,
+            )
+        finally:
+            if self._entered:
+                self._tracker.exited()
+                self._entered = False
+
+
+class TransactionBoundaryEmbeddingProvider(
+    DeterministicEmbeddingProvider
+):
+    def __init__(
+        self,
+        *,
+        tracker: UoWActivityTracker,
+    ) -> None:
+        self._tracker = tracker
+        self.query_call_count = 0
+
+    def embed_query(self, text: str):
+        assert self._tracker.active_count == 0, (
+            "The embedding provider was invoked while a database "
+            "unit of work was active."
+        )
+
+        self.query_call_count += 1
+        return super().embed_query(text)
 
 
 # ---------------------------------------------------------------------------
@@ -823,6 +906,98 @@ def test_insufficient_knowledge_persists_escalation_without_assistant_response(
         )
 
         assert customer_text not in serialized_stage_metadata
+
+
+def test_processes_previously_accepted_customer_message_without_duplication(
+    service,
+    test_session_factory,
+    seeded_conversation,
+):
+    conversation_id = (
+        seeded_conversation["conversation_id"]
+    )
+    trace_id = uuid7()
+
+    accepted_content = (
+        "I was charged twice for order ORD-123. "
+        "Can you help?"
+    )
+
+    # Simulate the short first-message acceptance transaction.
+    with test_session_factory() as session:
+        conversation = session.get(
+            ConversationModel,
+            conversation_id,
+        )
+
+        assert conversation is not None
+
+        accepted_message = MessageModel(
+            conversation_id=conversation_id,
+            role="customer",
+            content=accepted_content,
+            sequence_number=1,
+            metadata_={},
+        )
+
+        session.add(accepted_message)
+
+        # Sequence 1 has already been consumed by the accepted message.
+        conversation.next_message_sequence = 2
+
+        session.flush()
+
+        accepted_message_id = accepted_message.id
+        assert accepted_message_id is not None
+
+        session.commit()
+
+    result = service.execute_accepted(
+        ProcessAcceptedCustomerMessageCommand(
+            conversation_id=conversation_id,
+            customer_message_id=accepted_message_id,
+            principal=_customer_principal(
+                seeded_conversation
+            ),
+            trace_id=trace_id,
+        )
+    )
+
+    assert result.conversation_id == conversation_id
+    assert result.customer_message_id == accepted_message_id
+    assert result.trace_id == trace_id
+
+    with test_session_factory() as session:
+        customer_messages = tuple(
+            session.scalars(
+                select(MessageModel)
+                .where(
+                    MessageModel.conversation_id
+                    == conversation_id,
+                    MessageModel.role == "customer",
+                )
+                .order_by(
+                    MessageModel.sequence_number.asc()
+                )
+            )
+        )
+
+        ai_run = session.get(
+            AIRunModel,
+            result.ai_run_id,
+        )
+
+    # Processing must reuse the accepted trigger rather than inserting
+    # another customer message.
+    assert len(customer_messages) == 1
+    assert customer_messages[0].id == accepted_message_id
+    assert customer_messages[0].content == accepted_content
+    assert customer_messages[0].sequence_number == 1
+
+    assert ai_run is not None
+    assert ai_run.conversation_id == conversation_id
+    assert ai_run.trigger_message_id == accepted_message_id
+    assert ai_run.trace_id == trace_id
 
 
 # ---------------------------------------------------------------------------

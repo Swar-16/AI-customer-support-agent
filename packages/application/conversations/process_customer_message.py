@@ -13,7 +13,7 @@ from packages.ai.orchestration.state import AIState, PipelineStage
 from packages.ai.telemetry.recorder import TelemetryRecorder
 from packages.ai.providers.base import LLMProvider
 from packages.application.ai.answer_service import AnswerService
-from packages.application.composition.ai_pipeline_factory import AIPipelineFactory, AITelemetryRepositories
+from packages.application.composition.ai_pipeline_factory import AIPipelineFactory
 from packages.application.composition.answer_service_factory import create_answer_service_components
 from packages.database.models.ai.run import AIRunModel
 from packages.database.models.support.message import MessageModel
@@ -32,7 +32,6 @@ from packages.application.escalations.create_escalation import CreateEscalation,
 from packages.database.repositories.support.escalation_repository import EscalationRepository
 from packages.database.models.support.conversation import ConversationModel
 from packages.database.repositories.audit.audit_event_repository import AuditEventRepository
-from packages.ai.telemetry.transactional_embedding_recorder import TransactionalEmbeddingTelemetryRecorder
 from packages.database.repositories.ai.embedding_call_repository import EmbeddingCallRepository
 from packages.knowledge.embeddings.provider.instrumented import EmbeddingCallContext, InstrumentedEmbeddingProvider
 from packages.ai.telemetry.retrieval_recorder import RetrievalTelemetryRecorder
@@ -46,6 +45,9 @@ from packages.application.conversations.query_conversations import ConversationR
 from packages.database.repositories.support.user_repository import UserRepository
 from packages.application.composition.knowledge_application_factory import KnowledgeApplicationComponents
 from packages.application.conversations.conversation_context import ConversationContextBuilder
+from packages.ai.telemetry.llm_call_recorder import LLMCallTelemetryRecorder
+from packages.ai.telemetry.stage_event_sink import DatabaseStageEventSink
+from packages.ai.telemetry.embedding_recorder import EmbeddingTelemetryRecorder
 
 
 # Internal repository bundle
@@ -64,23 +66,37 @@ class _Repositories:
     stage_events: AIStageEventRepository
     intent_predictions: IntentPredictionRepository
     ai_decisions: AIDecisionRepository
+    
+@dataclass(frozen=True, slots=True)
+class _AcceptedMessageWork:
+    """
+    Immutable data crossing the acceptance transaction boundary.
+
+    No SQLAlchemy entity may be stored here because the acceptance session is closed before provider execution begins.
+    """
+    conversation_id: uuid.UUID
+    customer_message_id: uuid.UUID
+    ai_run_id: uuid.UUID
+    trace_id: uuid.UUID
+    customer_message: str
+    conversation_context: str | None
 
 MAX_CUSTOMER_MESSAGE_LENGTH: Final[int] = 20_000
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 
 _ESCALATION_REASON_SUMMARIES: Final[dict[str, str]] = {
-    "SECURITY_SENSITIVE_REQUEST": "The customer reported a privacy or security-sensitive issue that requires human review.",
-    "OPERATIONAL_LOOKUP_UNAVAILABLE": "The request requires access to operational business data that is not available to the automated support workflow.",
-    "KNOWLEDGE_UNAVAILABLE": "The published support knowledge did not contain enough verified information to answer the request reliably.",
-    "HUMAN_APPROVAL_REQUIRED": "The requested operation requires approval from an authorized human support agent.",
-    "CUSTOMER_REQUESTED_HUMAN": "The customer explicitly requested assistance from a human support agent.",
-    "SEVERE_CUSTOMER_DISSATISFACTION": "The conversation requires human review because severe customer dissatisfaction was detected.",
-    "POLICY_CONFLICT": "The available support policies produced a conflict that requires human interpretation.",
-    "SENSITIVE_ACTION_CLAIM": "The proposed response contained an unsupported claim about a sensitive business action.",
-    "SAFETY_RESTRICTION": "The automated workflow encountered a safety restriction that requires human review.",
-    "UNSUPPORTED_OPERATIONAL_CLAIM": "The proposed response relied on an unsupported operational claim that requires human verification.",
-    "MISSING_GENERATED_RESPONSE": "The automated workflow could not produce a safe customer response.",
-    "DECISION_RESPONSE_MISMATCH": "The proposed response did not match the approved support workflow.",
+    "security_sensitive_request": "The customer reported a privacy or security-sensitive issue that requires human review.",
+    "operational_lookup_unavailable": "The request requires access to operational business data that is not available to the automated support workflow.",
+    "knowledge_unavailable": "The published support knowledge did not contain enough verified information to answer the request reliably.",
+    "human_approval_required": "The requested operation requires approval from an authorized human support agent.",
+    "customer_requested_human": "The customer explicitly requested assistance from a human support agent.",
+    "severe_customer_dissatisfaction": "The conversation requires human review because severe customer dissatisfaction was detected.",
+    "policy_conflict": "The available support policies produced a conflict that requires human interpretation.",
+    "sensitive_action_claim": "The proposed response contained an unsupported claim about a sensitive business action.",
+    "safety_restriction": "The automated workflow encountered a safety restriction that requires human review.",
+    "unsupported_operational_claim": "The proposed response relied on an unsupported operational claim that requires human verification.",
+    "missing_generated_response": "The automated workflow could not produce a safe customer response.",
+    "decision_response_mismatch": "The proposed response did not match the approved support workflow.",
 }
 
 _DEFAULT_ESCALATION_REASON_SUMMARY: Final[str] = "The automated support workflow requested human review."
@@ -134,6 +150,31 @@ class ProcessCustomerMessageCommand:
 
         if not isinstance(self.customer_message, str):
             raise TypeError("customer_message must be a string")
+
+@dataclass(frozen=True, slots=True)
+class ProcessAcceptedCustomerMessageCommand:
+    """
+    Process a customer message that was committed by an earlier acceptance transaction.
+
+    This command never creates or modifies the triggering customer message.
+    """
+    conversation_id: uuid.UUID
+    customer_message_id: uuid.UUID
+    principal: AuthenticatedPrincipal
+    trace_id: uuid.UUID | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.conversation_id, uuid.UUID):
+            raise TypeError("conversation_id must be UUID")
+
+        if not isinstance(self.customer_message_id, uuid.UUID):
+            raise TypeError("customer_message_id must be UUID")
+
+        if not isinstance(self.principal, AuthenticatedPrincipal):
+            raise TypeError("principal must be an AuthenticatedPrincipal")
+
+        if self.trace_id is not None and not isinstance(self.trace_id, uuid.UUID):
+            raise TypeError("trace_id must be UUID or None")
 
 @dataclass(frozen=True, slots=True)
 class ProcessCustomerMessageResult:
@@ -301,213 +342,338 @@ class ProcessCustomerMessage:
     # Public API
     def execute(self, command: ProcessCustomerMessageCommand) -> ProcessCustomerMessageResult:
         """
-        Process one customer message as one application transaction.
+        Persist and process one new customer message.
 
-        Known AI pipeline failures are represented by PipelineStage.FAILED and persisted as failed AI runs.
-
-        Unexpected exceptions propagate out of the UnitOfWork context, causing rollback.
+        Existing callers retain their previous behavior. The shared private method performs the actual processing.
         """
         if not isinstance(command, ProcessCustomerMessageCommand):
             raise TypeError("command must be a ProcessCustomerMessageCommand")
 
         normalized_message = self._normalize_customer_message(command.customer_message)
         trace_id = command.trace_id if command.trace_id is not None else uuid7()
+
+        return self._execute_message(
+            conversation_id=command.conversation_id,
+            principal=command.principal,
+            trace_id=trace_id,
+            new_customer_message=normalized_message,
+            accepted_customer_message_id=None,
+        )
+    
+    def execute_accepted(self, command: ProcessAcceptedCustomerMessageCommand) -> ProcessCustomerMessageResult:
+        """
+        Process an already-committed customer message.
+
+        The message is loaded and validated, but never inserted again.
+        """
+        if not isinstance(command, ProcessAcceptedCustomerMessageCommand):
+            raise TypeError("command must be a ProcessAcceptedCustomerMessageCommand")
+
+        trace_id = command.trace_id if command.trace_id is not None else uuid7()
+
+        return self._execute_message(
+            conversation_id=command.conversation_id,
+            principal=command.principal,
+            trace_id=trace_id,
+            new_customer_message=None,
+            accepted_customer_message_id=command.customer_message_id,
+        )
+    
+    def _execute_message(self, *, conversation_id: uuid.UUID, principal: AuthenticatedPrincipal, trace_id: uuid.UUID,
+                         new_customer_message: str | None, accepted_customer_message_id: uuid.UUID | None
+    ) -> ProcessCustomerMessageResult:
+        if (
+            new_customer_message is None
+        ) == (
+            accepted_customer_message_id is None
+        ):
+            raise PersistenceContractError("Exactly one customer-message source must be provided")
+
+        accepted_work = self._accept_message_and_start_run(
+            conversation_id=conversation_id,
+            principal=principal,
+            trace_id=trace_id,
+            new_customer_message=new_customer_message,
+            accepted_customer_message_id=accepted_customer_message_id,
+        )
+
+        try:
+            return self._execute_committed_work(accepted_work)
+
+        except Exception:
+            self._mark_aborted_run_failed(ai_run_id=accepted_work.ai_run_id)
+            raise
+    
+    def _accept_message_and_start_run(self, *, conversation_id: uuid.UUID, principal: AuthenticatedPrincipal, trace_id: uuid.UUID,
+                                      new_customer_message: str | None, accepted_customer_message_id: uuid.UUID | None
+    ) -> _AcceptedMessageWork:
+        """
+        Accept the trigger message and create its AI run.
+
+        This transaction commits before any LLM, embedding, or reranker provider can be invoked.
+        """
         with self._uow_factory() as uow:
             repositories = self._require_repositories(uow)
-            
-            self._validate_requester(principal=command.principal, repositories=repositories)
-
-            # Load + validate conversation
-            conversation = repositories.conversations.get_by_id(command.conversation_id)
+            self._validate_requester(principal=principal, repositories=repositories)
+            conversation = repositories.conversations.get_by_id(conversation_id)
             if conversation is None:
-                raise ConversationDoesNotExistError(command.conversation_id)
+                raise ConversationDoesNotExistError(conversation_id)
 
-            self._validate_conversation_ownership(conversation=conversation, principal=command.principal)
+            self._validate_conversation_ownership(conversation=conversation, principal=principal)
             self._validate_conversation_status(conversation.status)
+            if accepted_customer_message_id is None:
+                if new_customer_message is None:
+                    raise PersistenceContractError("New customer message is unavailable")
 
-            # Persist triggering customer message
-            sequence_number = repositories.conversations.allocate_message_sequence(command.conversation_id)
-            # Load only prior customer-visible history. This query runs before the triggering message is inserted,
-            # so the current message cannot appear both in customer_message and conversation_context.
-            prior_messages = repositories.messages.get_recent_by_conversation(
-                command.conversation_id,
-                limit=self._conversation_context_builder.max_messages,
-            )
+                prior_messages = repositories.messages.get_recent_by_conversation(conversation_id, limit=self._conversation_context_builder.max_messages)
+                sequence_number = repositories.conversations.allocate_message_sequence(conversation_id)
+                customer_message = MessageModel(
+                    conversation_id=conversation_id,
+                    role="customer",
+                    content=new_customer_message,
+                    sequence_number=sequence_number,
+                    metadata_={},
+                )
+
+                repositories.messages.add(customer_message)
+                repositories.messages.flush()
+
+                if customer_message.id is None:
+                    raise PersistenceContractError("Customer message ID was not generated after flush")
+
+                normalized_message = new_customer_message
+
+            else:
+                customer_message = repositories.messages.get_by_id(accepted_customer_message_id)
+                if customer_message is None:
+                    raise PersistenceContractError("Accepted customer message does not exist")
+
+                self._validate_accepted_customer_message(message=customer_message, conversation_id=conversation_id)
+                normalized_message = self._normalize_customer_message(customer_message.content)
+                if normalized_message != customer_message.content:
+                    raise PersistenceContractError("Accepted customer message was not stored in normalized form")
+
+                prior_messages = repositories.messages.get_recent_before_sequence(
+                    conversation_id,
+                    before_sequence_number=customer_message.sequence_number,
+                    limit=self._conversation_context_builder.max_messages,
+                )
+
+            customer_message_id = customer_message.id
+            if customer_message_id is None:
+                raise PersistenceContractError("Customer message has no identifier")
+
             conversation_context = self._conversation_context_builder.build(messages=prior_messages)
-            customer_message = MessageModel(
-                conversation_id=command.conversation_id,
-                role="customer",
-                content=normalized_message,
-                sequence_number=sequence_number,
-                metadata_={},
-            )
-
-            repositories.messages.add(customer_message)
-            # We need the generated message UUID before creating ai.runs.
-            repositories.messages.flush()
-
-            if customer_message.id is None:
-                raise PersistenceContractError("Customer message ID was not generated after flush")
-
-            # Create AI run
             ai_run = AIRunModel(
                 trace_id=trace_id,
-                conversation_id=command.conversation_id,
-                trigger_message_id=customer_message.id,
+                conversation_id=conversation_id,
+                trigger_message_id=customer_message_id,
                 pipeline_version=self._pipeline_factory.pipeline_version,
                 status="running",
             )
 
             repositories.ai_runs.add(ai_run)
             repositories.ai_runs.flush()
-            if ai_run.id is None:
+            ai_run_id = ai_run.id
+            if ai_run_id is None:
                 raise PersistenceContractError("AI run ID was not generated after flush")
 
-            # Request-scoped AnswerService composition
-            def build_answer_service(response_generator: GroundedResponseGenerator) -> AnswerService:
-                """
-                Build the AnswerService only after AIPipelineFactory has created this run's GroundedResponseGenerator.
+            # This commit is deliberately before provider execution.
+            uow.commit()
 
-                The active UoW Session is reused by retrieval repositories. No second SQLAlchemy Session / transaction is opened.
-                """
-                session = uow.session
-                if session is None:
-                    raise PersistenceContractError("Active SQLAlchemy Session unavailable while composing AnswerService")
-                
-                embedding_recorder = TransactionalEmbeddingTelemetryRecorder(repository=repositories.embedding_calls)
-                retrieval_recorder = RetrievalTelemetryRecorder(
-                    repository=repositories.retrieval, ai_run_id=ai_run.id, trace_id=trace_id, conversation_id=command.conversation_id,
-                    profile=self._retrieval_profile,
-                )
-                reranker_recorder = RerankerTelemetryRecorder(
-                    repository=repositories.reranker_calls,
-                    retrieval_run_id=lambda: retrieval_recorder.retrieval_run_id,
-                    trace_id=trace_id,
+        return _AcceptedMessageWork(
+            conversation_id=conversation_id,
+            customer_message_id=customer_message_id,
+            ai_run_id=ai_run_id,
+            trace_id=trace_id,
+            customer_message=normalized_message,
+            conversation_context=conversation_context,
+        )
+        
+    def _execute_committed_work(self, work: _AcceptedMessageWork) -> ProcessCustomerMessageResult:
+        """
+        Execute orchestration without holding a business transaction.
+
+        Provider telemetry and retrieval SQL use their own short-lived UoWs.
+        Final business persistence begins only after orchestration returns.
+        """
+        llm_call_recorder = LLMCallTelemetryRecorder(uow_factory=self._uow_factory)
+        retrieval_recorder = RetrievalTelemetryRecorder(
+            uow_factory=self._uow_factory,
+            ai_run_id=work.ai_run_id,
+            trace_id=work.trace_id,
+            conversation_id=work.conversation_id,
+            profile=self._retrieval_profile,
+        )
+        reranker_recorder = RerankerTelemetryRecorder(
+            uow_factory=self._uow_factory,
+            retrieval_run_id=lambda: (retrieval_recorder.retrieval_run_id),
+            trace_id=work.trace_id,
+            metadata={
+                "workflow": "customer_support_retrieval",
+                "conversation_id": str(work.conversation_id),
+                "ai_run_id": str(work.ai_run_id),
+            },
+        )
+        embedding_recorder = EmbeddingTelemetryRecorder(uow_factory=self._uow_factory)
+        instrumented_embedding_provider = (
+            InstrumentedEmbeddingProvider(
+                provider=self._embedding_provider,
+                recorder=embedding_recorder,
+                context=EmbeddingCallContext(
+                    purpose="query",
+                    ai_run_id=work.ai_run_id,
+                    trace_id=work.trace_id,
                     metadata={
                         "workflow": "customer_support_retrieval",
-                        "conversation_id": str(command.conversation_id),
-                        "ai_run_id": str(ai_run.id),
+                        "conversation_id": str(work.conversation_id),
                     },
-                )
-                instrumented_embedding_provider = InstrumentedEmbeddingProvider(
-                    provider=self._embedding_provider,
-                    recorder=embedding_recorder,
-                    context=EmbeddingCallContext(
-                        purpose="query",
-                        ai_run_id=ai_run.id,
-                        trace_id=trace_id,
-                        metadata={
-                            "workflow": "customer_support_retrieval",
-                            "conversation_id": str(command.conversation_id),
-                        },
-                    ),
-                )
-                
-                knowledge_application=self._knowledge_application
-
-                components = create_answer_service_components(
-                    session=session,
-                    profile=self._retrieval_profile,
-                    default_context_budget=self._grounding_context_budget,
-                    response_generator=response_generator,
-                    embedding_provider=instrumented_embedding_provider,
-                    embedding_input_descriptor=self._embedding_input_descriptor,
-                    knowledge_application=knowledge_application,
-                    retrieval_telemetry_recorder=retrieval_recorder,
-                    reranker_telemetry_recorder=reranker_recorder,
-                )
-
-                return components.answer_service
-
-            # Request-scoped AI pipeline composition
-            pipeline = self._pipeline_factory.create(
-                ai_run_id=ai_run.id,
-                repositories=AITelemetryRepositories(
-                    llm_calls=repositories.llm_calls,
-                    intent_predictions=repositories.intent_predictions,
-                    ai_decisions=repositories.ai_decisions,
-                    stage_events=repositories.stage_events,
                 ),
-                answer_service_builder=build_answer_service,
+            )
+        )
+
+        def build_answer_service(response_generator: GroundedResponseGenerator) -> AnswerService:
+            components = create_answer_service_components(
+                retrieval_uow_factory=self._uow_factory,
+                profile=self._retrieval_profile,
+                default_context_budget=self._grounding_context_budget,
+                response_generator=response_generator,
+                embedding_provider=instrumented_embedding_provider,
+                embedding_input_descriptor=self._embedding_input_descriptor,
+                knowledge_application=self._knowledge_application,
+                retrieval_telemetry_recorder=retrieval_recorder,
+                reranker_telemetry_recorder=reranker_recorder,
             )
 
-            # Execute AI pipeline
-            started_perf = perf_counter()
-            state = pipeline.orchestrator.process_message(
-                ai_run_id=ai_run.id,
-                trace_id=trace_id,
-                conversation_id=command.conversation_id,
-                trigger_message_id=customer_message.id,
-                customer_message=normalized_message,
-                conversation_context=conversation_context,
-            )
-            total_latency_ms = self._elapsed_ms(started_perf)
-            self._validate_terminal_state(state)
+            return components.answer_service
 
-            # Persist orchestration artifacts
+        pipeline = self._pipeline_factory.create(
+            ai_run_id=work.ai_run_id,
+            llm_call_recorder=llm_call_recorder,
+            answer_service_builder=build_answer_service,
+            stage_event_sink=DatabaseStageEventSink(uow_factory=self._uow_factory),
+        )
+
+        started_perf = perf_counter()
+        state = pipeline.orchestrator.process_message(
+            ai_run_id=work.ai_run_id,
+            trace_id=work.trace_id,
+            conversation_id=work.conversation_id,
+            trigger_message_id=work.customer_message_id,
+            customer_message=work.customer_message,
+            conversation_context=work.conversation_context,
+        )
+        total_latency_ms = self._elapsed_ms(started_perf)
+        self._validate_terminal_state(state)
+
+        return self._finalize_committed_work(
+            work=work,
+            state=state,
+            total_latency_ms=total_latency_ms,
+            intent_llm_call_id=pipeline.intent_provider.last_call_id,
+        )
+        
+    def _finalize_committed_work(self, *, work: _AcceptedMessageWork, state: AIState, total_latency_ms: int, intent_llm_call_id: uuid.UUID | None) -> ProcessCustomerMessageResult:
+        """
+        Atomically persist the terminal business result.
+
+        Provider execution has already finished before this transaction starts.
+        """
+        with self._uow_factory() as uow:
+            repositories = self._require_repositories(uow)
+            conversation = repositories.conversations.get_by_id(work.conversation_id)
+            if conversation is None:
+                raise PersistenceContractError("Accepted conversation disappeared before finalization")
+
+            customer_message = repositories.messages.get_by_id(work.customer_message_id)
+            if customer_message is None:
+                raise PersistenceContractError("Accepted customer message disappeared before finalization")
+
+            self._validate_accepted_customer_message(message=customer_message, conversation_id=work.conversation_id)
+            ai_run = repositories.ai_runs.get_by_id(work.ai_run_id)
+            if ai_run is None:
+                raise PersistenceContractError("Accepted AI run disappeared before finalization")
+
+            if ai_run.status != "running":
+                raise PersistenceContractError("Accepted AI run is no longer running")
+
+            if ai_run.conversation_id != work.conversation_id:
+                raise PersistenceContractError("AI run conversation does not match accepted work")
+
+            if ai_run.trigger_message_id != work.customer_message_id:
+                raise PersistenceContractError("AI run trigger does not match accepted message")
+
+            outcome_recorder = TelemetryRecorder(
+                intent_predictions=repositories.intent_predictions,
+                ai_decisions=repositories.ai_decisions,
+            )
             self._persist_pipeline_artifacts(
-                recorder=pipeline.telemetry_recorder,
+                recorder=outcome_recorder,
                 state=state,
-                ai_run_id=ai_run.id,
-                intent_llm_call_id=pipeline.intent_provider.last_call_id,
+                ai_run_id=work.ai_run_id,
+                intent_llm_call_id=intent_llm_call_id,
             )
-            
-            # Persist human-review escalation when requested by orchestration.
             escalation_id: uuid.UUID | None = None
-
             if state.stage is PipelineStage.ESCALATED:
-                escalation_id = self._persist_escalation(
-                    repositories=repositories,
-                    conversation=conversation,
-                    state=state,
-                    trace_id=trace_id,
-                )
+                escalation_id = self._persist_escalation(repositories=repositories, conversation=conversation, state=state, trace_id=work.trace_id)
 
-            # Persist customer-visible assistant response
             assistant_message: MessageModel | None = None
             if state.stage in self.CUSTOMER_RESPONSE_STAGES:
-                assistant_message = self._persist_assistant_response(
-                    repositories=repositories,
-                    conversation_id=command.conversation_id,
-                    state=state,
-                )
-                
-            # Capture primitives before commit/session lifecycle ends.
+                assistant_message = self._persist_assistant_response(repositories=repositories, conversation_id=work.conversation_id, state=state)
+
             assistant_message_id = assistant_message.id if assistant_message is not None else None
             response = assistant_message.content if assistant_message is not None else None
-
-            # Finalize AI run
             if state.stage is PipelineStage.FAILED:
                 self._mark_run_failed(repositories=repositories, run=ai_run, state=state, total_latency_ms=total_latency_ms)
-
+                
             else:
-                self._mark_run_completed(
-                    repositories=repositories,
-                    run=ai_run,
-                    response_message_id=assistant_message_id,
-                    total_latency_ms=total_latency_ms,
-                )
-            
-            # Commit once
-            uow.commit()
-            
-            final_error = state.errors[-1] if state.stage is PipelineStage.FAILED else None
+                self._mark_run_completed(repositories=repositories, run=ai_run, response_message_id=assistant_message_id, total_latency_ms=total_latency_ms)
 
-            return ProcessCustomerMessageResult(
-                conversation_id=command.conversation_id,
-                customer_message_id=customer_message.id,
-                ai_run_id=ai_run.id,
-                trace_id=trace_id,
-                pipeline_stage=state.stage,
-                intent=state.intent_result.intent.value if state.intent_result is not None else None,
-                decision=state.decision_result.decision.value if state.decision_result is not None else None,
-                assistant_message_id=assistant_message_id,
-                escalation_id=escalation_id,
-                response=response,
-                succeeded=state.stage in self.SUCCESSFUL_TERMINAL_STAGES,
-                failure_code=final_error.code if final_error is not None else None,
-                failure_retryable=final_error.retryable if final_error is not None else None,
-            )
+            final_error = state.errors[-1] if state.stage is PipelineStage.FAILED else None
+            uow.commit()
+
+        return ProcessCustomerMessageResult(
+            conversation_id=work.conversation_id,
+            customer_message_id=work.customer_message_id,
+            ai_run_id=work.ai_run_id,
+            trace_id=work.trace_id,
+            pipeline_stage=state.stage,
+            intent=state.intent_result.intent.value if state.intent_result is not None else None,
+            decision=state.decision_result.decision.value if state.decision_result is not None else None,
+            assistant_message_id=assistant_message_id,
+            escalation_id=escalation_id,
+            response=response,
+            succeeded=state.stage in self.SUCCESSFUL_TERMINAL_STAGES,
+            failure_code=final_error.code if final_error is not None else None,
+            failure_retryable=final_error.retryable if final_error is not None else None,
+        )
+    
+    def _mark_aborted_run_failed(self, *, ai_run_id: uuid.UUID) -> None:
+        """
+        Best-effort recovery for an unexpected exception escaping orchestration.
+
+        The original exception remains authoritative and is re-raised by the caller. This method prevents an already
+        committed AI run from remaining permanently marked as running whenever persistence is available.
+        """
+        try:
+            with self._uow_factory() as uow:
+                repositories = self._require_repositories(uow)
+                run = repositories.ai_runs.get_by_id(ai_run_id)
+                if run is None or run.status != "running":
+                    return
+
+                repositories.ai_runs.mark_failed(
+                    run,
+                    completed_at=datetime.now(timezone.utc),
+                    total_latency_ms=0,
+                    error_code="PIPELINE_EXECUTION_ABORTED",
+                    error_message="The AI pipeline terminated before normal finalization.",
+                )
+                uow.commit()
+
+        except Exception:
+            # Never replace the original pipeline exception with a secondary recovery-persistence exception.
+            return
 
     # Persistence
     @staticmethod
@@ -830,8 +996,9 @@ class ProcessCustomerMessage:
         if reason_code is None:
             raise PersistenceContractError("Cannot resolve escalation priority without a reason code")
 
-        urgent_reasons = {"SECURITY_SENSITIVE_REQUEST", "SENSITIVE_ACTION_CLAIM", "SAFETY_RESTRICTION",}
-        high_reasons = {"HUMAN_APPROVAL_REQUIRED", "POLICY_CONFLICT", "UNSUPPORTED_OPERATIONAL_CLAIM", "SEVERE_CUSTOMER_DISSATISFACTION",}
+        urgent_reasons = {"security_sensitive_request", "sensitive_action_claim", "safety_restriction",}
+        high_reasons = {"human_approval_required", "policy_conflict", "unsupported_operational_claim", "severe_customer_dissatisfaction",}
+        
         if reason_code in urgent_reasons:
             return "urgent"
 
@@ -862,3 +1029,14 @@ class ProcessCustomerMessage:
         reason_summary = ProcessCustomerMessage._resolve_escalation_reason_summary(state)
 
         return f"Human review requested by {state.escalation_source.value}. Intent: {intent}. Reason: {state.escalation_reason_code}. {reason_summary}"
+    
+    @staticmethod
+    def _validate_accepted_customer_message(*, message: MessageModel, conversation_id: uuid.UUID) -> None:
+        if message.conversation_id != conversation_id:
+            raise PersistenceContractError("Accepted customer message does not belong to the target conversation")
+
+        if message.role != "customer":
+            raise PersistenceContractError("Accepted trigger message must have the customer role")
+
+        if isinstance(message.sequence_number, bool) or not isinstance(message.sequence_number, int) or message.sequence_number <= 0:
+            raise PersistenceContractError("Accepted customer message has an invalid sequence number")

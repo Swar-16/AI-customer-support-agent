@@ -23,6 +23,9 @@ from packages.knowledge.retrieval.vector.service import VectorRetrievalService
 from packages.ai.telemetry.retrieval_recorder import RetrievalTelemetryRecorder
 from packages.ai.telemetry.reranker_recorder import RerankerTelemetryRecorder
 from packages.knowledge.retrieval.reranking.instrumented import InstrumentedReranker
+from packages.database.repositories.knowledge.scoped_retrieval_repositories import RetrievalReadUnitOfWorkFactory
+from packages.database.repositories.knowledge.scoped_retrieval_repositories import ScopedSQLAlchemyLexicalRetrievalRepository
+from packages.database.repositories.knowledge.scoped_retrieval_repositories import ScopedSQLAlchemyVectorRetrievalRepository
 
 @dataclass(frozen=True, slots=True)
 class KnowledgeRetrievalComponents:
@@ -47,10 +50,14 @@ class KnowledgeRetrievalComponents:
     reranking_service: RerankingService | None
     context_builder: GroundingContextBuilder
 
-def create_knowledge_retrieval_components(*, session: Session, profile: RetrievalProfile, default_context_budget: GroundingContextBudget,
-                                          embedding_provider: EmbeddingProvider | None = None, embedding_input_descriptor: EmbeddingInputDescriptor | None = None,
+def create_knowledge_retrieval_components(*, profile: RetrievalProfile, default_context_budget: GroundingContextBudget, 
+                                          session: Session | None = None,
+                                          retrieval_uow_factory: RetrievalReadUnitOfWorkFactory | None = None,
+                                          embedding_provider: EmbeddingProvider | None = None, 
+                                          embedding_input_descriptor: EmbeddingInputDescriptor | None = None,
                                           reranker: Reranker | None = None, token_estimator: TokenEstimator | None = None,
-                                          telemetry_recorder: RetrievalTelemetryRecorder | None = None, reranker_telemetry_recorder: RerankerTelemetryRecorder | None = None,
+                                          telemetry_recorder: RetrievalTelemetryRecorder | None = None, 
+                                          reranker_telemetry_recorder: RerankerTelemetryRecorder | None = None,
 ) -> KnowledgeRetrievalComponents:
     """
     Compose the complete knowledge retrieval and grounding pipeline.
@@ -89,6 +96,7 @@ def create_knowledge_retrieval_components(*, session: Session, profile: Retrieva
     """
     _validate_inputs(
         session=session,
+        retrieval_uow_factory=retrieval_uow_factory,
         embedding_provider=embedding_provider,
         embedding_input_descriptor=embedding_input_descriptor,
         profile=profile,
@@ -106,12 +114,13 @@ def create_knowledge_retrieval_components(*, session: Session, profile: Retrieva
     # Retrieval branches
     vector_service = _build_vector_service(
         session=session,
+        retrieval_uow_factory=retrieval_uow_factory,
         embedding_provider=embedding_provider,
         embedding_input_descriptor=embedding_input_descriptor,
         profile=profile,
     )
 
-    lexical_service = _build_lexical_service(session=session, profile=profile)
+    lexical_service = _build_lexical_service(session=session, retrieval_uow_factory=retrieval_uow_factory, profile=profile)
 
     # Fusion / reranking
     reranking_service = _build_reranking_service(profile=profile, reranker=reranker, telemetry_recorder=reranker_telemetry_recorder)
@@ -145,32 +154,48 @@ def create_knowledge_retrieval_components(*, session: Session, profile: Retrieva
         context_builder=context_builder,
     )
 
-def _build_vector_service(*, session: Session, embedding_provider: EmbeddingProvider | None,
-                          embedding_input_descriptor: EmbeddingInputDescriptor | None, profile: RetrievalProfile
+def _build_vector_service(*, session: Session | None, retrieval_uow_factory: RetrievalReadUnitOfWorkFactory | None, 
+                          embedding_provider: EmbeddingProvider | None, embedding_input_descriptor: EmbeddingInputDescriptor | None,
+                          profile: RetrievalProfile,
 ) -> VectorRetrievalService | None:
     if not profile.vector_enabled:
         return None
 
-    # These invariants were already validated by _validate_inputs().
-    # Keeping these checks here makes this helper independently safe against future direct/internal use.
     if embedding_provider is None:
-        raise RuntimeError("embedding_provider is required when vector retrieval is enabled.")
+        raise RuntimeError("embedding_provider is required when vector retrieval is enabled")
 
     if embedding_input_descriptor is None:
-        raise RuntimeError("embedding_input_descriptor is required when vector retrieval is enabled.")
+        raise RuntimeError("embedding_input_descriptor is required when vector retrieval is enabled")
 
-    repository = SQLAlchemyVectorRetrievalRepository(session=session)
+    if retrieval_uow_factory is not None:
+        repository = ScopedSQLAlchemyVectorRetrievalRepository(uow_factory=retrieval_uow_factory)
+        
+    else:
+        if session is None:
+            raise RuntimeError("A retrieval Session or UoW factory is required")
+
+        repository = SQLAlchemyVectorRetrievalRepository(session=session)
+
     return VectorRetrievalService(
         provider=embedding_provider,
         repository=repository,
         input_descriptor=embedding_input_descriptor,
     )
 
-def _build_lexical_service(*, session: Session, profile: RetrievalProfile) -> LexicalRetrievalService | None:
+def _build_lexical_service(*, session: Session | None, retrieval_uow_factory: RetrievalReadUnitOfWorkFactory | None, profile: RetrievalProfile,
+) -> LexicalRetrievalService | None:
     if not profile.lexical_enabled:
         return None
 
-    repository = SQLAlchemyLexicalRetrievalRepository(session=session)
+    if retrieval_uow_factory is not None:
+        repository = ScopedSQLAlchemyLexicalRetrievalRepository(uow_factory=retrieval_uow_factory)
+        
+    else:
+        if session is None:
+            raise RuntimeError("A retrieval Session or UoW factory is required")
+
+        repository = SQLAlchemyLexicalRetrievalRepository(session=session)
+
     return LexicalRetrievalService(repository=repository)
 
 def _build_reranking_service(*, profile: RetrievalProfile, reranker: Reranker | None, telemetry_recorder: RerankerTelemetryRecorder | None) -> RerankingService | None:
@@ -183,12 +208,23 @@ def _build_reranking_service(*, profile: RetrievalProfile, reranker: Reranker | 
         
     return RerankingService(reranker=effective_reranker)
 
-def _validate_inputs(*, session: Session, embedding_provider: EmbeddingProvider | None, embedding_input_descriptor: EmbeddingInputDescriptor | None,
-                     profile: RetrievalProfile, default_context_budget: GroundingContextBudget, reranker: Reranker | None,
-                     token_estimator: TokenEstimator | None, telemetry_recorder: RetrievalTelemetryRecorder | None, reranker_telemetry_recorder: RerankerTelemetryRecorder | None,
+def _validate_inputs(*, session: Session, retrieval_uow_factory: RetrievalReadUnitOfWorkFactory | None, embedding_provider: EmbeddingProvider | None,
+                     embedding_input_descriptor: EmbeddingInputDescriptor | None, profile: RetrievalProfile, 
+                     default_context_budget: GroundingContextBudget, reranker: Reranker | None, token_estimator: TokenEstimator | None,
+                     telemetry_recorder: RetrievalTelemetryRecorder | None, reranker_telemetry_recorder: RerankerTelemetryRecorder | None,
 ) -> None:
-    if not isinstance(session, Session):
-        raise TypeError("session must be a SQLAlchemy Session instance.")
+    if (
+        session is None
+    ) == (
+        retrieval_uow_factory is None
+    ):
+        raise ValueError("Exactly one of session or retrieval_uow_factory must be supplied")
+
+    if session is not None and not isinstance(session, Session):
+        raise TypeError("session must be a SQLAlchemy Session instance or None")
+
+    if retrieval_uow_factory is not None and not callable(retrieval_uow_factory):
+        raise TypeError("retrieval_uow_factory must be callable or None")
 
     if not isinstance(profile, RetrievalProfile):
         raise TypeError("profile must be a RetrievalProfile instance.")

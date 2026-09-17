@@ -82,6 +82,11 @@ from packages.application.dashboard.analytics_contract import InvalidAnalyticsTi
 from packages.application.conversations.process_customer_message import CustomerMessagePipelineFailedError, CustomerMessagePipelineTimeoutError
 from packages.application.conversations.process_customer_message import CustomerMessagePipelineUnavailableError, CustomerMessageValidationError
 from packages.application.dashboard.analytics_contract import DashboardAnalyticsQueryTimeoutError, UnsupportedAnalyticsBucketError
+from packages.application.conversations.start_conversation_errors import ConversationStarterDoesNotExistError, ConversationStarterNotActiveError
+from packages.application.conversations.start_conversation_errors import ConversationStarterRoleMismatchError, ConversationStartIdempotencyConflictError
+from packages.application.conversations.start_conversation_errors import ConversationStartLeaseLostError, ConversationStartPersistenceContractError
+from packages.application.conversations.start_conversation_errors import ConversationStartReplayUnavailableError, ConversationStartRequestExpiredError
+from packages.application.conversations.start_conversation_errors import StartConversationAccessDeniedError, StartConversationValidationError
 from apps.api.app.api.browser_auth import clear_refresh_cookie
 from packages.config.settings import Settings
 
@@ -133,6 +138,10 @@ ERROR_AI_PROVIDER_TIMEOUT = "AI_PROVIDER_TIMEOUT"
 ERROR_AI_SERVICE_UNAVAILABLE = "AI_SERVICE_UNAVAILABLE"
 ERROR_AI_PIPELINE_FAILED = "AI_PIPELINE_FAILED"
 ERROR_DASHBOARD_ANALYTICS_UNAVAILABLE = "DASHBOARD_ANALYTICS_UNAVAILABLE"
+ERROR_INVALID_CONVERSATION_START = "INVALID_CONVERSATION_START"
+ERROR_CONVERSATION_START_CONFLICT = "CONVERSATION_START_CONFLICT"
+ERROR_CONVERSATION_START_EXPIRED = "CONVERSATION_START_EXPIRED"
+ERROR_CONVERSATION_START_UNAVAILABLE = "CONVERSATION_START_UNAVAILABLE"
 
 # Registration
 def register_exception_handlers(app: FastAPI) -> None:
@@ -167,22 +176,29 @@ def register_exception_handlers(app: FastAPI) -> None:
         ConversationCreationAccessDeniedError, ConversationCreatorNotActiveError, ConversationCreatorRoleMismatchError,
         ConversationQueryAccessDeniedError, ConversationRequesterNotActiveError, ConversationRequesterRoleMismatchError,
         ConversationCloseAccessDeniedError, ConversationCloserNotActiveError, ConversationCloserRoleMismatchError,
+        StartConversationAccessDeniedError, ConversationStarterNotActiveError, ConversationStarterRoleMismatchError,
     ):
         app.add_exception_handler(exception_type, conversation_access_denied_handler)
         
     for exception_type in (
-        ConversationCreatorDoesNotExistError, ConversationRequesterDoesNotExistError, ConversationCloserDoesNotExistError,
+        ConversationCreatorDoesNotExistError, ConversationRequesterDoesNotExistError, ConversationCloserDoesNotExistError, ConversationStarterDoesNotExistError,
     ):
         app.add_exception_handler(exception_type, conversation_creator_not_found_handler)
         
     for exception_type in (
         ConversationCreationPersistenceContractError, ConversationQueryPersistenceContractError, ConversationClosePersistenceContractError,
+        ConversationStartPersistenceContractError, ConversationStartReplayUnavailableError,
     ):
         app.add_exception_handler(exception_type, conversation_internal_contract_handler)
     
     app.add_exception_handler(QueriedConversationDoesNotExistError, conversation_not_found_handler)
-    
     app.add_exception_handler(CustomerMessageValidationError, customer_message_validation_handler)
+    app.add_exception_handler(StartConversationValidationError, conversation_start_validation_handler)
+
+    for exception_type in (ConversationStartIdempotencyConflictError, ConversationStartRequestExpiredError,):
+        app.add_exception_handler(exception_type, conversation_start_conflict_handler)
+
+    app.add_exception_handler(ConversationStartLeaseLostError, conversation_start_unavailable_handler)
     
     for exception_type in (QueriedEscalationDoesNotExistError, UpdatedEscalationDoesNotExistError):
         app.add_exception_handler(exception_type, escalation_not_found_handler)
@@ -1431,3 +1447,68 @@ async def dashboard_analytics_timeout_handler(request: Request, exc: DashboardAn
     )
     response.headers["Retry-After"] = "5"
     return response
+
+async def conversation_start_validation_handler(request: Request, exc: StartConversationValidationError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "conversation_start_validation_failed",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        code=ERROR_INVALID_CONVERSATION_START,
+        message="The conversation start request is invalid.",
+        trace_id=trace_id,
+    )
+
+async def conversation_start_conflict_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    if isinstance(exc, ConversationStartRequestExpiredError):
+        code = ERROR_CONVERSATION_START_EXPIRED
+        message = "The idempotency replay period has expired. Submit the request with a new idempotency key."
+        
+    else:
+        code = ERROR_CONVERSATION_START_CONFLICT
+        message = "The idempotency key was already used for different conversation-start input."
+
+    logger.info(
+        "conversation_start_conflict",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_409_CONFLICT,
+        code=code,
+        message=message,
+        trace_id=trace_id,
+    )
+
+async def conversation_start_unavailable_handler(request: Request, exc: ConversationStartLeaseLostError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.warning(
+        "conversation_start_processing_lease_lost",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "start_request_id": str(exc.request_id),
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        code=ERROR_CONVERSATION_START_UNAVAILABLE,
+        message="The conversation was accepted, but processing could not be confirmed. Retry with the same idempotency key.",
+        trace_id=trace_id,
+        headers={"Retry-After": "2"},
+    )

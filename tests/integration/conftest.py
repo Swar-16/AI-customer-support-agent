@@ -26,6 +26,7 @@ from packages.database.models.audit.audit_event import AuditEventModel
 from packages.database.models.support.auth_session import AuthSessionModel
 from packages.database.models.support.user_credential import UserCredentialModel
 from packages.database.models.ai.embedding_call import EmbeddingCallModel
+from packages.database.models.support.conversation_start_request import ConversationStartRequestModel
 
 
 @pytest.fixture(scope="session")
@@ -67,6 +68,7 @@ def _clear_database(session_factory: sessionmaker) -> None:
         session.execute(delete(AIRunModel))
 
         session.execute(delete(MessageModel))
+        session.execute(delete(ConversationStartRequestModel))
         session.execute(delete(ConversationModel))
         session.execute(delete(AuthSessionModel))
         session.execute(delete(UserCredentialModel))

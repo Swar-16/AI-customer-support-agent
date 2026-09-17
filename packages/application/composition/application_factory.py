@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from sqlalchemy.orm import Session, sessionmaker
+from datetime import timedelta
 
 from packages.ai.orchestration.orchestrator import OrchestrationObserver
 from packages.ai.providers.base import LLMProvider
@@ -71,6 +72,8 @@ from packages.database.repositories.dashboard.sqlalchemy_analytics_repository im
 from packages.application.dashboard.analytics_cache import CachingDashboardAnalyticsRepository
 from packages.application.dashboard.analytics_repository import DashboardAnalyticsRepository
 from packages.application.conversations.conversation_context import ConversationContextBuilder, ConversationContextConfig
+from packages.application.conversations.accept_conversation_start import AcceptConversationStart
+from packages.application.conversations.start_conversation import StartConversation
 
 SessionFactory = sessionmaker[Session]
 ProviderFactory = Callable[..., LLMProvider]
@@ -91,6 +94,9 @@ class ApplicationServices:
 
     Those are created per request / per application transaction.
     """
+    accept_conversation_start: AcceptConversationStart
+    start_conversation: StartConversation
+    
     create_conversation: CreateConversation
     list_conversations: ListConversations
     get_conversation: GetConversation
@@ -331,6 +337,11 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         knowledge_upload_max_bytes=settings.knowledge_upload_max_bytes,
     )
     
+    accept_conversation_start = AcceptConversationStart(
+        uow_factory=uow_factory,
+        idempotency_ttl=timedelta(seconds=settings.conversation_start_idempotency_ttl_seconds),
+    )
+    
     process_customer_message = ProcessCustomerMessage(
         uow_factory=uow_factory,
         pipeline_factory=pipeline_factory,
@@ -341,8 +352,17 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         knowledge_application=knowledge_application,
         conversation_context_builder=conversation_context_builder,
     )
+    
+    start_conversation = StartConversation(
+        uow_factory=uow_factory,
+        accept_conversation_start=accept_conversation_start,
+        process_customer_message=process_customer_message,
+        processing_lease_duration=timedelta(seconds=settings.conversation_start_processing_lease_seconds),
+    )
 
     return ApplicationServices(
+        accept_conversation_start=accept_conversation_start,
+        start_conversation=start_conversation,
         create_conversation=create_conversation,
         list_conversations=list_conversations,
         get_conversation=get_conversation,

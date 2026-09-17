@@ -1,7 +1,9 @@
 # AI-customer-support-agent\apps\api\app\api\v1\conversations.py
 from __future__ import annotations
 import uuid
-from fastapi import APIRouter, Path, status, Query
+from fastapi import APIRouter, Header, Path, Query, Response, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from typing import NoReturn
 
 from packages.application.conversations.process_customer_message import CustomerMessagePipelineFailedError, CustomerMessagePipelineTimeoutError
@@ -12,11 +14,14 @@ from apps.api.app.api.schemas.errors import APIErrorResponse
 from apps.api.app.api.v1.schemas.conversations import ConversationChannel, ConversationListResponse, ConversationResponse, ConversationStatus
 from apps.api.app.api.v1.schemas.conversations import CreateConversationRequest, CreateConversationResponse, SendMessageRequest, SendMessageResponse
 from apps.api.app.api.v1.schemas.conversations import ConversationMessageListResponse, ConversationMessageResponse, CloseConversationResponse
+from apps.api.app.api.v1.schemas.conversations import StartConversationProcessingResponse, StartConversationRequest, StartConversationResponse
 from packages.application.conversations.process_customer_message import ProcessCustomerMessageCommand
 from packages.application.conversations.create_conversation import CreateConversationCommand, CreateConversationResult
 from packages.application.conversations.query_conversations import ConversationPage, ConversationView, GetConversationQuery, ListConversationsQuery
 from packages.application.conversations.get_conversation_messages import GetConversationMessagesQuery
 from packages.application.conversations.close_conversation import CloseConversationCommand
+from packages.application.conversations.start_conversation import StartConversationCommand, StartConversationResult
+from packages.application.conversations.start_conversation_errors import ConversationStartProcessingInProgressError
 
 router = APIRouter(tags=["conversations"])
 
@@ -80,6 +85,90 @@ def create_conversation(payload: CreateConversationRequest, services: Applicatio
     )
 
     return _create_conversation_response(result)
+
+@router.post(
+    "/conversations/start",
+    response_model=StartConversationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Start a conversation with its first message",
+    description="Atomically create a customer conversation and its first message using a customer-scoped idempotency key, then run the AI support pipeline.",
+    responses={
+        200: {
+            "model": StartConversationResponse,
+            "description": "Existing terminal result replayed",
+        },
+        202: {
+            "model": StartConversationProcessingResponse,
+            "description": "An identical request is still processing",
+        },
+        400: {
+            "model": APIErrorResponse,
+            "description": "Invalid first message or idempotency key",
+        },
+        401: {
+            "model": APIErrorResponse,
+            "description": "Authentication required",
+        },
+        403: {
+            "model": APIErrorResponse,
+            "description": "Customer access required",
+        },
+        409: {
+            "model": APIErrorResponse,
+            "description": "Idempotency key reused with conflicting input or its replay period expired",
+        },
+        422: {
+            "model": APIErrorResponse,
+            "description": "Request validation failed",
+        },
+        500: {
+            "model": APIErrorResponse,
+            "description": "Unexpected internal failure",
+        },
+        503: {
+            "model": APIErrorResponse,
+            "description": "The conversation was accepted but processing ownership could not be confirmed",
+        },
+    },
+)
+def start_conversation(payload: StartConversationRequest, response: Response, services: ApplicationServicesDependency, 
+                       trace_id: TraceIdDependency, principal: CustomerPrincipalDependency,
+    idempotency_key: str = Header(
+        ...,
+        alias="Idempotency-Key",
+        min_length=16,
+        max_length=255,
+        description="High-entropy client-generated key scoped to the authenticated customer.",
+    ),
+) -> StartConversationResponse | JSONResponse:
+    try:
+        result = services.start_conversation.execute(
+            StartConversationCommand(
+                principal=principal,
+                idempotency_key=idempotency_key,
+                customer_message=payload.message,
+                trace_id=trace_id,
+                channel=payload.channel,
+                title=payload.title,
+            )
+        )
+    except (ConversationStartProcessingInProgressError) as exc:
+        processing_response = StartConversationProcessingResponse(
+            start_request_id=exc.request_id,
+            conversation_id=exc.conversation_id,
+            retry_after_seconds=exc.retry_after_seconds,
+        )
+
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content=jsonable_encoder(processing_response),
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        )
+
+    # A newly persisted conversation returns 201. An identical request that resumes or replays existing state returns 200.
+    response.status_code = status.HTTP_201_CREATED if result.created else status.HTTP_200_OK
+
+    return _start_conversation_response(result)
 
 @router.get(
     "/conversations",
@@ -309,6 +398,29 @@ def close_conversation(services: ApplicationServicesDependency, principal: Curre
         closed_at=result.closed_at,
         updated_at=result.updated_at,
         changed=result.changed,
+    )
+
+def _start_conversation_response(result: StartConversationResult) -> StartConversationResponse:
+    message_result = result.message_result
+
+    return StartConversationResponse(
+        start_request_id=result.request_id,
+        idempotency_status=result.status,
+        created=result.created,
+        replayed=result.replayed,
+        conversation_id=message_result.conversation_id,
+        customer_message_id=message_result.customer_message_id,
+        ai_run_id=message_result.ai_run_id,
+        trace_id=message_result.trace_id,
+        pipeline_stage=message_result.pipeline_stage.value,
+        intent=message_result.intent,
+        decision=message_result.decision,
+        assistant_message_id=message_result.assistant_message_id,
+        escalation_id=message_result.escalation_id,
+        response=message_result.response,
+        succeeded=message_result.succeeded,
+        failure_code=message_result.failure_code,
+        failure_retryable=message_result.failure_retryable,
     )
 
 def _create_conversation_response(result: CreateConversationResult) -> CreateConversationResponse:
