@@ -158,6 +158,7 @@ class TelemetryRecorder:
             confidence=Decimal(str(result.confidence)),
             entities=result.entities.model_dump(mode="json"),
             needs_clarification=result.needs_clarification,
+            escalation_signals=[signal.value for signal in result.escalation_signals],
             reasoning_summary=result.reason_summary,
             created_at=created_at,
         )

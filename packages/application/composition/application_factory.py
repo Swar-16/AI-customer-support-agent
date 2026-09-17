@@ -70,6 +70,7 @@ from packages.application.dashboard.get_knowledge_health import GetKnowledgeHeal
 from packages.database.repositories.dashboard.sqlalchemy_analytics_repository import SQLAlchemyDashboardAnalyticsRepository
 from packages.application.dashboard.analytics_cache import CachingDashboardAnalyticsRepository
 from packages.application.dashboard.analytics_repository import DashboardAnalyticsRepository
+from packages.application.conversations.conversation_context import ConversationContextBuilder, ConversationContextConfig
 
 SessionFactory = sessionmaker[Session]
 ProviderFactory = Callable[..., LLMProvider]
@@ -209,6 +210,13 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         max_tokens=settings.rag_context_max_tokens,
         max_blocks=settings.rag_context_max_blocks,
     )
+    conversation_context_builder = ConversationContextBuilder(
+        config=ConversationContextConfig(
+            max_messages=settings.conversation_context_max_messages,
+            max_characters=settings.conversation_context_max_characters,
+            max_characters_per_message=settings.conversation_context_max_characters_per_message,
+        )
+    )
 
     def uow_factory() -> SqlAlchemyUnitOfWork:
         """
@@ -331,6 +339,7 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         retrieval_profile=retrieval_profile,
         grounding_context_budget=grounding_budget,
         knowledge_application=knowledge_application,
+        conversation_context_builder=conversation_context_builder,
     )
 
     return ApplicationServices(

@@ -10,6 +10,7 @@ from uuid6 import uuid7
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 
 from packages.application.auth.password_hasher import Argon2PasswordHasher
 from packages.application.auth.token_service import TokenService, TokenServiceConfig
@@ -22,6 +23,7 @@ from packages.ai.providers.mock import MockLLMProvider
 from packages.application.composition.application_factory import ApplicationServices, create_application
 from packages.database.models.support.conversation import ConversationModel
 from packages.database.models.support.user import UserModel
+from packages.ai.generation.models import GroundedGenerationResult
 
 # Deterministic LLM
 def _structured_llm_resolver(system_prompt: str, user_prompt: str, response_model: type[BaseModel]) -> dict[str, Any] | BaseModel:
@@ -43,11 +45,51 @@ def _structured_llm_resolver(system_prompt: str, user_prompt: str, response_mode
     """
 
     if response_model is IntentResult:
+        normalized_prompt = user_prompt.casefold()
+
+        if "what is your return policy?" in normalized_prompt:
+            return {
+                "intent": "return_exchange",
+                "confidence": 0.99,
+                "entities": {
+                    "order_id": None,
+                    "transaction_id": None,
+                    "subscription_id": None,
+                    "account_id": None,
+                    "issue_type": "return_policy",
+                    "attributes": {},
+                },
+                "needs_clarification": False,
+                "escalation_signals": [],
+                "reason_summary": (
+                    "The customer requested the return policy."
+                ),
+            }
+
+        if "hello support assistant" in normalized_prompt:
+            return {
+                "intent": "conversational",
+                "confidence": 0.99,
+                "entities": {
+                    "order_id": None,
+                    "transaction_id": None,
+                    "subscription_id": None,
+                    "account_id": None,
+                    "issue_type": None,
+                    "attributes": {},
+                },
+                "needs_clarification": False,
+                "escalation_signals": [],
+                "reason_summary": (
+                    "The customer is greeting the support assistant."
+                ),
+            }
+
         return {
-            "intent": "return_exchange",
+            "intent": "order_status",
             "confidence": 0.99,
             "entities": {
-                "order_id": None,
+                "order_id": "ORD-12345",
                 "transaction_id": None,
                 "subscription_id": None,
                 "account_id": None,
@@ -55,7 +97,59 @@ def _structured_llm_resolver(system_prompt: str, user_prompt: str, response_mode
                 "attributes": {},
             },
             "needs_clarification": False,
-            "reason_summary": "Customer is asking about the return policy.",
+            "escalation_signals": [],
+            "reason_summary": (
+                "The customer requested the status of a specific order."
+            ),
+        }
+    
+    if response_model is GroundedGenerationResult:
+        try:
+            serialized_payload = user_prompt.rsplit(
+                "\n\n",
+                maxsplit=1,
+            )[1]
+            payload = json.loads(serialized_payload)
+        except (IndexError, TypeError, json.JSONDecodeError) as exc:
+            raise AssertionError(
+                "Grounded-generation prompt did not contain "
+                "the expected JSON payload."
+            ) from exc
+
+        evidence = payload.get("evidence")
+
+        if not isinstance(evidence, list) or not evidence:
+            return {
+                "answer": (
+                    "I do not have enough verified knowledge "
+                    "to answer that reliably."
+                ),
+                "grounding_status": "insufficient_evidence",
+                "citations": [],
+            }
+
+        source = evidence[0]
+        source_id = source.get("source_id")
+
+        if not isinstance(source_id, str) or not source_id:
+            raise AssertionError(
+                "Retrieved evidence must contain a citable source_id."
+            )
+
+        return {
+            "answer": (
+                "Eligible items may be returned within 30 calendar "
+                "days of delivery, provided they are unused and in "
+                "their original condition."
+            ),
+            "grounding_status": "grounded",
+            "citations": [
+                {
+                    "source_id": source_id,
+                    "title": source.get("title"),
+                    "section": source.get("section"),
+                }
+            ],
         }
 
     raise AssertionError(f"Unexpected structured response model: {response_model.__name__}")

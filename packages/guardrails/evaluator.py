@@ -3,7 +3,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from packages.guardrails.models import GuardrailContext, GuardrailOutcome, GuardrailReasonCode, GuardrailResult
-from packages.guardrails.policies import DecisionCompatibilityPolicy, GuardrailPolicy, ResponsePresencePolicy, SensitiveActionClaimPolicy, UnsupportedOperationalClaimPolicy
+from packages.guardrails.policies import DecisionCompatibilityPolicy, GuardrailPolicy, PromptManipulationPolicy, ResponsePresencePolicy
+from packages.guardrails.policies import SensitiveActionClaimPolicy, UnsupportedOperationalClaimPolicy
 
 
 class GuardrailEvaluator:
@@ -44,8 +45,14 @@ class GuardrailEvaluator:
         Structural checks run first because there is little value in applying semantic response checks to an invalid pipeline state.
         """
         return (
+            # Structural response invariants run first.
             ResponsePresencePolicy(),
             DecisionCompatibilityPolicy(),
+
+            # Explicit attempts to override trusted instructions or extract hidden prompt content receive a controlled refusal.
+            PromptManipulationPolicy(),
+
+            # Generated-response safety checks run after structural/input checks.
             SensitiveActionClaimPolicy(),
             UnsupportedOperationalClaimPolicy(),
         )

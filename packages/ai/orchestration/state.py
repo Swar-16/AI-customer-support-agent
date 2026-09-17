@@ -91,6 +91,16 @@ class EscalationSource(StrEnum):
     GUARDRAIL = "guardrail"
     SYSTEM = "system"
 
+class GuardrailDisposition(StrEnum):
+    """
+    Sanitized orchestration-level result of guardrail evaluation.
+
+    This mirrors the stable disposition vocabulary without making the orchestration state depend on the guardrail package.
+    """
+    PASS = "pass"
+    REFUSE = "refuse"
+    ESCALATE = "escalate"
+
 class RetrievedEvidence(BaseModel):
     """
     Provider-neutral evidence made available to downstream AI stages.
@@ -175,6 +185,11 @@ class AIState(BaseModel):
     decision_result: DecisionResult | None = None
     retrieved_evidence: tuple[RetrievedEvidence, ...] = Field(default_factory=tuple)
     generated_response: str | None = None
+    
+    # Sanitized guardrail disposition
+    guardrail_disposition: GuardrailDisposition | None = None
+    guardrail_reason_code: str | None = Field(default=None, max_length=100)
+    guardrail_policy_id: str | None = Field(default=None, max_length=100)
 
     # Future/persisted orchestration outputs
     proposed_action_id: uuid.UUID | None = None
@@ -231,8 +246,26 @@ class AIState(BaseModel):
         if value is None:
             return None
 
-        normalized = value.strip().upper()
+        normalized = value.strip().lower()
 
+        return normalized or None
+    
+    @field_validator("guardrail_reason_code")
+    @classmethod
+    def normalize_guardrail_reason_code(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+
+        normalized = value.strip().lower()
+        return normalized or None
+
+    @field_validator("guardrail_policy_id")
+    @classmethod
+    def normalize_guardrail_policy_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+
+        normalized = value.strip().lower()
         return normalized or None
 
     @model_validator(mode="after")
@@ -277,12 +310,34 @@ class AIState(BaseModel):
             if self.generated_response is None:
                 raise ValueError(f"{self.stage.value} requires generated_response")
             
+        if self.guardrail_disposition is None:
+            if self.guardrail_reason_code is not None:
+                raise ValueError("guardrail_reason_code requires guardrail_disposition")
+
+            if self.guardrail_policy_id is not None:
+                raise ValueError("guardrail_policy_id requires guardrail_disposition")
+
+        else:
+            if self.guardrail_reason_code is None:
+                raise ValueError("guardrail_disposition requires guardrail_reason_code")
+
+        if self.stage is PipelineStage.GUARDRAILS_COMPLETED:
+            if self.guardrail_disposition not in {GuardrailDisposition.PASS, GuardrailDisposition.REFUSE,}:
+                raise ValueError("GUARDRAILS_COMPLETED requires PASS or REFUSE guardrail disposition")
+            
         if self.stage is PipelineStage.ESCALATED:
             if self.escalation_source is None:
                 raise ValueError("ESCALATED requires escalation_source")
 
             if self.escalation_reason_code is None:
                 raise ValueError("ESCALATED requires escalation_reason_code")
+            
+            if self.escalation_source is EscalationSource.GUARDRAIL:
+                if self.guardrail_disposition is not GuardrailDisposition.ESCALATE:
+                    raise ValueError("Guardrail escalation requires ESCALATE guardrail disposition")
+
+                if self.guardrail_reason_code is None:
+                    raise ValueError("Guardrail escalation requires guardrail_reason_code")
 
         if self.stage is PipelineStage.COMPLETED:
             if self.completed_at is None:
@@ -359,21 +414,15 @@ class AIState(BaseModel):
 
         return self.model_copy(update={"generated_response": normalized, "stage": PipelineStage.RESPONSE_GENERATED,})
     
-    def with_guardrails_completed(self) -> AIState:
+    def with_guardrails_completed(self, *, disposition: GuardrailDisposition, reason_code: str, policy_id: str | None = None) -> AIState:
         """
-        Return a copy representing successful completion of response guardrails.
+        Complete guardrail evaluation with a sanitized disposition.
 
-        This transition means:
+        PASS authorizes the existing generated response.
 
-            - response generation completed successfully;
-            - the generated response exists;
-            - deterministic guardrail evaluation completed;
-            - no guardrail disposition redirected the workflow to refusal, escalation, or failure.
+        REFUSE means the generated_response has already been replaced with an application-controlled refusal before this transition.
 
-        The actual GuardrailResult is deliberately not stored directly in AIState. The orchestration state remains independent of
-        the concrete guardrail subsystem and avoids a circular dependency between packages.ai.orchestration and packages.guardrail.
-
-        Guardrail audit information can be persisted independently by the application/telemetry layer.
+        ESCALATE is not accepted here because escalation has its own terminal transition.
         """
         if self.stage is not PipelineStage.RESPONSE_GENERATED:
             raise ValueError("Guardrails can only complete after response generation")
@@ -381,7 +430,44 @@ class AIState(BaseModel):
         if self.generated_response is None:
             raise ValueError("Cannot complete guardrails without a generated response")
 
-        return self.model_copy(update={"stage": PipelineStage.GUARDRAILS_COMPLETED,})
+        if not isinstance(disposition, GuardrailDisposition):
+            raise TypeError("disposition must be a GuardrailDisposition")
+
+        if disposition not in {GuardrailDisposition.PASS, GuardrailDisposition.REFUSE,}:
+            raise ValueError("Completed guardrails require PASS or REFUSE disposition")
+
+        normalized_reason_code = self._normalize_guardrail_value(field_name="reason_code", value=reason_code)
+        normalized_policy_id = self._normalize_guardrail_value(field_name="policy_id", value=policy_id) if policy_id is not None else None
+
+        return self.model_copy(
+            update={
+                "stage": PipelineStage.GUARDRAILS_COMPLETED,
+                "guardrail_disposition": disposition,
+                "guardrail_reason_code": normalized_reason_code,
+                "guardrail_policy_id": normalized_policy_id,
+            }
+        )
+    
+    def with_guardrail_escalation(self, *, escalation_reason_code: str, guardrail_reason_code: str, policy_id: str | None = None) -> AIState:
+        """
+        Transition a rejected generated candidate to human review while retaining only sanitized guardrail identifiers.
+
+        The generated candidate remains internal and is not authorized for customer persistence.
+        """
+        if self.stage is not PipelineStage.RESPONSE_GENERATED:
+            raise ValueError("Guardrail escalation requires RESPONSE_GENERATED stage")
+
+        normalized_guardrail_reason = self._normalize_guardrail_value(field_name="guardrail_reason_code", value=guardrail_reason_code)
+        normalized_policy_id = self._normalize_guardrail_value(field_name="policy_id", value=policy_id) if policy_id is not None else None
+        escalated = self.model_copy(
+            update={
+                "guardrail_disposition": GuardrailDisposition.ESCALATE,
+                "guardrail_reason_code": normalized_guardrail_reason,
+                "guardrail_policy_id": normalized_policy_id,
+            }
+        )
+
+        return escalated.with_escalation(source=EscalationSource.GUARDRAIL, reason_code=escalation_reason_code)
     
     def with_escalation(self, *, source: EscalationSource, reason_code: str) -> AIState:
         """
@@ -406,7 +492,7 @@ class AIState(BaseModel):
         if not isinstance(reason_code, str):
             raise TypeError("reason_code must be a string")
 
-        normalized_reason_code = reason_code.strip().upper()
+        normalized_reason_code = reason_code.strip().lower()
 
         if not normalized_reason_code:
             raise ValueError("reason_code cannot be empty")
@@ -447,3 +533,15 @@ class AIState(BaseModel):
                 "completed_at": datetime.now(timezone.utc),
             }
         )
+    
+    @staticmethod
+    def _normalize_guardrail_value(*, field_name: str, value: str) -> str:
+        if not isinstance(value, str):
+            raise TypeError(f"{field_name} must be a string")
+
+        normalized = value.strip().lower()
+
+        if not normalized:
+            raise ValueError(f"{field_name} cannot be blank")
+
+        return normalized

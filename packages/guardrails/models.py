@@ -37,6 +37,7 @@ class GuardrailReasonCode(StrEnum):
     UNSUPPORTED_OPERATIONAL_CLAIM = "unsupported_operational_claim"
     INVALID_CITATION_REFERENCE = "invalid_citation_reference"
     SENSITIVE_ACTION_CLAIM = "sensitive_action_claim"
+    PROMPT_MANIPULATION_ATTEMPT = "prompt_manipulation_attempt"
     SAFETY_RESTRICTION = "safety_restriction"
 
 class GuardrailContext(BaseModel):

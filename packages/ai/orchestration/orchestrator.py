@@ -7,11 +7,12 @@ from dataclasses import dataclass
 from typing import Final, Protocol, runtime_checkable
 
 from packages.ai.decision.engine import DecisionEngine
-from packages.ai.decision.schemas import DecisionType
+from packages.ai.decision.schemas import DecisionReasonCode, DecisionType
 from packages.ai.generation.generator import GroundedGenerationError, GroundedGenerationProviderError, GroundedGenerationTimeoutError, InvalidGroundedGenerationResponseError
+from packages.ai.generation.models import GroundingStatus
 from packages.ai.intent.classifier import IntentClassificationError, IntentClassificationProviderError, IntentClassificationTimeoutError
 from packages.ai.intent.classifier import InvalidIntentInputError, InvalidIntentResponseError, IntentClassifier
-from packages.ai.orchestration.state import AIState, EscalationSource, PipelineError, PipelineStage
+from packages.ai.orchestration.state import AIState, EscalationSource,  GuardrailDisposition, PipelineError, PipelineStage
 from packages.application.ai.answer_service import AnswerService, AnswerServiceError, AnswerServiceRequest, InvalidRetrievalDecisionError
 from packages.application.ai.answer_service import UnsupportedAnswerDecisionError, UnsupportedRetrievalKindError
 from packages.guardrails.evaluator import GuardrailEvaluator
@@ -27,6 +28,11 @@ _CLARIFICATION_RESPONSES: Final[dict[str, str]] = {
     "order_id_or_transaction_id": "Could you provide the order ID or transaction ID so I can help with this request?",
     "subscription_id": "Could you provide the subscription ID so I can help with this request?",
 }
+
+_DEFAULT_GUARDRAIL_REFUSAL_RESPONSE: Final[str] = (
+    "I’m unable to help with that request. I can assist with supported customer-service questions about refunds, payments, cancellations, "
+    "subscriptions, shipping, returns, exchanges, and accounts."
+)
 
 
 # Observer contract
@@ -414,6 +420,33 @@ class AIOrchestrator:
 
         return _CLARIFICATION_RESPONSES.get(required_information[0], _DEFAULT_CLARIFICATION_RESPONSE)
     
+    def _escalate_from_knowledge_gap(self, state: AIState) -> AIState:
+        """
+        Escalate when published knowledge cannot support a reliable answer.
+
+        The generated insufficient-evidence message remains an internal candidate.
+        It must not be persisted or returned as an approved assistant response.
+
+        This is a normal human-review disposition, not an infrastructure failure.
+        """
+        if state.stage is not PipelineStage.RESPONSE_GENERATED:
+            raise RuntimeError("Knowledge-gap escalation requires a generated result")
+
+        if state.intent_result is None:
+            raise RuntimeError("Knowledge-gap escalation reached without intent_result")
+
+        if state.decision_result is None:
+            raise RuntimeError("Knowledge-gap escalation reached without decision_result")
+
+        if state.decision_result.decision is not DecisionType.RETRIEVE_INFORMATION:
+            raise RuntimeError("Knowledge-gap escalation requires a RETRIEVE_INFORMATION decision")
+
+        self._observer.stage_started(state=state, stage=PipelineStage.ESCALATED)
+        escalated_state = state.with_escalation(source=EscalationSource.SYSTEM, reason_code=DecisionReasonCode.KNOWLEDGE_UNAVAILABLE.value)
+        self._observer.stage_completed(state=escalated_state, stage=PipelineStage.ESCALATED)
+
+        return escalated_state
+    
     def _escalate_from_decision(self, state: AIState) -> AIState:
         """
         Transition a deterministic DecisionEngine escalation into human review.
@@ -429,17 +462,43 @@ class AIOrchestrator:
 
         return next_state
     
-    def _escalate_from_guardrail(self, *, state: AIState, reason_code: str) -> AIState:
+    def _escalate_from_guardrail(self, *, state: AIState, reason_code: str, policy_id: str | None) -> AIState:
         """
-        Transition a guardrail rejection requiring human review into ESCALATED.
+        Transition a guardrail rejection into human review.
 
-        The generated response remains internal diagnostic state. Reaching ESCALATED does not authorize that candidate for customer persistence.
+        The rejected generated candidate remains internal and is never authorized for customer-message persistence.
+
+        Only sanitized guardrail identifiers are retained in orchestration state.
         """
-        self._observer.stage_started(state=state, stage=PipelineStage.ESCALATED)
-        next_state = state.with_escalation(source=EscalationSource.GUARDRAIL, reason_code=reason_code)
-        self._observer.stage_completed(state=next_state, stage=PipelineStage.ESCALATED)
+        if state.stage is not PipelineStage.RESPONSE_GENERATED:
+            raise RuntimeError("Guardrail escalation requires a generated candidate")
 
-        return next_state
+        if not isinstance(reason_code, str):
+            raise TypeError("reason_code must be a string")
+
+        if not reason_code.strip():
+            raise ValueError("reason_code cannot be blank")
+
+        if policy_id is not None:
+            if not isinstance(policy_id, str):
+                raise TypeError("policy_id must be a string or None")
+
+            if not policy_id.strip():
+                raise ValueError("policy_id cannot be blank when provided")
+
+        # Guardrail evaluation itself completed successfully. Its result redirected the workflow rather than producing a pipeline failure.
+        escalated_state = state.with_guardrail_escalation(
+            escalation_reason_code=reason_code,
+            guardrail_reason_code=reason_code,
+            policy_id=policy_id,
+        )
+        # The guardrail stage completed normally with an ESCALATE disposition.
+        # Use the annotated immutable state so structured telemetry receives the disposition and reason.
+        self._observer.stage_completed(state=escalated_state, stage=PipelineStage.GUARDRAILS_COMPLETED)
+        self._observer.stage_started(state=escalated_state, stage=PipelineStage.ESCALATED)
+        self._observer.stage_completed(state=escalated_state, stage=PipelineStage.ESCALATED)
+
+        return escalated_state
 
     # Retrieval + grounded generation
     def _retrieve_and_generate(self, state: AIState) -> AIState:
@@ -480,6 +539,29 @@ class AIOrchestrator:
             retrieved_state = state.with_retrieved_evidence(result.evidence)
             self._observer.stage_completed(state=retrieved_state, stage=PipelineStage.RETRIEVAL_COMPLETED)
             generated_state = self._complete_generation(state=retrieved_state, answer=result.generation.answer)
+            grounding_status = result.generation.grounding_status
+            if grounding_status is GroundingStatus.INSUFFICIENT_EVIDENCE:
+                return self._escalate_from_knowledge_gap(generated_state)
+
+            if grounding_status is GroundingStatus.NOT_REQUIRED:
+                return self._fail(
+                    state=generated_state,
+                    stage=PipelineStage.RESPONSE_GENERATED,
+                    code="GROUNDING_STATUS_INVALID",
+                    message="A knowledge-retrieval workflow returned an incompatible grounding status.",
+                    retryable=False,
+                    metadata={"grounding_status": grounding_status.value,},
+                )
+
+            if grounding_status is not GroundingStatus.GROUNDED:
+                return self._fail(
+                    state=generated_state,
+                    stage=PipelineStage.RESPONSE_GENERATED,
+                    code="GROUNDING_STATUS_UNSUPPORTED",
+                    message="The generation workflow returned an unsupported grounding status.",
+                    retryable=False,
+                    metadata={"grounding_status": str(grounding_status),},
+                )
 
             return self._evaluate_guardrails(generated_state)
 
@@ -572,8 +654,13 @@ class AIOrchestrator:
 
         Guardrail policy violations are normal workflow outcomes rather than evaluator exceptions.
 
-        Until dedicated refusal and escalation workflows are implemented, rejected responses are converted into controlled FAILED
-        states. This prevents an unsafe generated candidate from being treated as a successful customer response.
+        Guardrail dispositions are handled as follows:
+
+        - PASS authorizes the generated response.
+        - ESCALATE preserves the candidate internally and requests human review.
+        - REFUSE discards the candidate and substitutes an application-controlled
+        customer refusal.
+        - Unknown outcomes fail closed.
         """
         if state.stage is not PipelineStage.RESPONSE_GENERATED:
             raise RuntimeError("Guardrail evaluation reached before response generation")
@@ -599,28 +686,75 @@ class AIOrchestrator:
 
         result = self._guardrail_evaluator.evaluate(context)
         if result.outcome is GuardrailOutcome.PASS:
-            next_state = state.with_guardrails_completed()
+            next_state = state.with_guardrails_completed(
+                disposition=GuardrailDisposition.PASS,
+                reason_code=result.reason_code.value,
+                policy_id=result.policy_id,
+            )
             self._observer.stage_completed(state=next_state, stage=PipelineStage.GUARDRAILS_COMPLETED)
 
             return next_state
         
         if result.outcome is GuardrailOutcome.ESCALATE:
-            return self._escalate_from_guardrail(state=state, reason_code=result.reason_code.value)
+            return self._escalate_from_guardrail(state=state, reason_code=result.reason_code.value, policy_id=result.policy_id)
 
-        # REFUSE does not yet have its own customer-response workflow.
-        # Keep it fail-closed rather than exposing the rejected candidate.
+        if result.outcome is GuardrailOutcome.REFUSE:
+            return self._complete_safe_refusal(
+                state=state,
+                reason_code=result.reason_code.value,
+                policy_id=result.policy_id,
+            )
+
         return self._fail(
             state=state,
             stage=PipelineStage.GUARDRAILS_COMPLETED,
-            code="GUARDRAIL_REFUSED_RESPONSE",
-            message="The generated response was refused by customer-response guardrails.",
+            code="GUARDRAIL_OUTCOME_UNSUPPORTED",
+            message="The guardrail evaluator returned an unsupported disposition.",
             retryable=False,
-            metadata={
-                "guardrail_outcome": result.outcome.value,
-                "guardrail_reason_code": result.reason_code.value,
-                "guardrail_policy_id": result.policy_id,
-            },
+            metadata={"guardrail_outcome": str(result.outcome),},
         )
+    
+    def _complete_safe_refusal(self, *, state: AIState, reason_code: str, policy_id: str | None) -> AIState:
+        """
+        Replace a rejected generated candidate with an application-controlled refusal response.
+
+        The original candidate must never be returned or persisted. The refusal text is owned by the application and contains
+        no customer-controlled, provider-controlled, or policy-diagnostic content.
+        """
+        if state.stage is not PipelineStage.RESPONSE_GENERATED:
+            raise RuntimeError("Safe refusal requires a generated candidate")
+
+        if not isinstance(reason_code, str):
+            raise TypeError("reason_code must be a string")
+
+        if not reason_code.strip():
+            raise ValueError("reason_code cannot be blank")
+
+        if policy_id is not None:
+            if not isinstance(policy_id, str):
+                raise TypeError("policy_id must be a string or None")
+
+            if not policy_id.strip():
+                raise ValueError("policy_id cannot be blank when provided")
+
+        # with_generated_response() returns a new immutable state. It replaces
+        # the rejected candidate instead of mutating or exposing it.
+        refusal_state = state.with_generated_response(
+            _DEFAULT_GUARDRAIL_REFUSAL_RESPONSE
+        )
+
+        completed_state = refusal_state.with_guardrails_completed(
+            disposition=GuardrailDisposition.REFUSE,
+            reason_code=reason_code,
+            policy_id=policy_id,
+        )
+
+        self._observer.stage_completed(
+            state=completed_state,
+            stage=PipelineStage.GUARDRAILS_COMPLETED,
+        )
+
+        return completed_state
 
     # Failure handling
     def _fail(self, *, state: AIState, stage: PipelineStage, code: str, message: str, retryable: bool, metadata: dict[str, object] | None = None) -> AIState:

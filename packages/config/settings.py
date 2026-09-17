@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     rag_context_max_tokens: int = 6000
     rag_context_max_blocks: int = 8
     
+    ## Conversation context
+    conversation_context_max_messages: int = 12
+    conversation_context_max_characters: int = 8_000
+    conversation_context_max_characters_per_message: int = 2_000
+    
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
         case_sensitive=False,
@@ -154,6 +159,24 @@ class Settings(BaseSettings):
 
         if self.rag_context_max_blocks <= 0:
             raise ValueError("rag_context_max_blocks must be greater than zero.")
+        
+        if self.conversation_context_max_messages <= 0:
+            raise ValueError("conversation_context_max_messages must be greater than zero.")
+
+        if self.conversation_context_max_characters <= 0:
+            raise ValueError("conversation_context_max_characters must be greater than zero.")
+
+        if self.conversation_context_max_characters_per_message <= 0:
+            raise ValueError("conversation_context_max_characters_per_message must be greater than zero.")
+
+        if self.conversation_context_max_characters_per_message > self.conversation_context_max_characters:
+            raise ValueError("conversation_context_max_characters_per_message cannot exceed conversation_context_max_characters.")
+
+        if self.conversation_context_max_messages > 100:
+            raise ValueError("conversation_context_max_messages cannot exceed 100.")
+
+        if self.conversation_context_max_characters > 30_000:
+            raise ValueError("conversation_context_max_characters cannot exceed 30000.")
         
         return self
     

@@ -45,6 +45,7 @@ from packages.application.conversations.query_conversations import ConversationQ
 from packages.application.conversations.query_conversations import ConversationRequesterNotActiveError, ConversationRequesterRoleMismatchError
 from packages.database.repositories.support.user_repository import UserRepository
 from packages.application.composition.knowledge_application_factory import KnowledgeApplicationComponents
+from packages.application.conversations.conversation_context import ConversationContextBuilder
 
 
 # Internal repository bundle
@@ -66,6 +67,23 @@ class _Repositories:
 
 MAX_CUSTOMER_MESSAGE_LENGTH: Final[int] = 20_000
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
+
+_ESCALATION_REASON_SUMMARIES: Final[dict[str, str]] = {
+    "SECURITY_SENSITIVE_REQUEST": "The customer reported a privacy or security-sensitive issue that requires human review.",
+    "OPERATIONAL_LOOKUP_UNAVAILABLE": "The request requires access to operational business data that is not available to the automated support workflow.",
+    "KNOWLEDGE_UNAVAILABLE": "The published support knowledge did not contain enough verified information to answer the request reliably.",
+    "HUMAN_APPROVAL_REQUIRED": "The requested operation requires approval from an authorized human support agent.",
+    "CUSTOMER_REQUESTED_HUMAN": "The customer explicitly requested assistance from a human support agent.",
+    "SEVERE_CUSTOMER_DISSATISFACTION": "The conversation requires human review because severe customer dissatisfaction was detected.",
+    "POLICY_CONFLICT": "The available support policies produced a conflict that requires human interpretation.",
+    "SENSITIVE_ACTION_CLAIM": "The proposed response contained an unsupported claim about a sensitive business action.",
+    "SAFETY_RESTRICTION": "The automated workflow encountered a safety restriction that requires human review.",
+    "UNSUPPORTED_OPERATIONAL_CLAIM": "The proposed response relied on an unsupported operational claim that requires human verification.",
+    "MISSING_GENERATED_RESPONSE": "The automated workflow could not produce a safe customer response.",
+    "DECISION_RESPONSE_MISMATCH": "The proposed response did not match the approved support workflow.",
+}
+
+_DEFAULT_ESCALATION_REASON_SUMMARY: Final[str] = "The automated support workflow requested human review."
 
 # Application exceptions
 class ProcessCustomerMessageError(RuntimeError):
@@ -226,8 +244,8 @@ class ProcessCustomerMessage:
     TERMINAL_STAGES: Final[frozenset[PipelineStage]] = frozenset({*SUCCESSFUL_TERMINAL_STAGES, PipelineStage.FAILED,})
 
     def __init__(self, *, uow_factory: UnitOfWorkFactory, pipeline_factory: AIPipelineFactory, embedding_provider: EmbeddingProvider,
-                 embedding_input_descriptor: EmbeddingInputDescriptor, retrieval_profile: RetrievalProfile,
-                 grounding_context_budget: GroundingContextBudget, knowledge_application: KnowledgeApplicationComponents
+                 embedding_input_descriptor: EmbeddingInputDescriptor, retrieval_profile: RetrievalProfile, grounding_context_budget: GroundingContextBudget,
+                 knowledge_application: KnowledgeApplicationComponents, conversation_context_builder: ConversationContextBuilder | None = None
     ) -> None:
         if uow_factory is None:
             raise TypeError("uow_factory cannot be None")
@@ -267,6 +285,9 @@ class ProcessCustomerMessage:
         
         if not isinstance(knowledge_application, KnowledgeApplicationComponents):
             raise TypeError("knowledge_application must be a KnowledgeApplicationComponents instance.")
+        
+        if conversation_context_builder is not None and not isinstance(conversation_context_builder, ConversationContextBuilder):
+            raise TypeError("conversation_context_builder must be a ConversationContextBuilder instance or None")
 
         self._uow_factory = uow_factory
         self._pipeline_factory = pipeline_factory
@@ -275,6 +296,7 @@ class ProcessCustomerMessage:
         self._retrieval_profile = retrieval_profile
         self._grounding_context_budget = grounding_context_budget
         self._knowledge_application = knowledge_application
+        self._conversation_context_builder = conversation_context_builder if conversation_context_builder is not None else ConversationContextBuilder()
 
     # Public API
     def execute(self, command: ProcessCustomerMessageCommand) -> ProcessCustomerMessageResult:
@@ -305,6 +327,13 @@ class ProcessCustomerMessage:
 
             # Persist triggering customer message
             sequence_number = repositories.conversations.allocate_message_sequence(command.conversation_id)
+            # Load only prior customer-visible history. This query runs before the triggering message is inserted,
+            # so the current message cannot appear both in customer_message and conversation_context.
+            prior_messages = repositories.messages.get_recent_by_conversation(
+                command.conversation_id,
+                limit=self._conversation_context_builder.max_messages,
+            )
+            conversation_context = self._conversation_context_builder.build(messages=prior_messages)
             customer_message = MessageModel(
                 conversation_id=command.conversation_id,
                 role="customer",
@@ -410,7 +439,7 @@ class ProcessCustomerMessage:
                 conversation_id=command.conversation_id,
                 trigger_message_id=customer_message.id,
                 customer_message=normalized_message,
-                conversation_context=None,
+                conversation_context=conversation_context,
             )
             total_latency_ms = self._elapsed_ms(started_perf)
             self._validate_terminal_state(state)
@@ -606,14 +635,10 @@ class ProcessCustomerMessage:
                 trigger_message_id=state.trigger_message_id,
                 source=state.escalation_source.value,
                 reason_code=state.escalation_reason_code,
-                reason_summary=state.decision_result.reason_summary,
+                reason_summary=ProcessCustomerMessage._resolve_escalation_reason_summary(state),
                 priority=ProcessCustomerMessage._resolve_escalation_priority(state),
                 handoff_summary=ProcessCustomerMessage._build_handoff_summary(state),
-                metadata={
-                    "pipeline_stage": state.stage.value,
-                    "intent": state.intent_result.intent.value if state.intent_result is not None else None,
-                    "decision": state.decision_result.decision.value,
-                },
+                metadata=ProcessCustomerMessage._build_escalation_metadata(state),
             )
         )
 
@@ -739,21 +764,74 @@ class ProcessCustomerMessage:
             intent_predictions=uow.intent_predictions,
             ai_decisions=uow.ai_decisions,
         )
+
+    @staticmethod
+    def _build_escalation_metadata(state: AIState) -> dict[str, object]:
+        """
+        Build allowlisted low-cardinality escalation metadata.
+
+        Customer messages, generated responses, conversation context, evidence, prompts, provider errors, 
+        and unrestricted AI metadata are deliberately excluded.
+        """
+        if state.stage is not PipelineStage.ESCALATED:
+            raise PersistenceContractError("Escalation metadata requires ESCALATED state")
+
+        if state.escalation_source is None:
+            raise PersistenceContractError("Escalation metadata requires escalation_source")
+
+        if state.escalation_reason_code is None:
+            raise PersistenceContractError("Escalation metadata requires escalation_reason_code")
+
+        if state.decision_result is None:
+            raise PersistenceContractError("Escalation metadata requires decision_result")
+
+        metadata: dict[str, object] = {
+            "pipeline_stage": state.stage.value,
+            "intent": state.intent_result.intent.value if state.intent_result is not None else None,
+            "decision": state.decision_result.decision.value,
+            "decision_reason_code": state.decision_result.reason_code.value,
+            "escalation_source": state.escalation_source.value,
+            "escalation_reason_code": state.escalation_reason_code,
+        }
+
+        if state.guardrail_disposition is not None:
+            metadata["guardrail_outcome"] = state.guardrail_disposition.value
+            metadata["guardrail_reason_code"] = state.guardrail_reason_code
+            if state.guardrail_policy_id is not None:
+                metadata["guardrail_policy_id"] = state.guardrail_policy_id
+
+        return metadata
+
+    @staticmethod
+    def _resolve_escalation_reason_summary(state: AIState) -> str:
+        """
+        Return an application-controlled explanation for the final escalation.
+
+        The original decision reason may describe an earlier workflow step and can become inaccurate when retrieval or guardrails
+        later redirect the run to escalation. This resolver therefore uses the final structured escalation reason code.
+
+        Unknown future reason codes receive a safe generic summary.
+        """
+        reason_code = state.escalation_reason_code
+        if reason_code is None:
+            raise PersistenceContractError("Cannot resolve escalation summary without a reason code")
+
+        return _ESCALATION_REASON_SUMMARIES.get(reason_code, _DEFAULT_ESCALATION_REASON_SUMMARY)
         
     @staticmethod
     def _resolve_escalation_priority(state: AIState) -> str:
         """
         Assign a deterministic initial escalation priority.
 
-        Priority is derived only from trusted reason codes. Arbitrary LLM metadata must never control support priority.
+        Priority is derived only from trusted structured reason codes.
+        Customer content, generated text, arbitrary metadata, and provider output must never control escalation priority.
         """
         reason_code = state.escalation_reason_code
-
         if reason_code is None:
             raise PersistenceContractError("Cannot resolve escalation priority without a reason code")
 
         urgent_reasons = {"SECURITY_SENSITIVE_REQUEST", "SENSITIVE_ACTION_CLAIM", "SAFETY_RESTRICTION",}
-        high_reasons = {"HUMAN_APPROVAL_REQUIRED", "POLICY_CONFLICT", "UNSUPPORTED_OPERATIONAL_CLAIM",}
+        high_reasons = {"HUMAN_APPROVAL_REQUIRED", "POLICY_CONFLICT", "UNSUPPORTED_OPERATIONAL_CLAIM", "SEVERE_CUSTOMER_DISSATISFACTION",}
         if reason_code in urgent_reasons:
             return "urgent"
 
@@ -766,9 +844,10 @@ class ProcessCustomerMessage:
     @staticmethod
     def _build_handoff_summary(state: AIState) -> str:
         """
-        Build a deterministic, bounded summary for a support agent.
+        Build a deterministic and bounded human-support handoff summary.
 
-        This is not generated by an additional LLM call. It contains only already-available structured pipeline information.
+        The summary contains only controlled structured workflow values and an allowlisted explanation.
+        It does not include the customer message, generated response, provider error, prompt, or unrestricted metadata.
         """
         if state.escalation_source is None:
             raise PersistenceContractError("Cannot build handoff summary without escalation_source")
@@ -780,5 +859,6 @@ class ProcessCustomerMessage:
             raise PersistenceContractError("Cannot build handoff summary without decision_result")
 
         intent = state.intent_result.intent.value if state.intent_result is not None else "unknown"
+        reason_summary = ProcessCustomerMessage._resolve_escalation_reason_summary(state)
 
-        return f"Human review requested by {state.escalation_source.value}. Intent: {intent}. Reason: {state.escalation_reason_code}. {state.decision_result.reason_summary}"
+        return f"Human review requested by {state.escalation_source.value}. Intent: {intent}. Reason: {state.escalation_reason_code}. {reason_summary}"

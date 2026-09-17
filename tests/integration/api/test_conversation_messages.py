@@ -15,6 +15,23 @@ from packages.ai.intent.taxonomy import IntentType
 from packages.ai.decision.schemas import DecisionType
 from packages.ai.orchestration.state import PipelineStage
 
+import hashlib
+
+from datetime import datetime, timedelta, timezone
+
+from packages.database.models.knowledge.document import (
+    KnowledgeDocumentModel,
+)
+from packages.database.models.knowledge.document_version import (
+    KnowledgeDocumentVersionModel,
+)
+from packages.database.models.knowledge.chunk import (
+    KnowledgeChunkModel,
+)
+from packages.database.models.ai.retrieval_run import (
+    RetrievalRunModel,
+)
+
 @pytest.fixture()
 def seeded_conversation(
     test_session_factory,
@@ -39,13 +56,108 @@ def seeded_conversation(
 
     return conversation_id
 
+@pytest.fixture()
+def seeded_published_return_policy(
+    test_session_factory,
+) -> dict[str, uuid.UUID]:
+    now = datetime.now(timezone.utc)
+
+    document_id = uuid7()
+    version_id = uuid7()
+    chunk_id = uuid7()
+
+    source_content = (
+        "Return Policy\n\n"
+        "Eligible items may be returned within 30 calendar "
+        "days of delivery. Items must be unused and remain "
+        "in their original condition."
+    )
+
+    with test_session_factory() as session:
+        session.add(
+            KnowledgeDocumentModel(
+                id=document_id,
+                title="Customer Return Policy",
+                description=(
+                    "Return-policy knowledge used by the "
+                    "grounded API integration test."
+                ),
+                content_type="policy",
+                visibility="customer",
+                status="active",
+                metadata_={"integration_test": True},
+                created_at=now,
+                updated_at=now,
+                archived_at=None,
+                deleted_at=None,
+            )
+        )
+        session.flush()
+
+        session.add(
+            KnowledgeDocumentVersionModel(
+                id=version_id,
+                document_id=document_id,
+                version_number=1,
+                source_type="plain_text",
+                source_content=source_content,
+                source_name="return-policy.txt",
+                source_uri=None,
+                content_hash=hashlib.sha256(
+                    source_content.encode("utf-8")
+                ).hexdigest(),
+                status="published",
+                ingestion_status="completed",
+                metadata_={"integration_test": True},
+                created_at=now - timedelta(seconds=10),
+                updated_at=now,
+                processing_started_at=(
+                    now - timedelta(seconds=9)
+                ),
+                processing_completed_at=(
+                    now - timedelta(seconds=5)
+                ),
+                ready_at=now - timedelta(seconds=5),
+                published_at=now,
+                superseded_at=None,
+                archived_at=None,
+                failure_code=None,
+                failure_message=None,
+            )
+        )
+        session.flush()
+
+        session.add(
+            KnowledgeChunkModel(
+                id=chunk_id,
+                version_id=version_id,
+                chunk_index=0,
+                content=source_content,
+                section_title="Return eligibility",
+                start_offset=None,
+                end_offset=None,
+                token_count=31,
+                metadata_={"integration_test": True},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+        session.commit()
+
+    return {
+        "document_id": document_id,
+        "version_id": version_id,
+        "chunk_id": chunk_id,
+    }
+
 class TestSendCustomerMessage:
     def test_processes_customer_message_successfully(self, client: TestClient, seeded_conversation: uuid.UUID, customer_auth_headers: dict[str, str],) -> None:
         trace_id = uuid7()
         response = client.post(
             f"/v1/conversations/{seeded_conversation}/messages",
             headers={**customer_auth_headers, "X-Trace-ID": str(trace_id) },
-            json={ "message": "What is your return policy?" },
+            json={ "message": "Hello support assistant" },
         )
 
         assert response.status_code == 200
@@ -58,8 +170,8 @@ class TestSendCustomerMessage:
         assert body["trace_id"] == str(trace_id)
         assert body["succeeded"] is True
         assert body["pipeline_stage"] == PipelineStage.GUARDRAILS_COMPLETED.value
-        assert body["intent"] == IntentType.RETURN_EXCHANGE.value
-        assert body["decision"] == DecisionType.RETRIEVE_INFORMATION.value
+        assert body["intent"] == IntentType.CONVERSATIONAL.value
+        assert body["decision"] == DecisionType.ANSWER.value
         assert uuid.UUID(body["assistant_message_id"])
         assert body["escalation_id"] is None
         assert body["response"]
@@ -68,7 +180,7 @@ class TestSendCustomerMessage:
         response = client.post(
             f"/v1/conversations/{seeded_conversation}/messages",
             headers=customer_auth_headers,
-            json={ "message": "What is your return policy?" },
+            json={ "message": "Hello support assistant" },
         )
 
         assert response.status_code == 200
@@ -81,7 +193,7 @@ class TestSendCustomerMessage:
             assert message is not None
             assert message.conversation_id == seeded_conversation
             assert message.role == "customer"
-            assert message.content == "What is your return policy?"
+            assert message.content == "Hello support assistant"
 
     def test_creates_completed_ai_run(self, client: TestClient, seeded_conversation: uuid.UUID, test_session_factory, customer_auth_headers: dict[str, str],) -> None:
         trace_id = uuid7()
@@ -89,7 +201,7 @@ class TestSendCustomerMessage:
         response = client.post(
             f"/v1/conversations/{seeded_conversation}/messages",
             headers={**customer_auth_headers, "X-Trace-ID": str(trace_id) },
-            json={ "message": "What is your return policy?" },
+            json={ "message": "Hello support assistant" },
         )
 
         assert response.status_code == 200
@@ -107,7 +219,7 @@ class TestSendCustomerMessage:
         response = client.post(
             f"/v1/conversations/{seeded_conversation}/messages",
             headers=customer_auth_headers,
-            json={ "message": "What is your return policy?" },
+            json={ "message": "Hello support assistant" },
         )
 
         assert response.status_code == 200
@@ -138,7 +250,7 @@ class TestSendCustomerMessage:
         response = client.post(
             f"/v1/conversations/{seeded_conversation}/messages",
             headers=customer_auth_headers,
-            json={ "message": "What is your return policy?" },
+            json={ "message": "Hello support assistant" },
         )
 
         assert response.status_code == 200
@@ -157,3 +269,133 @@ class TestSendCustomerMessage:
             )
 
             assert prediction.llm_call_id == llm_call.id
+    
+    def test_returns_grounded_answer_from_published_knowledge(
+        self,
+        client: TestClient,
+        seeded_conversation: uuid.UUID,
+        seeded_published_return_policy: dict[str, uuid.UUID],
+        customer_auth_headers: dict[str, str],
+        test_session_factory,
+    ) -> None:
+        trace_id = uuid7()
+
+        response = client.post(
+            (
+                f"/v1/conversations/"
+                f"{seeded_conversation}/messages"
+            ),
+            headers={
+                **customer_auth_headers,
+                "X-Trace-ID": str(trace_id),
+            },
+            json={
+                "message": "What is your return policy?",
+            },
+        )
+
+        assert response.status_code == 200, response.text
+
+        body = response.json()
+
+        assert body["conversation_id"] == str(
+            seeded_conversation
+        )
+        assert body["trace_id"] == str(trace_id)
+        assert body["succeeded"] is True
+        assert body["pipeline_stage"] == (
+            PipelineStage.GUARDRAILS_COMPLETED.value
+        )
+        assert body["intent"] == (
+            IntentType.RETURN_EXCHANGE.value
+        )
+        assert body["decision"] == (
+            DecisionType.RETRIEVE_INFORMATION.value
+        )
+
+        customer_message_id = uuid.UUID(
+            body["customer_message_id"]
+        )
+        assistant_message_id = uuid.UUID(
+            body["assistant_message_id"]
+        )
+        ai_run_id = uuid.UUID(body["ai_run_id"])
+
+        assert body["escalation_id"] is None
+        assert body["response"] == (
+            "Eligible items may be returned within 30 calendar "
+            "days of delivery, provided they are unused and in "
+            "their original condition."
+        )
+
+        with test_session_factory() as session:
+            customer_message = session.get(
+                MessageModel,
+                customer_message_id,
+            )
+            assistant_message = session.get(
+                MessageModel,
+                assistant_message_id,
+            )
+            ai_run = session.get(
+                AIRunModel,
+                ai_run_id,
+            )
+
+            retrieval_runs = tuple(
+                session.query(RetrievalRunModel)
+                .filter(
+                    RetrievalRunModel.ai_run_id == ai_run_id
+                )
+                .all()
+            )
+
+            llm_calls = tuple(
+                session.query(LLMCallModel)
+                .filter(
+                    LLMCallModel.ai_run_id == ai_run_id
+                )
+                .all()
+            )
+
+        assert customer_message is not None
+        assert customer_message.role == "customer"
+        assert customer_message.content == (
+            "What is your return policy?"
+        )
+
+        assert assistant_message is not None
+        assert assistant_message.role == "assistant"
+        assert assistant_message.content == body["response"]
+
+        assert ai_run is not None
+        assert ai_run.status == "completed"
+        assert ai_run.trace_id == trace_id
+        assert ai_run.trigger_message_id == customer_message_id
+        assert ai_run.response_message_id == assistant_message_id
+
+        assert len(retrieval_runs) == 1
+        retrieval_run = retrieval_runs[0]
+
+        assert retrieval_run.status == "success"
+        assert retrieval_run.zero_result is False
+        assert retrieval_run.lexical_candidate_count >= 1
+        assert retrieval_run.selected_candidate_count >= 1
+        
+        assert retrieval_run.zero_result is False
+        assert retrieval_run.lexical_candidate_count >= 1
+        assert retrieval_run.fused_candidate_count >= 1
+        assert retrieval_run.selected_candidate_count >= 1
+
+        assert len(llm_calls) == 2
+        assert {
+            call.purpose
+            for call in llm_calls
+        } == {
+            "intent_classification",
+            "answer_generation",
+        }
+
+        assert seeded_published_return_policy[
+            "chunk_id"
+        ] is not None

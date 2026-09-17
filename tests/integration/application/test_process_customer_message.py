@@ -66,6 +66,8 @@ from packages.application.composition.knowledge_application_factory import (
 from packages.knowledge.embeddings.input.contextual import (
     ContextualEmbeddingInputBuilder,
 )
+from packages.database.models.support.escalation import EscalationModel
+from packages.ai.decision.schemas import DecisionReasonCode
 
 
 # ---------------------------------------------------------------------------
@@ -462,7 +464,7 @@ def _customer_principal(
 # ---------------------------------------------------------------------------
 
 
-def test_customer_message_persists_complete_ai_trace_and_assistant_response(
+def test_insufficient_knowledge_persists_escalation_without_assistant_response(
     service,
     test_session_factory,
     seeded_conversation,
@@ -495,27 +497,17 @@ def test_customer_message_persists_complete_ai_trace_and_assistant_response(
     assert result.conversation_id == conversation_id
     assert result.trace_id == trace_id
 
-    assert (
-        result.pipeline_stage
-        is PipelineStage.GUARDRAILS_COMPLETED
-    )
-
+    assert result.pipeline_stage is PipelineStage.ESCALATED
     assert result.intent == "payment_issue"
     assert result.decision == "retrieve_information"
 
     assert result.customer_message_id is not None
-    assert result.assistant_message_id is not None
+    assert result.assistant_message_id is None
+    assert result.response is None
+    assert result.escalation_id is not None
 
-    assert result.response == (
-        "I don't have enough verified information "
-        "in the available knowledge to answer "
-        "this reliably."
-    )
-
-    assert (
-        result.assistant_message_id
-        != result.customer_message_id
-    )
+    assert result.failure_code is None
+    assert result.failure_retryable is None
 
     # ------------------------------------------------------------------
     # Verify persisted database state
@@ -539,36 +531,14 @@ def test_customer_message_persists_complete_ai_trace_and_assistant_response(
         # Conversation message ordering
         # --------------------------------------------------------------
 
-        assert len(messages) == 2
+        assert len(messages) == 1
 
         customer_message = messages[0]
-        assistant_message = messages[1]
 
-        assert (
-            customer_message.id
-            == result.customer_message_id
-        )
-
+        assert customer_message.id == result.customer_message_id
         assert customer_message.role == "customer"
         assert customer_message.content == customer_text
         assert customer_message.sequence_number == 1
-
-        assert (
-            assistant_message.id
-            == result.assistant_message_id
-        )
-
-        assert assistant_message.role == "assistant"
-        assert (
-            assistant_message.content
-            == result.response
-        )
-        assert assistant_message.sequence_number == 2
-
-        assert (
-            assistant_message.conversation_id
-            == conversation_id
-        )
 
         # --------------------------------------------------------------
         # AI run
@@ -586,10 +556,7 @@ def test_customer_message_persists_complete_ai_trace_and_assistant_response(
             ai_run.trigger_message_id
             == customer_message.id
         )
-        assert (
-            ai_run.response_message_id
-            == assistant_message.id
-        )
+        assert ai_run.response_message_id is None
 
         assert (
             ai_run.conversation_id
@@ -827,7 +794,7 @@ def test_customer_message_persists_complete_ai_trace_and_assistant_response(
             "decision_made",
             "retrieval_completed",
             "response_generated",
-            "guardrails_completed",
+            "escalated",
         }
 
         assert started_stages == expected_stages
@@ -856,7 +823,6 @@ def test_customer_message_persists_complete_ai_trace_and_assistant_response(
         )
 
         assert customer_text not in serialized_stage_metadata
-        assert result.response not in serialized_stage_metadata
 
 
 # ---------------------------------------------------------------------------
@@ -991,7 +957,7 @@ def test_clarification_decision_persists_safe_assistant_message(
 # ---------------------------------------------------------------------------
 
 
-def test_unsupported_operational_retrieval_persists_honest_failure(
+def test_unavailable_operational_lookup_persists_honest_escalation(
     test_session_factory,
     seeded_conversation,
     embedding_provider,
@@ -1050,32 +1016,69 @@ def test_unsupported_operational_retrieval_persists_honest_failure(
         )
     )
 
-    assert result.succeeded is False
-    assert result.pipeline_stage is PipelineStage.FAILED
-    assert result.failure_code == "RETRIEVAL_KIND_UNSUPPORTED"
-    assert result.failure_retryable is False
+    assert result.succeeded is True
+    assert result.pipeline_stage is PipelineStage.ESCALATED
+    assert result.intent == "order_status"
+    assert result.decision == "escalate"
+
+    assert result.failure_code is None
+    assert result.failure_retryable is None
+
     assert result.assistant_message_id is None
     assert result.response is None
-    assert result.escalation_id is None
+    assert result.escalation_id is not None
 
     with test_session_factory() as session:
         messages = tuple(
             session.scalars(
                 select(MessageModel)
-                .where(MessageModel.conversation_id == conversation_id)
+                .where(
+                    MessageModel.conversation_id
+                    == conversation_id
+                )
                 .order_by(MessageModel.sequence_number)
             )
         )
-        ai_run = session.get(AIRunModel, result.ai_run_id)
 
-        # The accepted customer message and failed run remain recoverable and
-        # auditable, but no fabricated assistant answer is persisted.
+        ai_run = session.get(
+            AIRunModel,
+            result.ai_run_id,
+        )
+
+        escalation = session.get(
+            EscalationModel,
+            result.escalation_id,
+        )
+
+        # The accepted customer message remains persisted, but no
+        # unsupported operational result is fabricated.
         assert len(messages) == 1
         assert messages[0].role == "customer"
+
         assert ai_run is not None
-        assert ai_run.status == "failed"
-        assert ai_run.error_code == "RETRIEVAL_KIND_UNSUPPORTED"
+        assert ai_run.status == "completed"
+        assert ai_run.error_code is None
         assert ai_run.response_message_id is None
+
+        assert escalation is not None
+        assert escalation.conversation_id == conversation_id
+        assert escalation.ai_run_id == result.ai_run_id
+        assert escalation.trigger_message_id == result.customer_message_id
+        assert escalation.reason_code == DecisionReasonCode.OPERATIONAL_LOOKUP_UNAVAILABLE.value
+        assert escalation.status == "open"
+
+        retrieval_runs = tuple(
+            session.scalars(
+                select(RetrievalRunModel).where(
+                    RetrievalRunModel.ai_run_id
+                    == result.ai_run_id
+                )
+            )
+        )
+
+        # Operational lookup is not incorrectly sent through the
+        # knowledge-document retrieval subsystem.
+        assert retrieval_runs == ()
 
 
 # ---------------------------------------------------------------------------
