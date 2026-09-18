@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     groq_max_completion_tokens: int = 1024
     groq_temperature: float = 0.0
     
+    ## Conversation title generation
+    conversation_title_enabled: bool = True
+    conversation_title_max_input_characters: int = 2_000
+    conversation_title_timeout_seconds: float = 4.0
+    conversation_title_max_completion_tokens: int = 32
+    
     ## Embeddings
     embedding_provider: str = "jina"
     embedding_dimensions: int = 1024
@@ -141,6 +147,30 @@ class Settings(BaseSettings):
 
         if not self.llm_provider:
             raise ValueError("llm_provider must not be blank.")
+        
+        if isinstance(self.conversation_title_max_input_characters, bool) or not isinstance(self.conversation_title_max_input_characters, int):
+            raise TypeError("conversation_title_max_input_characters must be an integer.")
+
+        if self.conversation_title_max_input_characters < 128:
+            raise ValueError("conversation_title_max_input_characters must be at least 128.")
+
+        if self.conversation_title_max_input_characters > 20_000:
+            raise ValueError("conversation_title_max_input_characters cannot exceed 20000.")
+
+        if self.conversation_title_timeout_seconds <= 0:
+            raise ValueError("conversation_title_timeout_seconds must be greater than zero.")
+
+        if self.conversation_title_timeout_seconds > 15:
+            raise ValueError("conversation_title_timeout_seconds cannot exceed 15 seconds.")
+
+        if isinstance(self.conversation_title_max_completion_tokens, bool) or not isinstance(self.conversation_title_max_completion_tokens, int):
+            raise TypeError("conversation_title_max_completion_tokens must be an integer.")
+
+        if self.conversation_title_max_completion_tokens < 8:
+            raise ValueError("conversation_title_max_completion_tokens must be at least 8.")
+
+        if self.conversation_title_max_completion_tokens > 128:
+            raise ValueError("conversation_title_max_completion_tokens cannot exceed 128.")
 
         if not self.embedding_provider:
             raise ValueError("embedding_provider must not be blank.")

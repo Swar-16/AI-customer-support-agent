@@ -15,6 +15,7 @@ def make_application_services(*, provider_healthy: bool = True) -> ApplicationSe
 
     return ApplicationServices(
         accept_conversation_start=Mock(),
+        assign_conversation_title=Mock(),
         start_conversation=Mock(),
         
         create_conversation=Mock(),

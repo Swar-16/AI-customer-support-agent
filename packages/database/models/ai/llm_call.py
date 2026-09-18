@@ -23,6 +23,7 @@ class LLMCallModel(Base):
                 'escalation_summary',
                 'guardrail_validation',
                 'conversation_summary',
+                'conversation_title',
                 'other'
             )
             """,

@@ -74,6 +74,7 @@ from packages.application.dashboard.analytics_repository import DashboardAnalyti
 from packages.application.conversations.conversation_context import ConversationContextBuilder, ConversationContextConfig
 from packages.application.conversations.accept_conversation_start import AcceptConversationStart
 from packages.application.conversations.start_conversation import StartConversation
+from packages.application.conversations.assign_conversation_title import AssignConversationTitle
 
 SessionFactory = sessionmaker[Session]
 ProviderFactory = Callable[..., LLMProvider]
@@ -95,6 +96,7 @@ class ApplicationServices:
     Those are created per request / per application transaction.
     """
     accept_conversation_start: AcceptConversationStart
+    assign_conversation_title: AssignConversationTitle
     start_conversation: StartConversation
     
     create_conversation: CreateConversation
@@ -207,6 +209,7 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         raise TypeError("session_factory cannot be None")
 
     resolved_provider = _resolve_provider(settings=settings, base_provider=base_provider)
+    title_provider = _resolve_title_provider(settings=settings, injected_provider=base_provider, resolved_provider=resolved_provider)
     resolved_observer = _resolve_observer(observer=observer)
     pipeline_factory = AIPipelineFactory(base_provider=resolved_provider, observer=resolved_observer)
     embedding_services = create_knowledge_embedding_services(settings)
@@ -353,16 +356,25 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         conversation_context_builder=conversation_context_builder,
     )
     
+    assign_conversation_title = AssignConversationTitle(
+        uow_factory=uow_factory,
+        base_provider=title_provider,
+        enabled=settings.conversation_title_enabled,
+        max_input_characters=settings.conversation_title_max_input_characters,
+    )
+    
     start_conversation = StartConversation(
         uow_factory=uow_factory,
         accept_conversation_start=accept_conversation_start,
         process_customer_message=process_customer_message,
+        assign_conversation_title=assign_conversation_title,
         processing_lease_duration=timedelta(seconds=settings.conversation_start_processing_lease_seconds),
     )
 
     return ApplicationServices(
         accept_conversation_start=accept_conversation_start,
         start_conversation=start_conversation,
+        assign_conversation_title=assign_conversation_title,
         create_conversation=create_conversation,
         list_conversations=list_conversations,
         get_conversation=get_conversation,
@@ -446,6 +458,44 @@ def _resolve_provider(*, settings: Settings, base_provider: LLMProvider | None) 
 
     except Exception as exc:
         raise ApplicationConfigurationError("Failed to configure LLM provider") from exc
+    
+def _resolve_title_provider(*, settings: Settings, injected_provider: LLMProvider | None, resolved_provider: LLMProvider) -> LLMProvider:
+    """
+    Resolve the provider used only for conversation titles.
+
+    Tests and explicit dependency injection reuse the injected provider.
+
+    Production Groq configuration receives a separate provider instance with a shorter timeout and smaller completion budget.
+    This avoids changing the limits used by classification and grounded answer generation.
+    """
+    if injected_provider is not None:
+        if not isinstance(injected_provider, LLMProvider):
+            raise TypeError("injected_provider must implement LLMProvider")
+
+        return injected_provider
+
+    if not isinstance(resolved_provider, LLMProvider):
+        raise TypeError("resolved_provider must implement LLMProvider")
+
+    if not settings.conversation_title_enabled:
+        # The provider will never be called while title generation is disabled, so creating another client would be unnecessary.
+        return resolved_provider
+
+    # The current provider factory reads the regular Groq configuration fields.
+    # Produce a validated Settings copy containing title-specific limits, leaving the original Settings instance unchanged.
+    title_settings = settings.model_copy(
+        update={
+            "groq_timeout_seconds": settings.conversation_title_timeout_seconds,
+            "groq_max_completion_tokens": settings.conversation_title_max_completion_tokens,
+            "groq_temperature": 0.0,
+        },
+    )
+
+    try:
+        return create_llm_provider(settings=title_settings)
+    
+    except Exception as exc:
+        raise ApplicationConfigurationError("Failed to configure conversation title provider") from exc
 
 def _resolve_observer(*, observer: OrchestrationObserver | None) -> OrchestrationObserver:
     """

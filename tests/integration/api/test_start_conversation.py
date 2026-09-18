@@ -7,7 +7,14 @@ from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from uuid6 import uuid7
+import pytest
 
+from packages.ai.conversation_title.models import (
+    ConversationTitleOutput,
+)
+from packages.ai.providers.errors import (
+    LLMProviderTimeoutError,
+)
 from packages.ai.providers.mock import MockLLMProvider
 from packages.application.auth.models import (
     AuthenticatedPrincipal,
@@ -51,13 +58,14 @@ def _headers(
 
 def _payload(
     message: str = "Where is order ORD-12345?",
+    *,
+    title: str | None = None,
 ) -> dict[str, object]:
     return {
         "message": message,
         "channel": "web",
-        "title": None,
+        "title": title,
     }
-
 
 class TestStartConversation:
     def test_creates_conversation_and_processes_first_message(
@@ -126,6 +134,7 @@ class TestStartConversation:
 
         assert conversation is not None
         assert conversation.next_message_sequence == 2
+        assert conversation.title == "Order status request"
 
         assert message is not None
         assert message.role == "customer"
@@ -141,6 +150,7 @@ class TestStartConversation:
         client: TestClient,
         customer_auth_headers: dict[str, str],
         test_session_factory,
+        mock_llm_provider: MockLLMProvider,
     ) -> None:
         key = str(uuid7())
         payload = _payload()
@@ -153,6 +163,13 @@ class TestStartConversation:
             ),
             json=payload,
         )
+
+        title_calls_after_first = sum(
+            call.response_model
+            is ConversationTitleOutput
+            for call in mock_llm_provider.calls
+        )
+
         second = client.post(
             "/v1/conversations/start",
             headers=_headers(
@@ -162,8 +179,20 @@ class TestStartConversation:
             json=payload,
         )
 
+        title_calls_after_second = sum(
+            call.response_model
+            is ConversationTitleOutput
+            for call in mock_llm_provider.calls
+        )
+
         assert first.status_code == 201, first.text
         assert second.status_code == 200, second.text
+        
+        assert title_calls_after_first == 1
+        assert (
+            title_calls_after_second
+            == title_calls_after_first
+        )
 
         first_body = first.json()
         second_body = second.json()
@@ -409,6 +438,9 @@ class TestStartConversation:
         assert start_request.response_snapshot is not None
 
         assert conversation is not None
+        # AI processing failure does not prevent safe conversation naming.
+        # The title call runs after the failed terminal result is durable.
+        assert conversation.title == "Order status request"
 
         assert message is not None
         assert message.role == "customer"
@@ -417,3 +449,178 @@ class TestStartConversation:
         assert ai_run is not None
         assert ai_run.status == "failed"
         assert ai_run.trigger_message_id == message_id
+    
+    def test_preserves_explicit_title_without_title_provider_call(
+        self,
+        client: TestClient,
+        customer_auth_headers: dict[str, str],
+        test_session_factory,
+        mock_llm_provider: MockLLMProvider,
+    ) -> None:
+        response = client.post(
+            "/v1/conversations/start",
+            headers=_headers(
+                customer_auth_headers,
+                idempotency_key=str(uuid7()),
+            ),
+            json=_payload(
+                "What is your return policy?",
+                title="My returns question",
+            ),
+        )
+
+        assert response.status_code == 201, response.text
+
+        body = response.json()
+        conversation_id = uuid.UUID(
+            body["conversation_id"]
+        )
+
+        with test_session_factory() as session:
+            conversation = session.get(
+                ConversationModel,
+                conversation_id,
+            )
+
+        assert conversation is not None
+        assert conversation.title == "My returns question"
+
+        title_calls = tuple(
+            call
+            for call in mock_llm_provider.calls
+            if (
+                call.response_model
+                is ConversationTitleOutput
+            )
+        )
+
+        assert title_calls == ()
+
+    def test_title_provider_timeout_uses_fallback_without_failing_start(
+        self,
+        client: TestClient,
+        customer_auth_headers: dict[str, str],
+        test_session_factory,
+        mock_llm_provider: MockLLMProvider,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        original_resolver = (
+            mock_llm_provider._structured_resolver
+        )
+
+        assert original_resolver is not None
+
+        def timeout_title_only(
+            system_prompt: str,
+            user_prompt: str,
+            response_model,
+        ):
+            if response_model is ConversationTitleOutput:
+                raise LLMProviderTimeoutError(
+                    provider="mock",
+                    message=(
+                        "Sensitive upstream timeout text "
+                        "must not reach the API."
+                    ),
+                )
+
+            return original_resolver(
+                system_prompt,
+                user_prompt,
+                response_model,
+            )
+
+        monkeypatch.setattr(
+            mock_llm_provider,
+            "_structured_resolver",
+            timeout_title_only,
+        )
+
+        response = client.post(
+            "/v1/conversations/start",
+            headers=_headers(
+                customer_auth_headers,
+                idempotency_key=str(uuid7()),
+            ),
+            json=_payload(),
+        )
+
+        assert response.status_code == 201, response.text
+
+        body = response.json()
+
+        assert body["created"] is True
+        assert body["succeeded"] is True
+        assert "Sensitive upstream" not in response.text
+
+        conversation_id = uuid.UUID(
+            body["conversation_id"]
+        )
+
+        with test_session_factory() as session:
+            conversation = session.get(
+                ConversationModel,
+                conversation_id,
+            )
+
+        assert conversation is not None
+
+        # The deterministic fallback uses the confirmed order-status intent.
+        assert conversation.title == "Order status request"
+
+    def test_generated_title_is_returned_by_list_and_detail(
+        self,
+        client: TestClient,
+        customer_auth_headers: dict[str, str],
+    ) -> None:
+        start_response = client.post(
+            "/v1/conversations/start",
+            headers=_headers(
+                customer_auth_headers,
+                idempotency_key=str(uuid7()),
+            ),
+            json=_payload(
+                "What is your return policy?"
+            ),
+        )
+
+        assert (
+            start_response.status_code == 201
+        ), start_response.text
+
+        conversation_id = start_response.json()[
+            "conversation_id"
+        ]
+
+        detail_response = client.get(
+            f"/v1/conversations/{conversation_id}",
+            headers=customer_auth_headers,
+        )
+
+        assert (
+            detail_response.status_code == 200
+        ), detail_response.text
+        assert detail_response.json()["title"] == (
+            "Return policy question"
+        )
+
+        list_response = client.get(
+            "/v1/conversations",
+            headers=customer_auth_headers,
+        )
+
+        assert (
+            list_response.status_code == 200
+        ), list_response.text
+
+        matching_items = [
+            item
+            for item in list_response.json()["items"]
+            if item["conversation_id"]
+            == conversation_id
+        ]
+
+        assert len(matching_items) == 1
+        assert matching_items[0]["title"] == (
+            "Return policy question"
+        )

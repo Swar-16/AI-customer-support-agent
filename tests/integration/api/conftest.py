@@ -24,6 +24,7 @@ from packages.application.composition.application_factory import ApplicationServ
 from packages.database.models.support.conversation import ConversationModel
 from packages.database.models.support.user import UserModel
 from packages.ai.generation.models import GroundedGenerationResult
+from packages.ai.conversation_title.models import ConversationTitleOutput
 
 # Deterministic LLM
 def _structured_llm_resolver(system_prompt: str, user_prompt: str, response_model: type[BaseModel]) -> dict[str, Any] | BaseModel:
@@ -43,7 +44,39 @@ def _structured_llm_resolver(system_prompt: str, user_prompt: str, response_mode
 
     Only the external LLM behaviour is controlled.
     """
+    if response_model is ConversationTitleOutput:
+        try:
+            _, separator, serialized_payload = user_prompt.partition("\n")
+            if separator != "\n":
+                raise ValueError("Missing title prompt JSON payload.")
 
+            payload = json.loads(serialized_payload)
+            customer_message = payload["customer_message"]
+        
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError,) as exc:
+            raise AssertionError("Conversation-title prompt did not contain the expected JSON payload.") from exc
+
+        if not isinstance(customer_message, str):
+            raise AssertionError("Conversation-title customer message must be a string.")
+
+        normalized_message = customer_message.casefold()
+        if "return policy" in normalized_message:
+            title = "Return policy question"
+        
+        elif "where is" in normalized_message and "[redacted identifier]" in normalized_message:
+            title = "Order status request"
+            
+        elif "charged twice" in normalized_message:
+            title = "Duplicate charge assistance"
+            
+        elif "hello support assistant" in normalized_message:
+            title = "General support"
+            
+        else:
+            title = "Support request"
+
+        return {"title": title,}
+    
     if response_model is IntentResult:
         normalized_prompt = user_prompt.casefold()
 

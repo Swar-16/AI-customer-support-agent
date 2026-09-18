@@ -16,8 +16,11 @@ from packages.database.models.ai.run import AIRunModel
 from packages.database.models.support.conversation import ConversationModel
 from packages.database.models.support.message import MessageModel
 from packages.ai.intent.taxonomy import IntentType
-from packages.ai.decision.schemas import DecisionType
 from packages.ai.orchestration.state import PipelineStage
+from packages.database.models.support.escalation import EscalationModel
+from packages.ai.decision.schemas import DecisionReasonCode, DecisionType
+
+LIVE_TEST_ORIGIN = "https://testserver"
 
 pytestmark = [
     pytest.mark.integration,
@@ -27,26 +30,57 @@ pytestmark = [
 
 
 @pytest.fixture()
-def live_application_services(test_settings, test_session_factory) -> ApplicationServices:
-    """
-    Compose the real application stack.
-    """
-    return create_application(settings=test_settings, session_factory=test_session_factory)
+def live_settings(test_settings):
+    if not test_settings.groq_api_key:
+        pytest.skip("GROQ_API_KEY is not configured")
+
+    return test_settings.model_copy(
+        update={
+            "llm_provider": "groq",
+            "browser_allowed_origins": (
+                LIVE_TEST_ORIGIN,
+            ),
+            "auth_refresh_cookie_secure": True,
+        }
+    )
 
 
 @pytest.fixture()
-def live_client(monkeypatch: pytest.MonkeyPatch, live_application_services: ApplicationServices, clean_database) -> Generator[TestClient, None, None]:
-    """
-    Start FastAPI using the real application composition.
+def live_application_services(
+    live_settings,
+    test_session_factory,
+) -> ApplicationServices:
+    return create_application(
+        settings=live_settings,
+        session_factory=test_session_factory,
+    )
 
-    We patch only the bootstrap lookup so FastAPI receives the
-    application instance constructed specifically for this test.
 
-    No business behavior is mocked.
-    """
-    monkeypatch.setattr("apps.api.app.main.get_application_services", lambda: live_application_services)
+@pytest.fixture()
+def live_client(
+    monkeypatch: pytest.MonkeyPatch,
+    live_application_services: ApplicationServices,
+    live_settings,
+    clean_database,
+) -> Generator[TestClient, None, None]:
+    monkeypatch.setattr(
+        "apps.api.app.main.get_application_services",
+        lambda: live_application_services,
+    )
+    monkeypatch.setattr(
+        "apps.api.app.main.get_runtime_settings",
+        lambda: live_settings,
+    )
+
     app = create_api_app()
-    with TestClient(app) as client:
+
+    with TestClient(
+        app,
+        base_url=LIVE_TEST_ORIGIN,
+        headers={
+            "Origin": LIVE_TEST_ORIGIN,
+        },
+    ) as client:
         yield client
         
 @pytest.fixture()
@@ -57,6 +91,9 @@ def live_customer(
 
     response = live_client.post(
         "/v1/auth/register",
+        headers={
+            "Origin": LIVE_TEST_ORIGIN,
+        },
         json={
             "email": email,
             "password": "Live-Groq-Smoke-Password-47!",
@@ -70,6 +107,7 @@ def live_customer(
 
     return {
         "user_id": uuid.UUID(body["user"]["id"]),
+        "origin": LIVE_TEST_ORIGIN,
         "headers": {
             "Authorization": (
                 f"Bearer {body['tokens']['access_token']}"
@@ -111,6 +149,7 @@ class TestLiveGroqAPI:
             f"/v1/conversations/{live_conversation}/messages",
             headers={
                 **live_customer["headers"],
+                "Origin": live_customer["origin"],
                 "X-Trace-ID": str(trace_id),
             },
             json={
@@ -124,18 +163,38 @@ class TestLiveGroqAPI:
         assert response.status_code == 200#, response.text
 
         body = response.json()
+        
+        ai_run_id = uuid.UUID(body["ai_run_id"])
+        customer_message_id = uuid.UUID(body["customer_message_id"])
+        escalation_id = uuid.UUID(body["escalation_id"])
 
         assert body["conversation_id"] == str(live_conversation)
         assert body["trace_id"] == str(trace_id)
         assert uuid.UUID(body["customer_message_id"])
         assert uuid.UUID(body["ai_run_id"])
         assert body["succeeded"] is True
-        assert body["pipeline_stage"] == PipelineStage.DECISION_MADE.value
+        assert body["pipeline_stage"] == PipelineStage.ESCALATED.value
         assert body["intent"] == IntentType.ORDER_STATUS.value
-        assert body["decision"] == DecisionType.RETRIEVE_INFORMATION.value
+        assert body["decision"] == DecisionType.ESCALATE.value
 
-        ai_run_id = uuid.UUID(body["ai_run_id"])
-        customer_message_id = uuid.UUID(body["customer_message_id"])
+        assert body["assistant_message_id"] is None
+        assert body["response"] is None
+        assert uuid.UUID(body["escalation_id"])
+        assert body.get("failure_code") is None
+        assert body.get("failure_retryable") is None
+
+        with test_session_factory() as session:
+            escalation = session.get(
+                EscalationModel,
+                escalation_id,
+            )
+
+        assert escalation is not None
+        assert escalation.ai_run_id == ai_run_id
+        assert escalation.trigger_message_id == customer_message_id
+        assert escalation.reason_code == (
+            DecisionReasonCode.OPERATIONAL_LOOKUP_UNAVAILABLE.value
+        )
 
         with test_session_factory() as session:
             message = session.scalar(select(MessageModel)
