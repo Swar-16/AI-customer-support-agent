@@ -16,7 +16,7 @@ from packages.database.models.support.message import MessageModel
 from packages.database.models.support.user import UserModel
 from packages.database.session import create_session_factory
 from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
-
+from packages.ai.orchestration.state import PipelineStage
 
 pytestmark = [
     pytest.mark.integration,
@@ -172,7 +172,7 @@ def test_full_application_with_real_groq_and_postgres(live_settings, live_sessio
     result = services.process_customer_message.execute(
         ProcessCustomerMessageCommand(
             conversation_id=conversation_id,
-            customer_message="I was charged twice for order ORD-123. Please help me understand what happened.",
+            customer_message="Hello, what types of help can I get from you?",
             principal=principal,
             trace_id=trace_id,
         )
@@ -183,6 +183,11 @@ def test_full_application_with_real_groq_and_postgres(live_settings, live_sessio
     assert result.trace_id == trace_id
     assert result.intent is not None
     assert result.decision is not None
+    assert result.succeeded is True
+    assert result.pipeline_stage is PipelineStage.GUARDRAILS_COMPLETED
+    assert result.response is not None
+    assert result.assistant_message_id is not None
+    assert result.escalation_id is None
 
     # Database verification
     with live_session_factory() as session:
@@ -212,11 +217,12 @@ def test_full_application_with_real_groq_and_postgres(live_settings, live_sessio
         assert len(intent_calls) == 1
         intent_call = intent_calls[0]
 
+        assert len(llm_calls) == 1
         for llm_call in llm_calls:
             assert llm_call.status == "success"
             assert llm_call.provider == "groq"
             assert llm_call.model
-            assert llm_call.purpose in {"intent_classification", "answer_generation",}
+            assert llm_call.purpose == "intent_classification"
             assert llm_call.input_tokens > 0
             assert llm_call.output_tokens > 0
             assert llm_call.total_tokens > 0

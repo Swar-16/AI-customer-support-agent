@@ -27,12 +27,10 @@ class ResponsePresencePolicy(GuardrailPolicy):
     """
     Ensure response-producing decisions actually have customer-visible text.
 
-    At the moment, ANSWER and RETRIEVE_INFORMATION are expected to eventually produce a response before guardrail evaluation.
-
-    Clarification/escalation/refusal/action paths may have separate response generation strategies later and therefore are not handled here.
+    ANSWER and RETRIEVE_INFORMATION require an answer. ASK_CLARIFICATION requires a deterministic customer-facing clarification prompt.
     """
     policy_id = "response_presence"
-    _RESPONSE_REQUIRED_DECISIONS = frozenset({DecisionType.ANSWER, DecisionType.RETRIEVE_INFORMATION,})
+    _RESPONSE_REQUIRED_DECISIONS = frozenset({DecisionType.ANSWER, DecisionType.RETRIEVE_INFORMATION, DecisionType.ASK_CLARIFICATION,})
 
     def evaluate(self, context: GuardrailContext) -> GuardrailResult | None:
         if context.decision.decision not in self._RESPONSE_REQUIRED_DECISIONS:
@@ -50,12 +48,13 @@ class ResponsePresencePolicy(GuardrailPolicy):
 
 class DecisionCompatibilityPolicy(GuardrailPolicy):
     """
-    Prevent a generated answer from being exposed for a workflow decision that should not produce a normal authoritative customer answer.
+    Prevent customer-visible text from being exposed for a workflow decision that does not permit a response.
 
-    This protects orchestration boundaries: generation must not silently override a deterministic escalation, refusal, or clarification decision.
+    Clarification is response-compatible because orchestration constructs its text from an application-controlled allowlist.
+    Escalation and action paths remain incompatible with generated customer responses.
     """
     policy_id = "decision_compatibility"
-    _DIRECT_RESPONSE_DECISIONS = frozenset({DecisionType.ANSWER, DecisionType.RETRIEVE_INFORMATION,})
+    _DIRECT_RESPONSE_DECISIONS = frozenset({DecisionType.ANSWER, DecisionType.RETRIEVE_INFORMATION, DecisionType.ASK_CLARIFICATION,})
 
     def evaluate(self, context: GuardrailContext) -> GuardrailResult | None:
         if context.generated_response is None:
@@ -71,6 +70,92 @@ class DecisionCompatibilityPolicy(GuardrailPolicy):
             policy_id=self.policy_id,
             metadata={"decision": context.decision.decision.value,},
         )
+
+class PromptManipulationPolicy(GuardrailPolicy):
+    """
+    Detect narrow, explicit attempts to manipulate the assistant's trusted instructions or extract hidden prompt content.
+
+    This is deliberately not a general toxicity, sentiment, or keyword classifier. Angry language, criticism, requests
+    for human support, and disagreements with company policy must not be treated as prompt manipulation.
+
+    Matching customer text is never copied into the result or telemetry.
+    """
+    policy_id = "prompt_manipulation"
+    _OVERRIDE_INSTRUCTION_PATTERN = re.compile(
+        r"\b(?:ignore|disregard|forget|override|bypass)\b"
+        r".{0,80}"
+        r"\b(?:previous|prior|system|developer|hidden|original)\b"
+        r".{0,50}"
+        r"\b(?:instruction|instructions|prompt|prompts|rule|rules|message|messages)\b",
+        re.IGNORECASE | re.DOTALL,
+    )
+    _EXTRACT_PROMPT_PATTERN = re.compile(
+        r"\b(?:show|reveal|display|print|repeat|provide|expose|"
+        r"write|give|tell)\b"
+        r".{0,80}"
+        r"\b(?:system\s+prompt|developer\s+message|"
+        r"hidden\s+instructions?|internal\s+instructions?|"
+        r"initial\s+prompt|secret\s+prompt)\b",
+        re.IGNORECASE | re.DOTALL,
+    )
+    _QUESTION_ABOUT_HIDDEN_INSTRUCTIONS_PATTERN = re.compile(
+        r"\b(?:what|which)\b"
+        r".{0,40}"
+        r"\b(?:system\s+prompt|developer\s+message|"
+        r"hidden\s+instructions?|internal\s+instructions?)\b",
+        re.IGNORECASE | re.DOTALL,
+    )
+    _ROLE_INJECTION_PATTERN = re.compile(
+        r"(?:"
+        r"<\s*(?:system|developer)\s*>"
+        r"|"
+        r"\[\s*(?:system|developer)\s*\]"
+        r"|"
+        r"#{2,}\s*(?:system|developer)\b"
+        r"|"
+        r"\b(?:system|developer)\s*:\s*"
+        r"(?:ignore|override|disregard|you\s+must)\b"
+        r")",
+        re.IGNORECASE,
+    )
+    _TRUST_REASSIGNMENT_PATTERN = re.compile(
+        r"\b(?:treat|interpret|regard|consider)\b"
+        r".{0,60}"
+        r"\b(?:following|next|my)\b"
+        r".{0,40}"
+        r"\b(?:text|message|instructions?)\b"
+        r".{0,50}"
+        r"\b(?:as|to\s+be)\b"
+        r".{0,20}"
+        r"\b(?:system|developer|trusted)\b",
+        re.IGNORECASE | re.DOTALL,
+    )
+    _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+        ("instruction_override", _OVERRIDE_INSTRUCTION_PATTERN,),
+        ("prompt_extraction", _EXTRACT_PROMPT_PATTERN,),
+        ("hidden_instruction_question", _QUESTION_ABOUT_HIDDEN_INSTRUCTIONS_PATTERN,),
+        ("role_injection", _ROLE_INJECTION_PATTERN,),
+        ("trust_reassignment", _TRUST_REASSIGNMENT_PATTERN,),
+    )
+
+    def evaluate(self, context: GuardrailContext) -> GuardrailResult | None:
+        if not isinstance(context, GuardrailContext):
+            raise TypeError("context must be a GuardrailContext instance")
+
+        normalized_message = " ".join(context.customer_message.split())
+        for category, pattern in self._PATTERNS:
+            if pattern.search(normalized_message) is None:
+                continue
+
+            return GuardrailResult(
+                outcome=GuardrailOutcome.REFUSE,
+                reason_code=GuardrailReasonCode.PROMPT_MANIPULATION_ATTEMPT,
+                reason_summary="The customer message attempted to override trusted instructions or obtain protected prompt content.",
+                policy_id=self.policy_id,
+                metadata={"category": category,},
+            )
+
+        return None
 
 class SensitiveActionClaimPolicy(GuardrailPolicy):
     """

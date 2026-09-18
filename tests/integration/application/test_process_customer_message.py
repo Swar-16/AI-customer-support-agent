@@ -19,6 +19,7 @@ from packages.application.composition.ai_pipeline_factory import (
     AIPipelineFactory,
 )
 from packages.application.conversations.process_customer_message import (
+    ProcessAcceptedCustomerMessageCommand,
     ProcessCustomerMessage,
     ProcessCustomerMessageCommand,
 )
@@ -66,6 +67,8 @@ from packages.application.composition.knowledge_application_factory import (
 from packages.knowledge.embeddings.input.contextual import (
     ContextualEmbeddingInputBuilder,
 )
+from packages.database.models.support.escalation import EscalationModel
+from packages.ai.decision.schemas import DecisionReasonCode
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +134,88 @@ class DeterministicEmbeddingProvider(EmbeddingProvider):
         text: str,
     ) -> list[float]:
         return [1.0, 0.0, 0.0]
+    
+class UoWActivityTracker:
+    def __init__(self) -> None:
+        self.active_count = 0
+        self.maximum_active_count = 0
+
+    def entered(self) -> None:
+        self.active_count += 1
+        self.maximum_active_count = max(
+            self.maximum_active_count,
+            self.active_count,
+        )
+
+    def exited(self) -> None:
+        if self.active_count <= 0:
+            raise AssertionError(
+                "Unit-of-work activity counter became unbalanced."
+            )
+
+        self.active_count -= 1
+
+
+class TrackingUnitOfWork:
+    def __init__(
+        self,
+        *,
+        session_factory,
+        tracker: UoWActivityTracker,
+    ) -> None:
+        self._inner = SqlAlchemyUnitOfWork(
+            session_factory=session_factory,
+        )
+        self._tracker = tracker
+        self._entered = False
+
+    def __enter__(self):
+        entered_uow = self._inner.__enter__()
+
+        self._tracker.entered()
+        self._entered = True
+
+        # Return the real UoW so existing repository validation and
+        # attribute access remain unchanged.
+        return entered_uow
+
+    def __exit__(
+        self,
+        exception_type,
+        exception,
+        traceback,
+    ):
+        try:
+            return self._inner.__exit__(
+                exception_type,
+                exception,
+                traceback,
+            )
+        finally:
+            if self._entered:
+                self._tracker.exited()
+                self._entered = False
+
+
+class TransactionBoundaryEmbeddingProvider(
+    DeterministicEmbeddingProvider
+):
+    def __init__(
+        self,
+        *,
+        tracker: UoWActivityTracker,
+    ) -> None:
+        self._tracker = tracker
+        self.query_call_count = 0
+
+    def embed_query(self, text: str):
+        assert self._tracker.active_count == 0, (
+            "The embedding provider was invoked while a database "
+            "unit of work was active."
+        )
+
+        self.query_call_count += 1
+        return super().embed_query(text)
 
 
 # ---------------------------------------------------------------------------
@@ -462,7 +547,7 @@ def _customer_principal(
 # ---------------------------------------------------------------------------
 
 
-def test_customer_message_persists_complete_ai_trace_and_assistant_response(
+def test_insufficient_knowledge_persists_escalation_without_assistant_response(
     service,
     test_session_factory,
     seeded_conversation,
@@ -495,27 +580,17 @@ def test_customer_message_persists_complete_ai_trace_and_assistant_response(
     assert result.conversation_id == conversation_id
     assert result.trace_id == trace_id
 
-    assert (
-        result.pipeline_stage
-        is PipelineStage.GUARDRAILS_COMPLETED
-    )
-
+    assert result.pipeline_stage is PipelineStage.ESCALATED
     assert result.intent == "payment_issue"
     assert result.decision == "retrieve_information"
 
     assert result.customer_message_id is not None
-    assert result.assistant_message_id is not None
+    assert result.assistant_message_id is None
+    assert result.response is None
+    assert result.escalation_id is not None
 
-    assert result.response == (
-        "I don't have enough verified information "
-        "in the available knowledge to answer "
-        "this reliably."
-    )
-
-    assert (
-        result.assistant_message_id
-        != result.customer_message_id
-    )
+    assert result.failure_code is None
+    assert result.failure_retryable is None
 
     # ------------------------------------------------------------------
     # Verify persisted database state
@@ -539,36 +614,14 @@ def test_customer_message_persists_complete_ai_trace_and_assistant_response(
         # Conversation message ordering
         # --------------------------------------------------------------
 
-        assert len(messages) == 2
+        assert len(messages) == 1
 
         customer_message = messages[0]
-        assistant_message = messages[1]
 
-        assert (
-            customer_message.id
-            == result.customer_message_id
-        )
-
+        assert customer_message.id == result.customer_message_id
         assert customer_message.role == "customer"
         assert customer_message.content == customer_text
         assert customer_message.sequence_number == 1
-
-        assert (
-            assistant_message.id
-            == result.assistant_message_id
-        )
-
-        assert assistant_message.role == "assistant"
-        assert (
-            assistant_message.content
-            == result.response
-        )
-        assert assistant_message.sequence_number == 2
-
-        assert (
-            assistant_message.conversation_id
-            == conversation_id
-        )
 
         # --------------------------------------------------------------
         # AI run
@@ -586,10 +639,7 @@ def test_customer_message_persists_complete_ai_trace_and_assistant_response(
             ai_run.trigger_message_id
             == customer_message.id
         )
-        assert (
-            ai_run.response_message_id
-            == assistant_message.id
-        )
+        assert ai_run.response_message_id is None
 
         assert (
             ai_run.conversation_id
@@ -827,7 +877,7 @@ def test_customer_message_persists_complete_ai_trace_and_assistant_response(
             "decision_made",
             "retrieval_completed",
             "response_generated",
-            "guardrails_completed",
+            "escalated",
         }
 
         assert started_stages == expected_stages
@@ -856,15 +906,106 @@ def test_customer_message_persists_complete_ai_trace_and_assistant_response(
         )
 
         assert customer_text not in serialized_stage_metadata
-        assert result.response not in serialized_stage_metadata
+
+
+def test_processes_previously_accepted_customer_message_without_duplication(
+    service,
+    test_session_factory,
+    seeded_conversation,
+):
+    conversation_id = (
+        seeded_conversation["conversation_id"]
+    )
+    trace_id = uuid7()
+
+    accepted_content = (
+        "I was charged twice for order ORD-123. "
+        "Can you help?"
+    )
+
+    # Simulate the short first-message acceptance transaction.
+    with test_session_factory() as session:
+        conversation = session.get(
+            ConversationModel,
+            conversation_id,
+        )
+
+        assert conversation is not None
+
+        accepted_message = MessageModel(
+            conversation_id=conversation_id,
+            role="customer",
+            content=accepted_content,
+            sequence_number=1,
+            metadata_={},
+        )
+
+        session.add(accepted_message)
+
+        # Sequence 1 has already been consumed by the accepted message.
+        conversation.next_message_sequence = 2
+
+        session.flush()
+
+        accepted_message_id = accepted_message.id
+        assert accepted_message_id is not None
+
+        session.commit()
+
+    result = service.execute_accepted(
+        ProcessAcceptedCustomerMessageCommand(
+            conversation_id=conversation_id,
+            customer_message_id=accepted_message_id,
+            principal=_customer_principal(
+                seeded_conversation
+            ),
+            trace_id=trace_id,
+        )
+    )
+
+    assert result.conversation_id == conversation_id
+    assert result.customer_message_id == accepted_message_id
+    assert result.trace_id == trace_id
+
+    with test_session_factory() as session:
+        customer_messages = tuple(
+            session.scalars(
+                select(MessageModel)
+                .where(
+                    MessageModel.conversation_id
+                    == conversation_id,
+                    MessageModel.role == "customer",
+                )
+                .order_by(
+                    MessageModel.sequence_number.asc()
+                )
+            )
+        )
+
+        ai_run = session.get(
+            AIRunModel,
+            result.ai_run_id,
+        )
+
+    # Processing must reuse the accepted trigger rather than inserting
+    # another customer message.
+    assert len(customer_messages) == 1
+    assert customer_messages[0].id == accepted_message_id
+    assert customer_messages[0].content == accepted_content
+    assert customer_messages[0].sequence_number == 1
+
+    assert ai_run is not None
+    assert ai_run.conversation_id == conversation_id
+    assert ai_run.trigger_message_id == accepted_message_id
+    assert ai_run.trace_id == trace_id
 
 
 # ---------------------------------------------------------------------------
-# No-generated-response path
+# Clarification-response path
 # ---------------------------------------------------------------------------
 
 
-def test_clarification_decision_completes_without_assistant_message(
+def test_clarification_decision_persists_safe_assistant_message(
     test_session_factory,
     seeded_conversation,
     embedding_provider,
@@ -873,13 +1014,7 @@ def test_clarification_decision_completes_without_assistant_message(
     grounding_context_budget,
     knowledge_application
 ):
-    """
-    A successful workflow decision does not imply that an assistant message
-    exists.
-
-    The current pipeline can stop at DECISION_MADE for clarification because
-    dedicated clarification-response generation has not yet been added.
-    """
+    """Clarification is a completed customer-visible response, not a silent success."""
 
     def structured_resolver(
         system_prompt: str,
@@ -947,15 +1082,10 @@ def test_clarification_decision_completes_without_assistant_message(
 
     assert result.succeeded is True
 
-    assert (
-        result.pipeline_stage
-        is PipelineStage.DECISION_MADE
-    )
-
+    assert result.pipeline_stage is PipelineStage.GUARDRAILS_COMPLETED
     assert result.decision == "ask_clarification"
-
-    assert result.assistant_message_id is None
-    assert result.response is None
+    assert result.assistant_message_id is not None
+    assert result.response == "Could you tell me what you need help with?"
 
     with test_session_factory() as session:
         messages = tuple(
@@ -968,9 +1098,11 @@ def test_clarification_decision_completes_without_assistant_message(
             )
         )
 
-        # Only the triggering customer message exists.
-        assert len(messages) == 1
+        assert len(messages) == 2
         assert messages[0].role == "customer"
+        assert messages[1].role == "assistant"
+        assert messages[1].content == result.response
+        assert messages[1].id == result.assistant_message_id
 
         ai_run = session.get(
             AIRunModel,
@@ -980,7 +1112,148 @@ def test_clarification_decision_completes_without_assistant_message(
         assert ai_run is not None
         assert ai_run.status == "completed"
 
+        assert ai_run.response_message_id == result.assistant_message_id
+
+        llm_calls = tuple(
+            session.scalars(
+                select(LLMCallModel).where(
+                    LLMCallModel.ai_run_id == result.ai_run_id
+                )
+            )
+        )
+
+        # The clarification copy is deterministic and allowlisted. Only intent
+        # classification invokes the provider.
+        assert len(llm_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Unsupported operational-retrieval path
+# ---------------------------------------------------------------------------
+
+
+def test_unavailable_operational_lookup_persists_honest_escalation(
+    test_session_factory,
+    seeded_conversation,
+    embedding_provider,
+    embedding_input_descriptor,
+    retrieval_profile,
+    grounding_context_budget,
+    knowledge_application,
+):
+    def structured_resolver(
+        system_prompt: str,
+        user_prompt: str,
+        response_model,
+    ):
+        if response_model is IntentResult:
+            return {
+                "intent": "order_status",
+                "confidence": 0.99,
+                "entities": {
+                    "order_id": "ORD-12345",
+                    "transaction_id": None,
+                    "subscription_id": None,
+                    "account_id": None,
+                    "issue_type": None,
+                    "attributes": {},
+                },
+                "needs_clarification": False,
+                "reason_summary": "The customer requested an order status.",
+            }
+
+        raise AssertionError(
+            "Generation must not be invoked for unsupported operational retrieval."
+        )
+
+    provider = MockLLMProvider(structured_resolver=structured_resolver)
+    pipeline_factory = AIPipelineFactory(base_provider=provider)
+
+    def uow_factory():
+        return SqlAlchemyUnitOfWork(session_factory=test_session_factory)
+
+    service = ProcessCustomerMessage(
+        uow_factory=uow_factory,
+        pipeline_factory=pipeline_factory,
+        embedding_provider=embedding_provider,
+        embedding_input_descriptor=embedding_input_descriptor,
+        retrieval_profile=retrieval_profile,
+        grounding_context_budget=grounding_context_budget,
+        knowledge_application=knowledge_application,
+    )
+    conversation_id = seeded_conversation["conversation_id"]
+
+    result = service.execute(
+        ProcessCustomerMessageCommand(
+            conversation_id=conversation_id,
+            customer_message="Where is order ORD-12345?",
+            principal=_customer_principal(seeded_conversation),
+        )
+    )
+
+    assert result.succeeded is True
+    assert result.pipeline_stage is PipelineStage.ESCALATED
+    assert result.intent == "order_status"
+    assert result.decision == "escalate"
+
+    assert result.failure_code is None
+    assert result.failure_retryable is None
+
+    assert result.assistant_message_id is None
+    assert result.response is None
+    assert result.escalation_id is not None
+
+    with test_session_factory() as session:
+        messages = tuple(
+            session.scalars(
+                select(MessageModel)
+                .where(
+                    MessageModel.conversation_id
+                    == conversation_id
+                )
+                .order_by(MessageModel.sequence_number)
+            )
+        )
+
+        ai_run = session.get(
+            AIRunModel,
+            result.ai_run_id,
+        )
+
+        escalation = session.get(
+            EscalationModel,
+            result.escalation_id,
+        )
+
+        # The accepted customer message remains persisted, but no
+        # unsupported operational result is fabricated.
+        assert len(messages) == 1
+        assert messages[0].role == "customer"
+
+        assert ai_run is not None
+        assert ai_run.status == "completed"
+        assert ai_run.error_code is None
         assert ai_run.response_message_id is None
+
+        assert escalation is not None
+        assert escalation.conversation_id == conversation_id
+        assert escalation.ai_run_id == result.ai_run_id
+        assert escalation.trigger_message_id == result.customer_message_id
+        assert escalation.reason_code == DecisionReasonCode.OPERATIONAL_LOOKUP_UNAVAILABLE.value
+        assert escalation.status == "open"
+
+        retrieval_runs = tuple(
+            session.scalars(
+                select(RetrievalRunModel).where(
+                    RetrievalRunModel.ai_run_id
+                    == result.ai_run_id
+                )
+            )
+        )
+
+        # Operational lookup is not incorrectly sent through the
+        # knowledge-document retrieval subsystem.
+        assert retrieval_runs == ()
 
 
 # ---------------------------------------------------------------------------
@@ -1041,6 +1314,8 @@ def test_provider_timeout_persists_failed_run_without_assistant_message(
     # ------------------------------------------------------------------
 
     assert result.succeeded is False
+    assert result.failure_code == "INTENT_PROVIDER_TIMEOUT"
+    assert result.failure_retryable is True
     assert result.intent is None
     assert result.decision is None
 

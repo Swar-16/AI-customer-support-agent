@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 from functools import lru_cache
+import os
 
 from packages.application.composition.application_factory import ApplicationServices, create_application
 from packages.config.settings import Settings, get_settings
@@ -14,6 +15,11 @@ class APIBootstrapError(RuntimeError):
     This is a startup/configuration failure, not a normal request failure.
     """
 
+@lru_cache(maxsize=1)
+def get_runtime_settings() -> Settings:
+    """Resolve the API environment once for services and browser security."""
+    environment = os.environ.get("APP_ENV", "development").strip().lower()
+    return get_settings(environment)
 
 def build_application_services(*, settings: Settings | None = None) -> ApplicationServices:
     """
@@ -32,7 +38,7 @@ def build_application_services(*, settings: Settings | None = None) -> Applicati
     - make external API calls
     """
 
-    resolved_settings = settings if settings is not None else get_settings()
+    resolved_settings = settings if settings is not None else get_runtime_settings()
     if not isinstance(resolved_settings, Settings):
         raise TypeError("settings must be a Settings instance")
 
@@ -74,5 +80,5 @@ def clear_application_services_cache() -> None:
 
     Intended primarily for tests and controlled application reinitialization.
     """
-
     get_application_services.cache_clear()
+    get_runtime_settings.cache_clear()

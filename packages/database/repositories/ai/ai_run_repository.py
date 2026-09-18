@@ -30,8 +30,7 @@ class AIRunRepository:
     # Write operations
     def add(self, run: AIRunModel) -> None:
         """
-        Add an AI run to the current transaction.
-        No commit is performed here.
+        Add an AI run to the current transaction. No commit is performed here.
         """
         if not isinstance(run, AIRunModel):
             raise TypeError("run must be an AIRunModel")
@@ -40,9 +39,8 @@ class AIRunRepository:
 
     # Lookup operations
     def get_by_id(self, run_id: uuid.UUID, ) -> AIRunModel | None:
-        statement = (
-            select(AIRunModel)
-            .where(AIRunModel.id == run_id)
+        statement = (select(AIRunModel)
+                     .where(AIRunModel.id == run_id)
         )
 
         return self._session.scalar(statement)
@@ -51,13 +49,11 @@ class AIRunRepository:
         """
         Return all runs belonging to one distributed/application trace.
 
-        trace_id is intentionally not assumed unique because child runs may
-        share the same trace.
+        trace_id is intentionally not assumed unique because child runs may share the same trace.
         """
-        statement = (
-            select(AIRunModel)
-            .where(AIRunModel.trace_id == trace_id)
-            .order_by(AIRunModel.started_at.asc())
+        statement = (select(AIRunModel)
+                     .where(AIRunModel.trace_id == trace_id)
+                     .order_by(AIRunModel.started_at.asc())
         )
 
         return tuple(self._session.scalars(statement))
@@ -69,13 +65,10 @@ class AIRunRepository:
         if limit <= 0:
             raise ValueError("limit must be greater than zero")
 
-        statement = (
-            select(AIRunModel)
-            .where(
-                AIRunModel.conversation_id == conversation_id
-            )
-            .order_by(AIRunModel.started_at.desc())
-            .limit(limit)
+        statement = (select(AIRunModel)
+                     .where(AIRunModel.conversation_id == conversation_id)
+                     .order_by(AIRunModel.started_at.desc())
+                     .limit(limit)
         )
 
         return tuple(self._session.scalars(statement))
@@ -86,12 +79,47 @@ class AIRunRepository:
 
         Multiple runs are possible because retries/reprocessing may happen.
         """
-        statement = (
-            select(AIRunModel)
-            .where(
-                AIRunModel.trigger_message_id == message_id
-            )
-            .order_by(AIRunModel.started_at.asc())
+        statement = (select(AIRunModel)
+                     .where(AIRunModel.trigger_message_id == message_id)
+                     .order_by(AIRunModel.started_at.asc())
+        )
+
+        return tuple(self._session.scalars(statement))
+    
+    def list_by_response_message_ids(self, response_message_ids: Sequence[uuid.UUID]) -> Sequence[AIRunModel]:
+        """
+        Return AI runs associated with a bounded collection of assistant response messages.
+
+        This bulk lookup supports conversation-history enrichment without issuing one query per message.
+
+        Multiple runs are returned if legacy or inconsistent data associates more than one run with the same response message.
+        Resolution of that ambiguity belongs to the application query layer.
+        """
+        if isinstance(response_message_ids, (str, bytes)):
+            raise TypeError("response_message_ids must be a sequence of UUIDs")
+
+        try:
+            raw_ids = tuple(response_message_ids)
+            
+        except TypeError as exc:
+            raise TypeError("response_message_ids must be a sequence of UUIDs") from exc
+
+        for response_message_id in raw_ids:
+            if not isinstance(response_message_id, uuid.UUID):
+                raise TypeError("each response_message_id must be a UUID")
+
+        # Avoid unnecessary SQL and PostgreSQL IN () edge cases.
+        if not raw_ids:
+            return ()
+
+        # Deduplicate inputs while preserving caller order.
+        unique_ids = tuple(dict.fromkeys(raw_ids))
+
+        statement = (select(AIRunModel)
+                     .where(AIRunModel.response_message_id.in_(unique_ids))
+                     .order_by(AIRunModel.response_message_id.asc(),
+                               AIRunModel.started_at.desc(), 
+                               AIRunModel.id.desc())
         )
 
         return tuple(self._session.scalars(statement))
@@ -105,11 +133,10 @@ class AIRunRepository:
         if limit <= 0:
             raise ValueError("limit must be greater than zero")
 
-        statement = (
-            select(AIRunModel)
-            .where(AIRunModel.status == "running")
-            .order_by(AIRunModel.started_at.asc())
-            .limit(limit)
+        statement = (select(AIRunModel)
+                     .where(AIRunModel.status == "running")
+                     .order_by(AIRunModel.started_at.asc())
+                     .limit(limit)
         )
 
         return tuple(self._session.scalars(statement))
@@ -120,8 +147,7 @@ class AIRunRepository:
         """
         Transition a run to completed state.
 
-        The repository applies persistence changes only.
-        Business-level transition authorization belongs elsewhere.
+        The repository applies persistence changes only. Business-level transition authorization belongs elsewhere.
         """
         if total_latency_ms < 0:
             raise ValueError("total_latency_ms cannot be negative")
@@ -130,16 +156,13 @@ class AIRunRepository:
         run.response_message_id = response_message_id
         run.completed_at = completed_at
         run.total_latency_ms = total_latency_ms
-
         run.error_code = None
         run.error_message = None
 
     def mark_failed(self, run: AIRunModel, *, completed_at: datetime, 
                     total_latency_ms: int, error_code: str, error_message: str
     ) -> None:
-        """
-        Transition a run to failed state.
-        """
+        """Transition a run to failed state."""
         if total_latency_ms < 0:
             raise ValueError("total_latency_ms cannot be negative")
 
@@ -155,7 +178,6 @@ class AIRunRepository:
         run.status = "failed"
         run.completed_at = completed_at
         run.total_latency_ms = total_latency_ms
-
         run.error_code = normalized_code
         run.error_message = normalized_message
 
@@ -171,7 +193,6 @@ class AIRunRepository:
         """
         Flush pending ORM changes without committing.
 
-        Useful when the caller needs generated database values (for example
-        UUID/default timestamps) before the transaction is committed.
+        Useful when the caller needs generated database values (for example UUID/default timestamps) before the transaction is committed.
         """
         self._session.flush()

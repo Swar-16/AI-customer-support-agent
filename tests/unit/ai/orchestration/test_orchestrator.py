@@ -102,6 +102,7 @@ from packages.application.ai.answer_service import (
     UnsupportedAnswerDecisionError,
     UnsupportedRetrievalKindError,
 )
+from packages.guardrails.evaluator import GuardrailEvaluator
 
 
 # ===========================================================================
@@ -176,10 +177,10 @@ def make_intent(
 
 def make_terminal_answer_decision() -> DecisionResult:
     """
-    Decision that intentionally stops orchestration at DECISION_MADE.
+    Direct-answer decision unsupported by the current V1 executor.
 
-    ANSWER is useful as the default decision for tests that care only about
-    classification/decision coordination and should not enter retrieval.
+    It remains useful for tests that verify fail-closed handling of a valid
+    decision whose execution workflow has not been implemented.
     """
 
     return DecisionResult(
@@ -367,6 +368,22 @@ def grounded_orchestrator(
         intent_classifier=intent_classifier,
         decision_engine=decision_engine,
         answer_service=answer_service,
+        observer=observer,
+    )
+
+
+@pytest.fixture
+def guarded_orchestrator(
+    intent_classifier,
+    decision_engine,
+    answer_service,
+    observer,
+) -> AIOrchestrator:
+    return AIOrchestrator(
+        intent_classifier=intent_classifier,
+        decision_engine=decision_engine,
+        answer_service=answer_service,
+        guardrail_evaluator=GuardrailEvaluator(),
         observer=observer,
     )
 
@@ -712,7 +729,7 @@ class TestIntentClassification:
             make_terminal_answer_decision()
         )
 
-        orchestrator.process_message(
+        state = orchestrator.process_message(
             **make_ids(),
             customer_message="hello",
         )
@@ -877,7 +894,7 @@ class TestDecisionStage:
             make_terminal_answer_decision()
         )
 
-        orchestrator.process_message(
+        state = orchestrator.process_message(
             **make_ids(),
             customer_message="hello",
         )
@@ -886,7 +903,7 @@ class TestDecisionStage:
             intent_result=intent,
         )
 
-    def test_terminal_decision_is_written_to_state(
+    def test_unsupported_answer_decision_is_written_before_failure(
         self,
         orchestrator,
         intent_classifier,
@@ -905,51 +922,77 @@ class TestDecisionStage:
 
         assert state.intent_result is intent
         assert state.decision_result is decision
-        assert (
-            state.stage
-            is PipelineStage.DECISION_MADE
+        error = extract_pipeline_error(state)
+        assert error.code == "DECISION_WORKFLOW_UNSUPPORTED"
+        assert error.metadata == {"decision": "answer"}
+
+    def test_clarification_produces_allowlisted_customer_response(
+        self,
+        guarded_orchestrator,
+        intent_classifier,
+        decision_engine,
+        answer_service,
+    ):
+        intent_classifier.classify.return_value = (
+            make_intent()
+        )
+        decision_engine.decide.return_value = (
+            make_ask_clarification_decision()
         )
 
-    @pytest.mark.parametrize(
-        "decision",
-        [
-            pytest.param(
-                make_terminal_answer_decision(),
-                id="answer",
-            ),
-            pytest.param(
-                make_ask_clarification_decision(),
-                id="clarification",
-            ),
-            pytest.param(
-                make_escalation_decision(),
-                id="escalation",
-            ),
-        ],
-    )
-    def test_non_retrieval_decisions_stop_at_decision_made(
+        state = guarded_orchestrator.process_message(
+            **make_ids(),
+            customer_message="hello",
+        )
+
+        assert state.stage is PipelineStage.GUARDRAILS_COMPLETED
+        assert state.generated_response == (
+            "Could you provide the order ID so I can help with this request?"
+        )
+        answer_service.answer.assert_not_called()
+
+    def test_unknown_clarification_key_uses_generic_response(
+        self,
+        guarded_orchestrator,
+        intent_classifier,
+        decision_engine,
+    ):
+        intent_classifier.classify.return_value = make_intent()
+        decision_engine.decide.return_value = DecisionResult(
+            decision=DecisionType.ASK_CLARIFICATION,
+            reason_code=DecisionReasonCode.MISSING_REQUIRED_INFORMATION,
+            reason_summary="Additional information is required.",
+            confidence=1.0,
+            required_information=("internal_future_requirement",),
+        )
+
+        state = guarded_orchestrator.process_message(
+            **make_ids(),
+            customer_message="hello",
+        )
+
+        assert state.stage is PipelineStage.GUARDRAILS_COMPLETED
+        assert state.generated_response == (
+            "Could you provide a little more detail so I can help you correctly?"
+        )
+        assert "internal_future_requirement" not in state.generated_response
+
+    def test_escalation_decision_reaches_escalated_state(
         self,
         grounded_orchestrator,
         intent_classifier,
         decision_engine,
         answer_service,
-        decision,
     ):
-        intent_classifier.classify.return_value = (
-            make_intent()
-        )
-        decision_engine.decide.return_value = decision
+        intent_classifier.classify.return_value = make_intent()
+        decision_engine.decide.return_value = make_escalation_decision()
 
         state = grounded_orchestrator.process_message(
             **make_ids(),
             customer_message="hello",
         )
 
-        assert (
-            state.stage
-            is PipelineStage.DECISION_MADE
-        )
-
+        assert state.stage is PipelineStage.ESCALATED
         answer_service.answer.assert_not_called()
 
     @pytest.mark.parametrize(
@@ -1691,7 +1734,7 @@ class TestObserverLifecycle:
             make_terminal_answer_decision()
         )
 
-        orchestrator.process_message(
+        state = orchestrator.process_message(
             **make_ids(),
             customer_message="hello",
         )
@@ -1718,7 +1761,12 @@ class TestObserverLifecycle:
             PipelineStage.DECISION_MADE,
         ]
 
-        observer.stage_failed.assert_not_called()
+        error = extract_pipeline_error(state)
+        observer.stage_failed.assert_called_once_with(
+            state=state,
+            stage=PipelineStage.DECISION_MADE,
+            error=error,
+        )
 
     def test_grounded_path_emits_complete_stage_sequence(
         self,
@@ -1875,10 +1923,8 @@ class TestObserverLifecycle:
             customer_message="hello",
         )
 
-        assert (
-            state.stage
-            is PipelineStage.DECISION_MADE
-        )
+        error = extract_pipeline_error(state)
+        assert error.code == "DECISION_WORKFLOW_UNSUPPORTED"
 
 
 # ===========================================================================
@@ -1898,7 +1944,7 @@ class TestExecutionOrdering:
             make_intent()
         )
         decision_engine.decide.return_value = (
-            make_terminal_answer_decision()
+            make_escalation_decision()
         )
 
         manager = MagicMock()
@@ -2041,7 +2087,7 @@ class TestStatelessReuse:
         ]
 
         decision_engine.decide.return_value = (
-            make_terminal_answer_decision()
+            make_escalation_decision()
         )
 
         first = orchestrator.process_message(
@@ -2055,10 +2101,7 @@ class TestStatelessReuse:
         )
 
         assert first.stage is PipelineStage.FAILED
-        assert (
-            second.stage
-            is PipelineStage.DECISION_MADE
-        )
+        assert second.stage is PipelineStage.ESCALATED
 
 
 # ===========================================================================
@@ -2136,7 +2179,7 @@ if HYPOTHESIS_AVAILABLE:
                 make_intent()
             )
             decision_engine.decide.return_value = (
-                make_terminal_answer_decision()
+                make_escalation_decision()
             )
 
             orchestrator = AIOrchestrator(
@@ -2149,10 +2192,7 @@ if HYPOTHESIS_AVAILABLE:
                 customer_message=message,
             )
 
-            assert (
-                state.stage
-                is PipelineStage.DECISION_MADE
-            )
+            assert state.stage is PipelineStage.ESCALATED
             assert (
                 state.customer_message
                 == message.strip()

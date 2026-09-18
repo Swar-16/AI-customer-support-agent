@@ -8,6 +8,7 @@ from packages.database.models.support.ticket_comment import TicketCommentModel
 from packages.database.models.support.feedback import FeedbackModel
 from packages.database.models.support.auth_session import AuthSessionModel
 from packages.database.models.support.user_credential import UserCredentialModel
+from packages.database.models.support.conversation_start_request import ConversationStartRequestModel
 
 from packages.database.models.audit.api_request import APIRequestModel
 from packages.database.models.audit.audit_event import AuditEventModel
@@ -31,7 +32,7 @@ from packages.database.models.knowledge import KnowledgeChunkEmbeddingModel
 
 __all__ = [
     "UserModel", "ConversationModel", "MessageModel", "EscalationModel", "TicketModel", "TicketCommentModel", "FeedbackModel",
-    "AuthSessionModel", "UserCredentialModel",
+    "AuthSessionModel", "UserCredentialModel", "ConversationStartRequestModel",
     "APIRequestModel", "AuditEventModel",
     "PromptVersionModel",
     "AIRunModel", "LLMCallModel", "IntentPredictionModel", "AIDecisionModel",

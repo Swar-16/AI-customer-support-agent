@@ -382,7 +382,10 @@ class ProcessKnowledgeVersion:
                         "version_number": failed.version_number,
                         "failure_code": failure_code,
                         "exception_type": type(processing_error).__name__,
-                        "initiated_by_admin_id": str(snapshot.initiated_by_user_id),
+                        **(
+                            {"initiated_by_admin_id": str(snapshot.initiated_by_admin_id)}
+                            if snapshot.initiated_by_admin_id is not None else {}
+                        ),
                     },
                     occurred_at=completed_at,
                 )

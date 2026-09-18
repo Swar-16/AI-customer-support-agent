@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
-
+from sqlalchemy import delete
 import pytest
 from fastapi.testclient import TestClient
 from uuid6 import uuid7
@@ -66,7 +66,7 @@ def _create_ai_run(
             "X-Trace-ID": str(trace_id),
         },
         json={
-            "message": "Where is my order ORD-12345?",
+            "message": "Hello, what types of help can I get from you?",
         },
     )
 
@@ -96,6 +96,19 @@ def _seed_retrieval_run(
     )
 
     ai_run_id = uuid.UUID(ai_result["ai_run_id"])
+
+    # # This test constructs retrieval telemetry explicitly below. The message
+    # # pipeline may also create retrieval telemetry depending on its decision,
+    # # so remove that incidental row to keep this repository/API test
+    # # deterministic.
+    # with test_session_factory() as session:
+    #     session.execute(
+    #         delete(RetrievalRunModel).where(
+    #             RetrievalRunModel.ai_run_id == ai_run_id
+    #         )
+    #     )
+    #     session.commit()
+
     embedding_call_id = uuid7()
     retrieval_run_id = uuid7()
 
@@ -439,6 +452,7 @@ class TestDashboardRetrievalRuns:
         first_response = admin_client.get(
             "/v1/dashboard/retrieval-runs",
             params={
+                "profile_identity": "integration-test-profile",
                 "limit": 1,
                 "offset": 0,
             },
@@ -446,6 +460,7 @@ class TestDashboardRetrievalRuns:
         second_response = admin_client.get(
             "/v1/dashboard/retrieval-runs",
             params={
+                "profile_identity": "integration-test-profile",
                 "limit": 1,
                 "offset": 1,
             },

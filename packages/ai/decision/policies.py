@@ -114,10 +114,10 @@ _INTENT_DECISION_POLICIES: Final[dict[IntentType, IntentDecisionPolicy]] = {
 
     IntentType.ORDER_STATUS: IntentDecisionPolicy(
         intent=IntentType.ORDER_STATUS,
-        default_decision=DecisionType.RETRIEVE_INFORMATION,
-        reason_code=DecisionReasonCode.OPERATIONAL_LOOKUP_REQUIRED,
-        retrieval_kind=RetrievalKind.OPERATIONAL,
+        default_decision=DecisionType.ESCALATE,
+        reason_code=DecisionReasonCode.OPERATIONAL_LOOKUP_UNAVAILABLE,
         potentially_actionable=True,
+        default_priority=DecisionPriority.NORMAL,
     ),
 
     IntentType.SHIPPING_ISSUE: IntentDecisionPolicy(
@@ -163,11 +163,10 @@ _INTENT_DECISION_POLICIES: Final[dict[IntentType, IntentDecisionPolicy]] = {
 
     IntentType.PRIVACY_SECURITY: IntentDecisionPolicy(
         intent=IntentType.PRIVACY_SECURITY,
-        default_decision=DecisionType.RETRIEVE_INFORMATION,
-        reason_code=DecisionReasonCode.POLICY_RETRIEVAL_REQUIRED,
-        retrieval_kind=RetrievalKind.KNOWLEDGE,
+        default_decision=DecisionType.ESCALATE,
+        reason_code=DecisionReasonCode.SECURITY_SENSITIVE_REQUEST,
         potentially_actionable=False,
-        default_priority=DecisionPriority.HIGH,
+        default_priority=DecisionPriority.URGENT,
     ),
 
     IntentType.GENERAL_QUESTION: IntentDecisionPolicy(
@@ -175,6 +174,20 @@ _INTENT_DECISION_POLICIES: Final[dict[IntentType, IntentDecisionPolicy]] = {
         default_decision=DecisionType.RETRIEVE_INFORMATION,
         reason_code=DecisionReasonCode.POLICY_RETRIEVAL_REQUIRED,
         retrieval_kind=RetrievalKind.KNOWLEDGE,
+        potentially_actionable=False,
+    ),
+
+    IntentType.CONVERSATIONAL: IntentDecisionPolicy(
+        intent=IntentType.CONVERSATIONAL,
+        default_decision=DecisionType.ANSWER,
+        reason_code=DecisionReasonCode.DIRECT_INFORMATIONAL_RESPONSE,
+        potentially_actionable=False,
+    ),
+
+    IntentType.OUT_OF_SCOPE: IntentDecisionPolicy(
+        intent=IntentType.OUT_OF_SCOPE,
+        default_decision=DecisionType.ANSWER,
+        reason_code=DecisionReasonCode.UNSUPPORTED_REQUEST,
         potentially_actionable=False,
     ),
 

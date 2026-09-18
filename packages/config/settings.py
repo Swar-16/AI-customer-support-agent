@@ -3,9 +3,10 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 from datetime import timedelta
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
+from urllib.parse import urlsplit
 
 class Settings(BaseSettings):
     app_env: str = "development"
@@ -20,6 +21,8 @@ class Settings(BaseSettings):
     auth_clock_skew_seconds: int = 30
     auth_login_max_failed_attempts: int = 5
     auth_login_lockout_minutes: int = 15
+    browser_allowed_origins: tuple[str, ...] = ()
+    auth_refresh_cookie_secure: bool = True
 
     ## Database
     database_host: str = "localhost"
@@ -29,6 +32,11 @@ class Settings(BaseSettings):
     database_password: str
     database_echo: bool = False
     
+    # Dashboard analytics
+    dashboard_analytics_statement_timeout_ms: int = 5_000
+    dashboard_analytics_cache_ttl_seconds: int = 15
+    dashboard_analytics_cache_max_entries: int = 256
+    
     llm_provider: str = "groq"
     
     ## Groq / LLM
@@ -37,6 +45,12 @@ class Settings(BaseSettings):
     groq_timeout_seconds: float = 30.0
     groq_max_completion_tokens: int = 1024
     groq_temperature: float = 0.0
+    
+    ## Conversation title generation
+    conversation_title_enabled: bool = True
+    conversation_title_max_input_characters: int = 2_000
+    conversation_title_timeout_seconds: float = 4.0
+    conversation_title_max_completion_tokens: int = 32
     
     ## Embeddings
     embedding_provider: str = "jina"
@@ -54,6 +68,25 @@ class Settings(BaseSettings):
     ## RAG / Grounding
     rag_context_max_tokens: int = 6000
     rag_context_max_blocks: int = 8
+    
+    ## Conversation context
+    conversation_context_max_messages: int = 12
+    conversation_context_max_characters: int = 8_000
+    conversation_context_max_characters_per_message: int = 2_000
+    
+    # Idempotent conversation start
+    conversation_start_idempotency_ttl_seconds: int = Field(
+        default=86_400,
+        ge=300,
+        le=604_800,
+        description="How long a customer-scoped conversation-start idempotency record remains replayable.",
+    )
+    conversation_start_processing_lease_seconds: int = Field(
+        default=120,
+        ge=15,
+        le=600,
+        description="Duration for which one request owns conversation-start AI processing before an abandoned attempt may be reclaimed.",
+    )
     
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
@@ -93,9 +126,51 @@ class Settings(BaseSettings):
 
         if self.auth_login_lockout_minutes <= 0:
             raise ValueError("auth_login_lockout_minutes must be greater than zero.")
+        
+        if self.dashboard_analytics_statement_timeout_ms <= 0:
+            raise ValueError("dashboard_analytics_statement_timeout_ms must be greater than zero.")
+
+        if self.dashboard_analytics_statement_timeout_ms > 120_000:
+            raise ValueError("dashboard_analytics_statement_timeout_ms cannot exceed 120000 milliseconds.")
+        
+        if self.dashboard_analytics_cache_ttl_seconds < 0:
+            raise ValueError("dashboard_analytics_cache_ttl_seconds cannot be negative.")
+
+        if self.dashboard_analytics_cache_ttl_seconds > 300:
+            raise ValueError("dashboard_analytics_cache_ttl_seconds cannot exceed 300 seconds.")
+
+        if self.dashboard_analytics_cache_max_entries <= 0:
+            raise ValueError("dashboard_analytics_cache_max_entries must be greater than zero.")
+
+        if self.dashboard_analytics_cache_max_entries > 4_096:
+            raise ValueError("dashboard_analytics_cache_max_entries cannot exceed 4096.")
 
         if not self.llm_provider:
             raise ValueError("llm_provider must not be blank.")
+        
+        if isinstance(self.conversation_title_max_input_characters, bool) or not isinstance(self.conversation_title_max_input_characters, int):
+            raise TypeError("conversation_title_max_input_characters must be an integer.")
+
+        if self.conversation_title_max_input_characters < 128:
+            raise ValueError("conversation_title_max_input_characters must be at least 128.")
+
+        if self.conversation_title_max_input_characters > 20_000:
+            raise ValueError("conversation_title_max_input_characters cannot exceed 20000.")
+
+        if self.conversation_title_timeout_seconds <= 0:
+            raise ValueError("conversation_title_timeout_seconds must be greater than zero.")
+
+        if self.conversation_title_timeout_seconds > 15:
+            raise ValueError("conversation_title_timeout_seconds cannot exceed 15 seconds.")
+
+        if isinstance(self.conversation_title_max_completion_tokens, bool) or not isinstance(self.conversation_title_max_completion_tokens, int):
+            raise TypeError("conversation_title_max_completion_tokens must be an integer.")
+
+        if self.conversation_title_max_completion_tokens < 8:
+            raise ValueError("conversation_title_max_completion_tokens must be at least 8.")
+
+        if self.conversation_title_max_completion_tokens > 128:
+            raise ValueError("conversation_title_max_completion_tokens cannot exceed 128.")
 
         if not self.embedding_provider:
             raise ValueError("embedding_provider must not be blank.")
@@ -129,6 +204,65 @@ class Settings(BaseSettings):
         if self.rag_context_max_blocks <= 0:
             raise ValueError("rag_context_max_blocks must be greater than zero.")
         
+        if self.conversation_context_max_messages <= 0:
+            raise ValueError("conversation_context_max_messages must be greater than zero.")
+
+        if self.conversation_context_max_characters <= 0:
+            raise ValueError("conversation_context_max_characters must be greater than zero.")
+
+        if self.conversation_context_max_characters_per_message <= 0:
+            raise ValueError("conversation_context_max_characters_per_message must be greater than zero.")
+
+        if self.conversation_context_max_characters_per_message > self.conversation_context_max_characters:
+            raise ValueError("conversation_context_max_characters_per_message cannot exceed conversation_context_max_characters.")
+
+        if self.conversation_context_max_messages > 100:
+            raise ValueError("conversation_context_max_messages cannot exceed 100.")
+
+        if self.conversation_context_max_characters > 30_000:
+            raise ValueError("conversation_context_max_characters cannot exceed 30000.")
+        
+        return self
+    
+    @model_validator(mode="after")
+    def validate_browser_configuration(self) -> "Settings":
+        environment = self.app_env.strip().lower()
+        local_environment = environment in {"development", "test"}
+        if not self.auth_refresh_cookie_secure and not local_environment:
+            raise ValueError("Refresh cookies must be secure outside development and test.")
+
+        normalized_origins: list[str] = []
+
+        for origin in self.browser_allowed_origins:
+            if not origin or origin != origin.strip() or any(character.isspace() for character in origin) or any(character in origin for character in ("*", "\\", "?", "#")):
+                raise ValueError("Browser origins must be explicit HTTP(S) origins.")
+
+            try:
+                parsed = urlsplit(origin)
+                port = parsed.port
+                
+            except ValueError as exc:
+                raise ValueError("Browser origin is malformed.") from exc
+
+            if (parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username is not None or parsed.password is not None
+                or parsed.path or parsed.query or parsed.fragment):
+                raise ValueError("Browser origins must contain only scheme, host, and optional port.")
+
+            hostname = parsed.hostname.lower()
+            if parsed.scheme == "http" and (not local_environment or hostname not in {"localhost", "127.0.0.1", "::1"}):
+                raise ValueError("HTTP browser origins are allowed only for loopback development and test.")
+
+            if parsed.netloc.endswith(":") or (port is not None and port < 1):
+                raise ValueError("Browser origin port is invalid.")
+
+            host = f"[{hostname}]" if ":" in hostname else hostname
+            default_port = 80 if parsed.scheme == "http" else 443
+            port_suffix = f":{port}" if port is not None and port != default_port else ""
+            normalized = f"{parsed.scheme}://{host}{port_suffix}"
+            if normalized not in normalized_origins:
+                normalized_origins.append(normalized)
+
+        self.browser_allowed_origins = tuple(normalized_origins)
         return self
     
     @property

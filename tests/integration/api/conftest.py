@@ -10,6 +10,7 @@ from uuid6 import uuid7
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 
 from packages.application.auth.password_hasher import Argon2PasswordHasher
 from packages.application.auth.token_service import TokenService, TokenServiceConfig
@@ -22,6 +23,8 @@ from packages.ai.providers.mock import MockLLMProvider
 from packages.application.composition.application_factory import ApplicationServices, create_application
 from packages.database.models.support.conversation import ConversationModel
 from packages.database.models.support.user import UserModel
+from packages.ai.generation.models import GroundedGenerationResult
+from packages.ai.conversation_title.models import ConversationTitleOutput
 
 # Deterministic LLM
 def _structured_llm_resolver(system_prompt: str, user_prompt: str, response_model: type[BaseModel]) -> dict[str, Any] | BaseModel:
@@ -41,14 +44,145 @@ def _structured_llm_resolver(system_prompt: str, user_prompt: str, response_mode
 
     Only the external LLM behaviour is controlled.
     """
+    if response_model is ConversationTitleOutput:
+        try:
+            _, separator, serialized_payload = user_prompt.partition("\n")
+            if separator != "\n":
+                raise ValueError("Missing title prompt JSON payload.")
 
+            payload = json.loads(serialized_payload)
+            customer_message = payload["customer_message"]
+        
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError,) as exc:
+            raise AssertionError("Conversation-title prompt did not contain the expected JSON payload.") from exc
+
+        if not isinstance(customer_message, str):
+            raise AssertionError("Conversation-title customer message must be a string.")
+
+        normalized_message = customer_message.casefold()
+        if "return policy" in normalized_message:
+            title = "Return policy question"
+        
+        elif "where is" in normalized_message and "[redacted identifier]" in normalized_message:
+            title = "Order status request"
+            
+        elif "charged twice" in normalized_message:
+            title = "Duplicate charge assistance"
+            
+        elif "hello support assistant" in normalized_message:
+            title = "General support"
+            
+        else:
+            title = "Support request"
+
+        return {"title": title,}
+    
     if response_model is IntentResult:
+        normalized_prompt = user_prompt.casefold()
+
+        if "what is your return policy?" in normalized_prompt:
+            return {
+                "intent": "return_exchange",
+                "confidence": 0.99,
+                "entities": {
+                    "order_id": None,
+                    "transaction_id": None,
+                    "subscription_id": None,
+                    "account_id": None,
+                    "issue_type": "return_policy",
+                    "attributes": {},
+                },
+                "needs_clarification": False,
+                "escalation_signals": [],
+                "reason_summary": (
+                    "The customer requested the return policy."
+                ),
+            }
+
+        if "hello support assistant" in normalized_prompt:
+            return {
+                "intent": "conversational",
+                "confidence": 0.99,
+                "entities": {
+                    "order_id": None,
+                    "transaction_id": None,
+                    "subscription_id": None,
+                    "account_id": None,
+                    "issue_type": None,
+                    "attributes": {},
+                },
+                "needs_clarification": False,
+                "escalation_signals": [],
+                "reason_summary": (
+                    "The customer is greeting the support assistant."
+                ),
+            }
+
         return {
             "intent": "order_status",
             "confidence": 0.99,
-            "entities": { "order_id": "ORD-12345"},
+            "entities": {
+                "order_id": "ORD-12345",
+                "transaction_id": None,
+                "subscription_id": None,
+                "account_id": None,
+                "issue_type": None,
+                "attributes": {},
+            },
             "needs_clarification": False,
-            "reason_summary": "Customer is asking for the status of a specific order.",
+            "escalation_signals": [],
+            "reason_summary": (
+                "The customer requested the status of a specific order."
+            ),
+        }
+    
+    if response_model is GroundedGenerationResult:
+        try:
+            serialized_payload = user_prompt.rsplit(
+                "\n\n",
+                maxsplit=1,
+            )[1]
+            payload = json.loads(serialized_payload)
+        except (IndexError, TypeError, json.JSONDecodeError) as exc:
+            raise AssertionError(
+                "Grounded-generation prompt did not contain "
+                "the expected JSON payload."
+            ) from exc
+
+        evidence = payload.get("evidence")
+
+        if not isinstance(evidence, list) or not evidence:
+            return {
+                "answer": (
+                    "I do not have enough verified knowledge "
+                    "to answer that reliably."
+                ),
+                "grounding_status": "insufficient_evidence",
+                "citations": [],
+            }
+
+        source = evidence[0]
+        source_id = source.get("source_id")
+
+        if not isinstance(source_id, str) or not source_id:
+            raise AssertionError(
+                "Retrieved evidence must contain a citable source_id."
+            )
+
+        return {
+            "answer": (
+                "Eligible items may be returned within 30 calendar "
+                "days of delivery, provided they are unused and in "
+                "their original condition."
+            ),
+            "grounding_status": "grounded",
+            "citations": [
+                {
+                    "source_id": source_id,
+                    "title": source.get("title"),
+                    "section": source.get("section"),
+                }
+            ],
         }
 
     raise AssertionError(f"Unexpected structured response model: {response_model.__name__}")
@@ -70,12 +204,31 @@ def application_services(test_settings, test_session_factory, mock_llm_provider)
 
 
 @pytest.fixture()
-def client(monkeypatch: pytest.MonkeyPatch, application_services: ApplicationServices) -> Generator[TestClient, None, None]:
+def client(monkeypatch: pytest.MonkeyPatch, application_services: ApplicationServices, test_settings: Settings) -> Generator[TestClient, None, None]:
+    values = test_settings.model_dump()
+    values.update(
+        app_env="test",
+        browser_allowed_origins=("https://testserver",),
+        auth_refresh_cookie_secure=True,
+    )
+    browser_settings = Settings(_env_file=None, **values)
 
-    monkeypatch.setattr("apps.api.app.main.get_application_services", lambda: application_services)
+    monkeypatch.setattr(
+        "apps.api.app.main.get_application_services",
+        lambda: application_services,
+    )
+    monkeypatch.setattr(
+        "apps.api.app.main.get_runtime_settings",
+        lambda: browser_settings,
+    )
+
     app = create_api_app()
 
-    with TestClient(app) as test_client:
+    with TestClient(
+        app,
+        base_url="https://testserver",
+        headers={"Origin": "https://testserver"},
+    ) as test_client:
         yield test_client
 
 @pytest.fixture()

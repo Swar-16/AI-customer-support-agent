@@ -31,6 +31,11 @@ class AIRunModel(Base):
             "total_latency_ms IS NULL OR total_latency_ms >= 0",
             name="valid_total_latency",
         ),
+        
+        Index(
+            "idx_ai_runs_started_at",
+            "started_at"
+        ),
         Index(
             "idx_ai_runs_conversation_started",
             "conversation_id",

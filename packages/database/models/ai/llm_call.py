@@ -23,6 +23,7 @@ class LLMCallModel(Base):
                 'escalation_summary',
                 'guardrail_validation',
                 'conversation_summary',
+                'conversation_title',
                 'other'
             )
             """,
@@ -62,6 +63,10 @@ class LLMCallModel(Base):
             name="valid_temperature",
         ),
 
+        Index(
+            "idx_llm_calls_started_at", 
+            "started_at"
+        ),
         Index(
             "idx_llm_calls_ai_run",
             "ai_run_id",

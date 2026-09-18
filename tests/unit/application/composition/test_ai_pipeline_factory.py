@@ -27,24 +27,15 @@ from packages.ai.providers.base import LLMProvider
 from packages.ai.providers.instrumented import (
     InstrumentedLLMProvider,
 )
-from packages.ai.telemetry.recorder import TelemetryRecorder
 from packages.application.ai.answer_service import AnswerService
 from packages.application.composition.ai_pipeline_factory import (
     AIPipeline,
     AIPipelineFactory,
     AIPipelineFactoryConfig,
-    AITelemetryRepositories,
 )
-from packages.database.repositories.ai.decision_repository import (
-    AIDecisionRepository,
+from packages.ai.telemetry.llm_call_recorder import (
+    LLMCallTelemetryRecorder,
 )
-from packages.database.repositories.ai.intent_prediction_repository import (
-    IntentPredictionRepository,
-)
-from packages.database.repositories.ai.llm_call_repository import (
-    LLMCallRepository,
-)
-
 
 class StubAnswerService(AnswerService):
     """
@@ -85,25 +76,15 @@ def base_provider():
 
 
 @pytest.fixture
-def repositories():
-    """
-    Repository mocks satisfy the concrete repository contracts while avoiding
-    any database dependency in this unit-test suite.
-    """
-    return AITelemetryRepositories(
-        llm_calls=create_autospec(
-            LLMCallRepository,
-            instance=True,
-        ),
-        intent_predictions=create_autospec(
-            IntentPredictionRepository,
-            instance=True,
-        ),
-        ai_decisions=create_autospec(
-            AIDecisionRepository,
-            instance=True,
-        ),
+def llm_call_recorder():
+    recorder = create_autospec(
+        LLMCallTelemetryRecorder,
+        instance=True,
     )
+    recorder.start_llm_call.return_value = (
+        uuid.uuid4()
+    )
+    return recorder
 
 
 @pytest.fixture
@@ -120,96 +101,24 @@ def answer_service():
 
 def make_pipeline(
     factory: AIPipelineFactory,
-    repositories: AITelemetryRepositories,
+    llm_call_recorder,
     *,
     ai_run_id: uuid.UUID | None = None,
     answer_service_builder=None,
 ) -> tuple[uuid.UUID, AIPipeline]:
-    resolved_run_id = ai_run_id or uuid.uuid4()
+    resolved_run_id = (
+        ai_run_id or uuid.uuid4()
+    )
 
     pipeline = factory.create(
         ai_run_id=resolved_run_id,
-        repositories=repositories,
-        answer_service_builder=answer_service_builder,
+        llm_call_recorder=llm_call_recorder,
+        answer_service_builder=(
+            answer_service_builder
+        ),
     )
 
     return resolved_run_id, pipeline
-
-
-# ===========================================================================
-# Repository dependency contract
-# ===========================================================================
-
-
-class TestAITelemetryRepositories:
-    def test_valid_repository_bundle_is_constructed(
-        self,
-        repositories,
-    ):
-        assert isinstance(
-            repositories,
-            AITelemetryRepositories,
-        )
-
-    def test_rejects_invalid_llm_call_repository(self):
-        with pytest.raises(
-            TypeError,
-            match="llm_calls",
-        ):
-            AITelemetryRepositories(
-                llm_calls=object(),  # type: ignore[arg-type]
-                intent_predictions=create_autospec(
-                    IntentPredictionRepository,
-                    instance=True,
-                ),
-                ai_decisions=create_autospec(
-                    AIDecisionRepository,
-                    instance=True,
-                ),
-            )
-
-    def test_rejects_invalid_intent_prediction_repository(self):
-        with pytest.raises(
-            TypeError,
-            match="intent_predictions",
-        ):
-            AITelemetryRepositories(
-                llm_calls=create_autospec(
-                    LLMCallRepository,
-                    instance=True,
-                ),
-                intent_predictions=object(),  # type: ignore[arg-type]
-                ai_decisions=create_autospec(
-                    AIDecisionRepository,
-                    instance=True,
-                ),
-            )
-
-    def test_rejects_invalid_decision_repository(self):
-        with pytest.raises(
-            TypeError,
-            match="ai_decisions",
-        ):
-            AITelemetryRepositories(
-                llm_calls=create_autospec(
-                    LLMCallRepository,
-                    instance=True,
-                ),
-                intent_predictions=create_autospec(
-                    IntentPredictionRepository,
-                    instance=True,
-                ),
-                ai_decisions=object(),  # type: ignore[arg-type]
-            )
-
-    def test_repository_bundle_is_immutable(
-        self,
-        repositories,
-    ):
-        with pytest.raises(
-            (FrozenInstanceError, AttributeError),
-        ):
-            repositories.llm_calls = object()  # type: ignore[misc]
 
 
 # ===========================================================================
@@ -590,7 +499,7 @@ class TestAIPipelineFactoryCreateValidation:
     def test_invalid_ai_run_id_rejected(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
     ):
         with pytest.raises(
             TypeError,
@@ -598,20 +507,22 @@ class TestAIPipelineFactoryCreateValidation:
         ):
             factory.create(
                 ai_run_id="not-uuid",  # type: ignore[arg-type]
-                repositories=repositories,
+                llm_call_recorder=(
+                    llm_call_recorder
+                ),
             )
 
-    def test_invalid_repository_bundle_rejected(
+    def test_invalid_llm_call_recorder_rejected(
         self,
         factory,
     ):
         with pytest.raises(
             TypeError,
-            match="repositories",
+            match="llm_call_recorder",
         ):
             factory.create(
                 ai_run_id=uuid.uuid4(),
-                repositories=object(),  # type: ignore[arg-type]
+                llm_call_recorder=object(),  # type: ignore[arg-type]
             )
 
 
@@ -624,11 +535,11 @@ class TestAnswerServiceBuilderComposition:
     def test_builder_is_optional_and_preserves_backward_compatibility(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
     ):
         _, pipeline = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         assert pipeline.orchestrator._answer_service is None
@@ -636,14 +547,14 @@ class TestAnswerServiceBuilderComposition:
     def test_builder_is_called_exactly_once(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
         answer_service,
     ):
         builder = MagicMock(return_value=answer_service)
 
         make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
             answer_service_builder=builder,
         )
 
@@ -652,14 +563,14 @@ class TestAnswerServiceBuilderComposition:
     def test_builder_receives_exact_grounded_response_generator(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
         answer_service,
     ):
         builder = MagicMock(return_value=answer_service)
 
         _, pipeline = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
             answer_service_builder=builder,
         )
 
@@ -673,14 +584,14 @@ class TestAnswerServiceBuilderComposition:
     def test_builder_result_is_injected_into_orchestrator(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
         answer_service,
     ):
         builder = MagicMock(return_value=answer_service)
 
         _, pipeline = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
             answer_service_builder=builder,
         )
 
@@ -692,7 +603,7 @@ class TestAnswerServiceBuilderComposition:
     def test_invalid_builder_result_is_rejected(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
     ):
         builder = MagicMock(return_value=object())
 
@@ -705,7 +616,7 @@ class TestAnswerServiceBuilderComposition:
         ):
             make_pipeline(
                 factory,
-                repositories,
+                llm_call_recorder,
                 answer_service_builder=builder,
             )
 
@@ -714,13 +625,13 @@ class TestAnswerServiceBuilderComposition:
     def test_builder_returning_none_leaves_answer_service_unconfigured(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
     ):
         builder = MagicMock(return_value=None)
 
         _, pipeline = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
             answer_service_builder=builder,
         )
 
@@ -730,7 +641,7 @@ class TestAnswerServiceBuilderComposition:
     def test_builder_exception_propagates(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
     ):
         builder = MagicMock(
             side_effect=RuntimeError(
@@ -744,7 +655,7 @@ class TestAnswerServiceBuilderComposition:
         ):
             make_pipeline(
                 factory,
-                repositories,
+                llm_call_recorder,
                 answer_service_builder=builder,
             )
 
@@ -753,7 +664,7 @@ class TestAnswerServiceBuilderComposition:
     def test_builder_runs_after_generation_provider_is_composed(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
         answer_service,
     ):
         observed = {}
@@ -765,7 +676,7 @@ class TestAnswerServiceBuilderComposition:
 
         _, pipeline = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
             answer_service_builder=builder,
         )
 
@@ -781,12 +692,12 @@ class TestAnswerServiceBuilderComposition:
     def test_answer_service_composition_does_not_change_provider_isolation(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
         answer_service,
     ):
         _, pipeline = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
             answer_service_builder=(
                 lambda _generator: answer_service
             ),
@@ -815,11 +726,11 @@ class TestAIPipelineComposition:
     def test_create_returns_complete_pipeline(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
     ):
         _, pipeline = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         assert isinstance(
@@ -857,19 +768,14 @@ class TestAIPipelineComposition:
             InstrumentedLLMProvider,
         )
 
-        assert isinstance(
-            pipeline.telemetry_recorder,
-            TelemetryRecorder,
-        )
-
     def test_pipeline_bundle_is_immutable(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
     ):
         _, pipeline = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         with pytest.raises(
@@ -880,11 +786,11 @@ class TestAIPipelineComposition:
     def test_intent_and_generation_providers_are_distinct(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
     ):
         _, pipeline = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         assert (
@@ -895,11 +801,11 @@ class TestAIPipelineComposition:
     def test_compatibility_alias_points_to_intent_provider(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
     ):
         _, pipeline = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         assert (
@@ -917,7 +823,7 @@ class TestProviderWiring:
     def test_both_wrappers_share_same_base_provider(
         self,
         base_provider,
-        repositories,
+        llm_call_recorder,
     ):
         factory = AIPipelineFactory(
             base_provider=base_provider,
@@ -925,7 +831,7 @@ class TestProviderWiring:
 
         _, pipeline = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         assert (
@@ -937,34 +843,33 @@ class TestProviderWiring:
             is base_provider
         )
 
-    def test_both_wrappers_share_same_recorder(
+    def test_both_wrappers_use_supplied_recorder(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
     ):
         _, pipeline = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         assert (
             pipeline.intent_provider._recorder
-            is pipeline.telemetry_recorder
+            is llm_call_recorder
         )
-
         assert (
             pipeline.generation_provider._recorder
-            is pipeline.telemetry_recorder
+            is llm_call_recorder
         )
 
     def test_both_wrappers_receive_same_ai_run_id(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
     ):
         ai_run_id, pipeline = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         assert (
@@ -980,11 +885,11 @@ class TestProviderWiring:
     def test_default_purposes_are_distinct_and_correct(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
     ):
         _, pipeline = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         assert (
@@ -1000,7 +905,7 @@ class TestProviderWiring:
     def test_custom_purpose_configuration_reaches_contexts(
         self,
         base_provider,
-        repositories,
+        llm_call_recorder,
     ):
         factory = AIPipelineFactory(
             base_provider=base_provider,
@@ -1012,7 +917,7 @@ class TestProviderWiring:
 
         _, pipeline = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         assert (
@@ -1027,7 +932,7 @@ class TestProviderWiring:
     def test_temperature_metadata_reaches_correct_context(
         self,
         base_provider,
-        repositories,
+        llm_call_recorder,
     ):
         factory = AIPipelineFactory(
             base_provider=base_provider,
@@ -1039,7 +944,7 @@ class TestProviderWiring:
 
         _, pipeline = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         assert (
@@ -1055,7 +960,7 @@ class TestProviderWiring:
     def test_prompt_version_ids_reach_correct_context(
         self,
         base_provider,
-        repositories,
+        llm_call_recorder,
     ):
         intent_version = uuid.uuid4()
         generation_version = uuid.uuid4()
@@ -1072,7 +977,7 @@ class TestProviderWiring:
 
         _, pipeline = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         assert (
@@ -1095,11 +1000,11 @@ class TestComponentProviderIsolation:
     def test_classifier_uses_intent_provider(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
     ):
         _, pipeline = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         assert (
@@ -1110,11 +1015,11 @@ class TestComponentProviderIsolation:
     def test_generator_uses_generation_provider(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
     ):
         _, pipeline = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         assert (
@@ -1125,11 +1030,11 @@ class TestComponentProviderIsolation:
     def test_classifier_does_not_use_generation_provider(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
     ):
         _, pipeline = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         assert (
@@ -1140,11 +1045,11 @@ class TestComponentProviderIsolation:
     def test_generator_does_not_use_intent_provider(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
     ):
         _, pipeline = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         assert (
@@ -1155,7 +1060,7 @@ class TestComponentProviderIsolation:
     def test_explicit_prompt_builder_is_given_to_generator(
         self,
         base_provider,
-        repositories,
+        llm_call_recorder,
     ):
         prompt_builder = (
             GroundedGenerationPromptBuilder()
@@ -1168,7 +1073,7 @@ class TestComponentProviderIsolation:
 
         _, pipeline = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         assert (
@@ -1186,16 +1091,16 @@ class TestRequestScopedLifecycle:
     def test_two_create_calls_return_distinct_pipelines(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
     ):
         _, first = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         _, second = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         assert first is not second
@@ -1203,16 +1108,16 @@ class TestRequestScopedLifecycle:
     def test_two_runs_receive_distinct_instrumented_providers(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
     ):
         _, first = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         _, second = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         assert (
@@ -1225,39 +1130,58 @@ class TestRequestScopedLifecycle:
             is not second.generation_provider
         )
 
-    def test_two_runs_receive_distinct_recorders(
+    def test_each_pipeline_uses_its_supplied_recorder(
         self,
         factory,
-        repositories,
     ):
-        _, first = make_pipeline(
-            factory,
-            repositories,
+        first_recorder = create_autospec(
+            LLMCallTelemetryRecorder,
+            instance=True,
+        )
+        second_recorder = create_autospec(
+            LLMCallTelemetryRecorder,
+            instance=True,
         )
 
+        _, first = make_pipeline(
+            factory,
+            first_recorder,
+        )
         _, second = make_pipeline(
             factory,
-            repositories,
+            second_recorder,
         )
 
         assert (
-            first.telemetry_recorder
-            is not second.telemetry_recorder
+            first.intent_provider._recorder
+            is first_recorder
+        )
+        assert (
+            first.generation_provider._recorder
+            is first_recorder
+        )
+        assert (
+            second.intent_provider._recorder
+            is second_recorder
+        )
+        assert (
+            second.generation_provider._recorder
+            is second_recorder
         )
 
     def test_two_runs_receive_distinct_domain_components(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
     ):
         _, first = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         _, second = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         assert (
@@ -1283,20 +1207,20 @@ class TestRequestScopedLifecycle:
     def test_different_runs_preserve_their_own_run_ids(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
     ):
         first_id = uuid.uuid4()
         second_id = uuid.uuid4()
 
         _, first = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
             ai_run_id=first_id,
         )
 
         _, second = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
             ai_run_id=second_id,
         )
 
@@ -1323,7 +1247,7 @@ class TestRequestScopedLifecycle:
     def test_same_long_lived_base_provider_is_reused_across_runs(
         self,
         base_provider,
-        repositories,
+        llm_call_recorder,
     ):
         factory = AIPipelineFactory(
             base_provider=base_provider,
@@ -1331,12 +1255,12 @@ class TestRequestScopedLifecycle:
 
         _, first = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         _, second = make_pipeline(
             factory,
-            repositories,
+            llm_call_recorder,
         )
 
         assert (
@@ -1369,12 +1293,12 @@ class TestCompositionHasNoExecutionSideEffects:
     def test_create_does_not_call_text_generation(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
         base_provider,
     ):
         factory.create(
             ai_run_id=uuid.uuid4(),
-            repositories=repositories,
+            llm_call_recorder=llm_call_recorder,
         )
 
         base_provider.generate.assert_not_called()
@@ -1382,12 +1306,12 @@ class TestCompositionHasNoExecutionSideEffects:
     def test_create_does_not_call_structured_generation(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
         base_provider,
     ):
         factory.create(
             ai_run_id=uuid.uuid4(),
-            repositories=repositories,
+            llm_call_recorder=llm_call_recorder,
         )
 
         base_provider.generate_structured.assert_not_called()
@@ -1395,12 +1319,12 @@ class TestCompositionHasNoExecutionSideEffects:
     def test_create_does_not_health_check_provider(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
         base_provider,
     ):
         factory.create(
             ai_run_id=uuid.uuid4(),
-            repositories=repositories,
+            llm_call_recorder=llm_call_recorder,
         )
 
         base_provider.health_check.assert_not_called()
@@ -1408,14 +1332,19 @@ class TestCompositionHasNoExecutionSideEffects:
     def test_create_does_not_persist_llm_call(
         self,
         factory,
-        repositories,
+        llm_call_recorder,
     ):
         factory.create(
             ai_run_id=uuid.uuid4(),
-            repositories=repositories,
+            llm_call_recorder=(
+                llm_call_recorder
+            ),
         )
 
-        repositories.llm_calls.add.assert_not_called()
+        (
+            llm_call_recorder.start_llm_call
+            .assert_not_called()
+        )
 
 
 # ===========================================================================

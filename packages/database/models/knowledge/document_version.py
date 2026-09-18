@@ -64,6 +64,15 @@ class KnowledgeDocumentVersionModel(Base):
 
         # At most one PUBLISHED version may exist for a document.
         Index(
+            "ix_knowledge_document_versions_created_at",
+            "created_at",
+        ),
+        Index(
+            "ix_knowledge_document_versions_processing_completed_at",
+            "processing_completed_at",
+            postgresql_where=text("processing_completed_at IS NOT NULL"),
+        ),
+        Index(
             "uq_knowledge_document_versions_published",
             "document_id",
             unique=True,

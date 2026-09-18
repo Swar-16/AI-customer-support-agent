@@ -1,0 +1,128 @@
+/* AI-customer-support-agent\apps\web\src\shared\styles\globals.css */
+@import 'tailwindcss';
+
+:root {
+  font-family: 'Inter Variable', sans-serif;
+  color: #242126;
+  background: #faf8f5;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+
+  --color-accent: #d6208f;
+  --color-accent-interactive: #b81777;
+  --color-accent-soft: #fcebf5;
+  --color-surface: #ffffff;
+  --color-text: #242126;
+  --color-text-muted: #655d68;
+  --color-border: #e7dfe5;
+  --color-focus: #b81777;
+  --radius-panel: 1rem;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  margin: 0;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 4px;
+}
+
+::selection {
+  color: var(--color-text);
+  background: var(--color-accent-soft);
+}
+
+.foundation-screen {
+  display: grid;
+  min-height: 100vh;
+  min-height: 100dvh;
+  place-items: center;
+  padding: 1.5rem;
+}
+
+.foundation-panel {
+  width: min(100%, 34rem);
+  padding: clamp(1.5rem, 5vw, 3rem);
+  overflow-wrap: anywhere;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-panel);
+}
+
+.brand-spark {
+  display: block;
+  width: 2.75rem;
+  height: 2.75rem;
+  margin-bottom: 1.75rem;
+  color: var(--color-accent);
+}
+
+.eyebrow {
+  margin: 0 0 0.75rem;
+  color: var(--color-accent-interactive);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+h1 {
+  margin: 0;
+  font-family: 'Newsreader Variable', Georgia, serif;
+  font-size: clamp(1.875rem, 4vw, 2.5rem);
+  font-weight: 500;
+  line-height: 1.15;
+  text-wrap: balance;
+}
+
+.supporting-copy {
+  margin: 1rem 0 0;
+  color: var(--color-text-muted);
+  line-height: 1.7;
+}
+
+.integration-notice {
+  margin: 1.75rem 0 0;
+  padding-top: 1rem;
+  color: var(--color-text-muted);
+  border-top: 1px solid var(--color-border);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+/* Shared text-selection treatment across all workspaces. */
+:root {
+  --text-selection-background: #973065;
+  --text-selection-foreground: #ffffff;
+}
+
+::selection {
+  background-color: var(--text-selection-background);
+  color: var(--text-selection-foreground);
+  text-shadow: none;
+}
+
+*::selection {
+  background-color: var(--text-selection-background);
+  color: var(--text-selection-foreground);
+  text-shadow: none;
+}
+
+input::selection,
+textarea::selection {
+  background-color: var(--text-selection-background);
+  color: var(--text-selection-foreground);
+  text-shadow: none;
+}

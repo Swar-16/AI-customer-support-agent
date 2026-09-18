@@ -26,6 +26,7 @@ from packages.database.repositories.dashboard import DashboardLLMCallRepository,
 from packages.database.repositories.dashboard import DashboardAuditEventRepository
 from packages.database.repositories.support.auth_repository import AuthRepository
 from packages.database.session import SessionLocal
+from packages.database.repositories.support.conversation_start_request_repository import ConversationStartRequestRepository
 
 SessionFactory: TypeAlias = sessionmaker[Session]
 
@@ -58,6 +59,7 @@ class SqlAlchemyUnitOfWork:
         self.users: UserRepository | None = None
         self.auth: AuthRepository | None = None
         self.conversations: ConversationRepository | None = None
+        self.conversation_start_requests: ConversationStartRequestRepository | None = None
         self.messages: MessageRepository | None = None
         self.escalations: EscalationRepository | None = None
         self.tickets: TicketRepository | None = None
@@ -97,6 +99,7 @@ class SqlAlchemyUnitOfWork:
         self.users = UserRepository(self.session)
         self.auth = AuthRepository(self.session)
         self.conversations = ConversationRepository(self.session)
+        self.conversation_start_requests = ConversationStartRequestRepository(self.session)
         self.messages = MessageRepository(self.session)
         self.escalations = EscalationRepository(self.session)
         self.tickets = TicketRepository(self.session)
@@ -188,6 +191,7 @@ class SqlAlchemyUnitOfWork:
         self.users = None
         self.auth = None
         self.conversations = None
+        self.conversation_start_requests = None
         self.messages = None
         self.escalations = None
         self.tickets = None

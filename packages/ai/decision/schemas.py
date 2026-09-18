@@ -26,6 +26,7 @@ class DecisionReasonCode(StrEnum):
 
     POLICY_RETRIEVAL_REQUIRED = "policy_retrieval_required"
     OPERATIONAL_LOOKUP_REQUIRED = "operational_lookup_required"
+    OPERATIONAL_LOOKUP_UNAVAILABLE = "operational_lookup_unavailable"
 
     MISSING_REQUIRED_INFORMATION = "missing_required_information"
     LOW_INTENT_CONFIDENCE = "low_intent_confidence"
@@ -34,6 +35,8 @@ class DecisionReasonCode(StrEnum):
     ACTION_REQUEST_DETECTED = "action_request_detected"
 
     HUMAN_APPROVAL_REQUIRED = "human_approval_required"
+    CUSTOMER_REQUESTED_HUMAN = "customer_requested_human"
+    SEVERE_CUSTOMER_DISSATISFACTION = "severe_customer_dissatisfaction"
     SECURITY_SENSITIVE_REQUEST = "security_sensitive_request"
     UNSUPPORTED_REQUEST = "unsupported_request"
 
@@ -47,20 +50,10 @@ class DecisionResult(BaseModel):
 
     This result determines what the orchestration layer should do next.
     """
-    model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-        str_strip_whitespace=True,
-    )
-
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
     decision: DecisionType
-
     reason_code: DecisionReasonCode
-
-    reason_summary: str = Field(
-        min_length=1,
-        max_length=500,
-    )
+    reason_summary: str = Field(min_length=1, max_length=500)
 
     confidence: float | None = Field(
         default=None,
@@ -109,16 +102,10 @@ class DecisionResult(BaseModel):
 
     @model_validator(mode="after")
     def validate_semantics(self) -> DecisionResult:
-        if(
-            self.decision is DecisionType.ASK_CLARIFICATION
-            and not self.required_information
-        ):
+        if self.decision is DecisionType.ASK_CLARIFICATION and not self.required_information:
             raise ValueError("ASK_CLARIFICATION must identify required information")
 
-        if(
-            self.decision is not DecisionType.ASK_CLARIFICATION
-            and self.required_information
-        ):
+        if self.decision is not DecisionType.ASK_CLARIFICATION and self.required_information:
             raise ValueError("required_information may only be populated for ASK_CLARIFICATION")
 
         return self

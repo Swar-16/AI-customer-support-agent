@@ -65,7 +65,7 @@ class CreateEscalationCommand:
             expected = ", ".join(sorted(VALID_ESCALATION_SOURCES))
             raise ValueError(f"source must be one of: {expected}")
 
-        normalized_reason_code = self._normalize_required_text(self.reason_code, field_name="reason_code", max_length=MAX_REASON_CODE_LENGTH).upper()
+        normalized_reason_code = self._normalize_required_text(self.reason_code, field_name="reason_code", max_length=MAX_REASON_CODE_LENGTH).lower()
         normalized_priority = self._normalize_required_text(self.priority, field_name="priority", max_length=16).lower()
         if normalized_priority not in VALID_ESCALATION_PRIORITIES:
             expected = ", ".join(sorted(VALID_ESCALATION_PRIORITIES))

@@ -1,0 +1,390 @@
+/* apps/web/src/features/auth/login-page.css */
+
+.login-page {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  padding: 24px 16px;
+  background: #f7f5f4;
+  color: #262129;
+}
+
+.login-page__panel {
+  width: min(100%, 440px);
+  padding: 32px;
+  border: 1px solid #e6dfe5;
+  border-radius: 16px;
+  background: #ffffff;
+}
+
+.login-page__brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 32px;
+  font-weight: 650;
+}
+
+.login-page__brand svg {
+  color: #d6208f;
+}
+
+.login-page h1 {
+  margin: 0;
+  font-family: 'Newsreader Variable', Georgia, serif;
+  font-size: 2rem;
+  font-weight: 500;
+}
+
+.login-page__intro {
+  margin: 12px 0 24px;
+  color: #6e6570;
+  line-height: 1.6;
+}
+
+.login-page fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.login-page__field {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.login-page label {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.login-page input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid #847785;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #262129;
+  font: inherit;
+}
+
+.login-page input[aria-invalid='true'] {
+  border-color: #b42318;
+}
+
+.login-page button {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 10px;
+  background: #b81777;
+  color: #ffffff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    transform 100ms ease;
+}
+
+.login-page button:hover:not(:disabled) {
+  background: #951260;
+}
+
+.login-page button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.login-page button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.login-page input:focus-visible,
+.login-page button:focus-visible {
+  outline: 2px solid #b81777;
+  outline-offset: 3px;
+}
+
+.login-page__error {
+  margin: 0;
+  color: #b42318;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.login-page__feedback {
+  min-height: 32px;
+  margin-top: 16px;
+}
+
+.login-page__feedback [role='status'] {
+  margin: 8px 0 0;
+  color: #6e6570;
+  font-size: 0.875rem;
+}
+
+.login-page__visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .login-page__panel {
+    padding: 24px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-page button {
+    transition: none;
+  }
+
+  .login-page button:active:not(:disabled) {
+    transform: none;
+  }
+}
+
+/* Login-only atmosphere. Shared logout styles remain independent. */
+
+.login-page--immersive {
+  position: relative;
+  isolation: isolate;
+  box-sizing: border-box;
+  overflow: clip;
+  padding: 64px 24px 88px;
+  background: radial-gradient(ellipse at 50% 46%, rgb(252 235 245 / 75%), transparent 48%), #faf8f9;
+}
+
+.login-page--immersive .login-page__panel {
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+  border-color: rgb(214 32 143 / 14%);
+  border-radius: 24px;
+  background: #ffffff;
+  box-shadow:
+    0 24px 64px rgb(55 24 44 / 7%),
+    0 2px 8px rgb(55 24 44 / 3%);
+}
+
+/* The blurred ring sits outside the opaque card. */
+.login-page--immersive .login-page__panel::before {
+  position: absolute;
+  z-index: -1;
+  inset: -22px;
+  border: 20px solid rgb(214 32 143 / 19%);
+  border-radius: 44px;
+  filter: blur(25px);
+  pointer-events: none;
+  content: '';
+  animation: login-aura-breathe 7s ease-in-out infinite;
+}
+
+.login-page--immersive .login-page__panel::after {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 95%);
+  pointer-events: none;
+  content: '';
+}
+
+.login-page--immersive .login-page__brand {
+  gap: 12px;
+}
+
+.login-page--immersive .login-page__brand svg {
+  filter: drop-shadow(0 3px 8px rgb(214 32 143 / 20%));
+}
+
+.login-page--immersive input {
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.login-page--immersive input:focus-visible {
+  border-color: #b81777;
+  box-shadow: 0 0 0 4px #fcebf5;
+}
+
+.login-atmosphere {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  pointer-events: none;
+}
+
+.login-atmosphere__art {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.login-atmosphere__scene {
+  position: absolute;
+  width: clamp(300px, 33vw, 600px);
+  aspect-ratio: 3 / 2;
+  opacity: 0.22;
+  mask-image: radial-gradient(ellipse at center, #000 26%, rgb(0 0 0 / 85%) 48%, transparent 73%);
+}
+
+.login-atmosphere__scene--left {
+  top: 18%;
+  right: calc(50% + 200px);
+  transform: rotate(-7deg);
+}
+
+.login-atmosphere__scene--right {
+  bottom: 14%;
+  left: calc(50% + 200px);
+  transform: rotate(7deg);
+}
+
+.login-atmosphere__image {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transform: scale(1.035) translateY(6px);
+  transition:
+    opacity 1800ms ease-in-out,
+    transform 8000ms linear;
+  user-select: none;
+}
+
+.login-atmosphere__image[data-active='true'] {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+}
+
+.login-page--immersive .login-atmosphere__toggle {
+  position: absolute;
+  right: 24px;
+  bottom: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: auto;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid #e6dfe5;
+  border-radius: 999px;
+  background: #faf8f9;
+  color: #6e6570;
+  font-size: 0.75rem;
+  font-weight: 500;
+  pointer-events: auto;
+}
+
+.login-page--immersive .login-atmosphere__toggle:hover {
+  background: #fcebf5;
+  color: #84205d;
+}
+
+.login-page--immersive:has(.login-atmosphere[data-paused='true']) .login-page__panel::before {
+  animation-play-state: paused;
+}
+
+@keyframes login-aura-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(0.98);
+  }
+
+  50% {
+    opacity: 0.95;
+    transform: scale(1.025);
+  }
+}
+
+@media (max-width: 900px) {
+  .login-atmosphere__scene {
+    width: 390px;
+    opacity: 0.17;
+  }
+
+  .login-atmosphere__scene--left {
+    top: 5%;
+    right: calc(50% + 100px);
+  }
+
+  .login-atmosphere__scene--right {
+    bottom: 6%;
+    left: calc(50% + 100px);
+  }
+}
+
+@media (max-width: 600px) {
+  .login-page--immersive {
+    padding: 160px 20px 88px;
+  }
+
+  .login-page--immersive .login-page__panel {
+    border-radius: 20px;
+  }
+
+  .login-atmosphere__scene--left {
+    top: 0;
+    right: auto;
+    left: 50%;
+    width: min(360px, 100vw);
+    opacity: 0.2;
+    transform: translateX(-50%);
+  }
+
+  .login-atmosphere__scene--right {
+    display: none;
+  }
+
+  .login-page--immersive .login-atmosphere__toggle {
+    right: 20px;
+    bottom: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-page--immersive .login-page__panel::before {
+    animation: none;
+    opacity: 0.65;
+    transform: none;
+  }
+
+  .login-page--immersive input,
+  .login-atmosphere__image {
+    transition: none;
+  }
+
+  .login-atmosphere__image {
+    opacity: 0;
+    transform: none;
+  }
+
+  .login-atmosphere__image:first-child {
+    opacity: 1;
+  }
+
+  .login-atmosphere__image:not(:first-child) {
+    opacity: 0;
+  }
+
+  .login-page--immersive .login-atmosphere__toggle {
+    display: none;
+  }
+}

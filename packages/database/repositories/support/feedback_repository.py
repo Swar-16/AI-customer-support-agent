@@ -95,6 +95,39 @@ class FeedbackRepository:
 
         return self._session.scalar(statement)
 
+    def list_by_response_message_ids(self, response_message_ids: Sequence[uuid.UUID]) -> Sequence[FeedbackModel]:
+        """
+        Return feedback associated with a bounded collection of assistant response messages.
+
+        The database unique constraint on response_message_id guarantees at most one feedback record per response.
+        This bulk lookup supports conversation-history enrichment without issuing one query per assistant message.
+        """
+        if isinstance(response_message_ids, (str, bytes)):
+            raise TypeError("response_message_ids must be a sequence of UUIDs")
+
+        try:
+            raw_ids = tuple(response_message_ids)
+            
+        except TypeError as exc:
+            raise TypeError("response_message_ids must be a sequence of UUIDs") from exc
+
+        for response_message_id in raw_ids:
+            if not isinstance(response_message_id, uuid.UUID):
+                raise TypeError("each response_message_id must be a UUID")
+
+        if not raw_ids:
+            return ()
+
+        unique_ids = tuple(dict.fromkeys(raw_ids))
+        statement = (select(FeedbackModel)
+                     .where(FeedbackModel.response_message_id.in_(unique_ids))
+                     .order_by(FeedbackModel.response_message_id.asc(),
+                               FeedbackModel.created_at.desc(),
+                               FeedbackModel.id.desc())
+        )
+
+        return tuple(self._session.scalars(statement))
+
     # Ownership-oriented queries
     def list_for_conversation(self, conversation_id: uuid.UUID, *, limit: int = 100, offset: int = 0) -> Sequence[FeedbackModel]:
         self._validate_uuid(conversation_id, field_name="conversation_id")

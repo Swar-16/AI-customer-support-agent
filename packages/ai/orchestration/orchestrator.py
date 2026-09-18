@@ -4,19 +4,35 @@
 from __future__ import annotations
 import uuid
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Final, Protocol, runtime_checkable
 
 from packages.ai.decision.engine import DecisionEngine
-from packages.ai.decision.schemas import DecisionType
+from packages.ai.decision.schemas import DecisionReasonCode, DecisionType
 from packages.ai.generation.generator import GroundedGenerationError, GroundedGenerationProviderError, GroundedGenerationTimeoutError, InvalidGroundedGenerationResponseError
+from packages.ai.generation.models import GroundingStatus
 from packages.ai.intent.classifier import IntentClassificationError, IntentClassificationProviderError, IntentClassificationTimeoutError
 from packages.ai.intent.classifier import InvalidIntentInputError, InvalidIntentResponseError, IntentClassifier
-from packages.ai.orchestration.state import AIState, EscalationSource, PipelineError, PipelineStage
+from packages.ai.orchestration.state import AIState, EscalationSource,  GuardrailDisposition, PipelineError, PipelineStage
 from packages.application.ai.answer_service import AnswerService, AnswerServiceError, AnswerServiceRequest, InvalidRetrievalDecisionError
 from packages.application.ai.answer_service import UnsupportedAnswerDecisionError, UnsupportedRetrievalKindError
 from packages.guardrails.evaluator import GuardrailEvaluator
 from packages.guardrails.models import GuardrailContext, GuardrailOutcome
-from packages.ai.decision.policies import RetrievalKind
+from packages.ai.orchestration.direct_response import DirectResponseResolutionError, DirectResponseResolver
+
+_DEFAULT_CLARIFICATION_RESPONSE: Final[str] = "Could you provide a little more detail so I can help you correctly?"
+
+_CLARIFICATION_RESPONSES: Final[dict[str, str]] = {
+    "customer_intent": "Could you tell me what you need help with?",
+    "clarification": _DEFAULT_CLARIFICATION_RESPONSE,
+    "order_id": "Could you provide the order ID so I can help with this request?",
+    "order_id_or_transaction_id": "Could you provide the order ID or transaction ID so I can help with this request?",
+    "subscription_id": "Could you provide the subscription ID so I can help with this request?",
+}
+
+_DEFAULT_GUARDRAIL_REFUSAL_RESPONSE: Final[str] = (
+    "I’m unable to help with that request. I can assist with supported customer-service questions about refunds, payments, cancellations, "
+    "subscriptions, shipping, returns, exchanges, and accounts."
+)
 
 
 # Observer contract
@@ -99,21 +115,33 @@ class AIOrchestrator:
               v
         DecisionResult
               |
-              +------------------------------+
-              |                              |
-              | RETRIEVE_INFORMATION         | other decision
-              v                              v
-        AnswerService                  DECISION_MADE
+              +--> ANSWER
+              |      |
+              |      +--> deterministic direct response
               |
-              +--> retrieval
-              +--> evidence mapping
-              +--> grounded generation
+              +--> RETRIEVE_INFORMATION
+              |      |
+              |      +--> AnswerService
               |
-              v
-        RETRIEVAL_COMPLETED
+              +--> ASK_CLARIFICATION
+              |      |
+              |      +--> deterministic clarification response
+              |
+              +--> ESCALATE
+                      |
+                      +--> human-review disposition
+
+     Response-producing paths
               |
               v
         RESPONSE_GENERATED
+              |
+              v
+        GuardrailEvaluator
+              |
+              +--> GUARDRAILS_COMPLETED
+              +--> ESCALATED
+              +--> FAILED
 
 
     AnswerService owns the implementation boundary for retrieval and grounded generation. The orchestrator therefore does not know about:
@@ -134,7 +162,9 @@ class AIOrchestrator:
         - escalation.
     """
     def __init__(self, *, intent_classifier: IntentClassifier, decision_engine: DecisionEngine, answer_service: AnswerService | None = None,
-                 guardrail_evaluator: GuardrailEvaluator | None = None, observer: OrchestrationObserver | None = None, config: AIOrchestratorConfig | None = None) -> None:
+                 direct_response_resolver: DirectResponseResolver | None = None, guardrail_evaluator: GuardrailEvaluator | None = None,
+                 observer: OrchestrationObserver | None = None, config: AIOrchestratorConfig | None = None
+    ) -> None:
         if intent_classifier is None:
             raise TypeError("intent_classifier cannot be None")
 
@@ -143,6 +173,9 @@ class AIOrchestrator:
 
         if answer_service is not None and not isinstance(answer_service, AnswerService):
             raise TypeError("answer_service must be an AnswerService instance or None")
+        
+        if direct_response_resolver is not None and not isinstance(direct_response_resolver, DirectResponseResolver):
+            raise TypeError("direct_response_resolver must be a DirectResponseResolver instance or None")
         
         if guardrail_evaluator is not None and not isinstance(guardrail_evaluator, GuardrailEvaluator):
             raise TypeError("guardrail_evaluator must be a GuardrailEvaluator instance or None")
@@ -156,6 +189,7 @@ class AIOrchestrator:
         self._intent_classifier = intent_classifier
         self._decision_engine = decision_engine
         self._answer_service = answer_service
+        self._direct_response_resolver = direct_response_resolver if direct_response_resolver is not None else DirectResponseResolver()
         self._guardrail_evaluator = guardrail_evaluator
         self._observer = observer if observer is not None else NullOrchestrationObserver()
         self._config = config if config is not None else AIOrchestratorConfig()
@@ -168,13 +202,11 @@ class AIOrchestrator:
 
         The caller owns persistence and creates/persists run identifiers before invoking this orchestrator.
 
-        Successful V1 outcomes may currently stop at:
+        Every decision is converted into an explicit terminal disposition:
 
-            DECISION_MADE
-
-        or, for supported retrieval decisions:
-
-            RESPONSE_GENERATED
+            - an approved customer response;
+            - an escalation request; or
+            - a typed FAILED state.
 
         Known operational failures are converted into PipelineError instances and represented by a FAILED AIState.
 
@@ -285,24 +317,135 @@ class AIOrchestrator:
 
         Knowledge retrieval is implemented through AnswerService.
 
-        Operational retrieval is not implemented yet, so those requests remain successfully routed at DECISION_MADE.
-        A future operational service can continue processing from that decision.
+        Unsupported decisions fail explicitly rather than escaping as a false-success DECISION_MADE state.
         """
         if state.decision_result is None:
             raise RuntimeError("Decision execution reached without decision_result")
 
         decision = state.decision_result.decision
+        
+        if decision is DecisionType.ANSWER:
+            return self._answer_directly(state)
+        
         if decision is DecisionType.RETRIEVE_INFORMATION:
-            retrieval_kind = state.decision_result.metadata.get("retrieval_kind")
-            if retrieval_kind == RetrievalKind.OPERATIONAL.value:
-                return state
-
             return self._retrieve_and_generate(state)
+
+        if decision is DecisionType.ASK_CLARIFICATION:
+            return self._request_clarification(state)
 
         if decision is DecisionType.ESCALATE:
             return self._escalate_from_decision(state)
 
-        return state
+        return self._fail(
+            state=state,
+            stage=PipelineStage.DECISION_MADE,
+            code="DECISION_WORKFLOW_UNSUPPORTED",
+            message="The selected workflow is not implemented by this pipeline version.",
+            retryable=False,
+            metadata={"decision": decision.value},
+        )
+
+    def _answer_directly(self, state: AIState) -> AIState:
+        """
+        Produce an application-controlled direct response.
+
+        This workflow is limited to intents explicitly supported by DirectResponseResolver.
+        It performs no knowledge retrieval, provider generation, operational lookup, or business action.
+
+        The selected response still passes through the normal response-generation lifecycle and guardrails before it becomes eligible for persistence.
+        """
+        intent_result = state.intent_result
+        if intent_result is None:
+            raise RuntimeError("Direct-answer workflow reached without intent_result")
+
+        decision_result = state.decision_result
+        if decision_result is None:
+            raise RuntimeError("Direct-answer workflow reached without decision_result")
+
+        if decision_result.decision is not DecisionType.ANSWER:
+            raise RuntimeError("Direct-answer workflow requires an ANSWER decision")
+
+        try:
+            direct_response = self._direct_response_resolver.resolve(
+                customer_message=state.customer_message, intent_result=intent_result, decision_result=decision_result
+            )
+
+        except DirectResponseResolutionError as exc:
+            return self._fail(
+                state=state,
+                stage=PipelineStage.RESPONSE_GENERATED,
+                code="DIRECT_RESPONSE_UNAVAILABLE",
+                message="A safe direct customer response could not be resolved.",
+                retryable=False,
+                metadata={
+                    "exception_type": type(exc).__name__,
+                    "intent": intent_result.intent.value,
+                    "decision": decision_result.decision.value,
+                },
+            )
+
+        generated_state = self._complete_generation(state=state, answer=direct_response.text)
+
+        return self._evaluate_guardrails(generated_state)
+
+    def _request_clarification(self, state: AIState) -> AIState:
+        """Create an allowlisted clarification response without another provider call."""
+        decision = state.decision_result
+        if decision is None:
+            raise RuntimeError("Clarification reached without decision_result")
+
+        if decision.decision is not DecisionType.ASK_CLARIFICATION:
+            raise RuntimeError("Clarification requires an ASK_CLARIFICATION decision")
+
+        response = self._resolve_clarification_response(
+            required_information=decision.required_information,
+        )
+        generated_state = self._complete_generation(
+            state=state,
+            answer=response,
+        )
+
+        return self._evaluate_guardrails(generated_state)
+
+    @staticmethod
+    def _resolve_clarification_response(*, required_information: tuple[str, ...]) -> str:
+        """
+        Resolve only application-controlled response text.
+
+        Unknown requirement keys deliberately fall back to generic wording;
+        internal routing vocabulary is never interpolated into customer text.
+        """
+        if len(required_information) != 1:
+            return _DEFAULT_CLARIFICATION_RESPONSE
+
+        return _CLARIFICATION_RESPONSES.get(required_information[0], _DEFAULT_CLARIFICATION_RESPONSE)
+    
+    def _escalate_from_knowledge_gap(self, state: AIState) -> AIState:
+        """
+        Escalate when published knowledge cannot support a reliable answer.
+
+        The generated insufficient-evidence message remains an internal candidate.
+        It must not be persisted or returned as an approved assistant response.
+
+        This is a normal human-review disposition, not an infrastructure failure.
+        """
+        if state.stage is not PipelineStage.RESPONSE_GENERATED:
+            raise RuntimeError("Knowledge-gap escalation requires a generated result")
+
+        if state.intent_result is None:
+            raise RuntimeError("Knowledge-gap escalation reached without intent_result")
+
+        if state.decision_result is None:
+            raise RuntimeError("Knowledge-gap escalation reached without decision_result")
+
+        if state.decision_result.decision is not DecisionType.RETRIEVE_INFORMATION:
+            raise RuntimeError("Knowledge-gap escalation requires a RETRIEVE_INFORMATION decision")
+
+        self._observer.stage_started(state=state, stage=PipelineStage.ESCALATED)
+        escalated_state = state.with_escalation(source=EscalationSource.SYSTEM, reason_code=DecisionReasonCode.KNOWLEDGE_UNAVAILABLE.value)
+        self._observer.stage_completed(state=escalated_state, stage=PipelineStage.ESCALATED)
+
+        return escalated_state
     
     def _escalate_from_decision(self, state: AIState) -> AIState:
         """
@@ -319,17 +462,43 @@ class AIOrchestrator:
 
         return next_state
     
-    def _escalate_from_guardrail(self, *, state: AIState, reason_code: str) -> AIState:
+    def _escalate_from_guardrail(self, *, state: AIState, reason_code: str, policy_id: str | None) -> AIState:
         """
-        Transition a guardrail rejection requiring human review into ESCALATED.
+        Transition a guardrail rejection into human review.
 
-        The generated response remains internal diagnostic state. Reaching ESCALATED does not authorize that candidate for customer persistence.
+        The rejected generated candidate remains internal and is never authorized for customer-message persistence.
+
+        Only sanitized guardrail identifiers are retained in orchestration state.
         """
-        self._observer.stage_started(state=state, stage=PipelineStage.ESCALATED)
-        next_state = state.with_escalation(source=EscalationSource.GUARDRAIL, reason_code=reason_code)
-        self._observer.stage_completed(state=next_state, stage=PipelineStage.ESCALATED)
+        if state.stage is not PipelineStage.RESPONSE_GENERATED:
+            raise RuntimeError("Guardrail escalation requires a generated candidate")
 
-        return next_state
+        if not isinstance(reason_code, str):
+            raise TypeError("reason_code must be a string")
+
+        if not reason_code.strip():
+            raise ValueError("reason_code cannot be blank")
+
+        if policy_id is not None:
+            if not isinstance(policy_id, str):
+                raise TypeError("policy_id must be a string or None")
+
+            if not policy_id.strip():
+                raise ValueError("policy_id cannot be blank when provided")
+
+        # Guardrail evaluation itself completed successfully. Its result redirected the workflow rather than producing a pipeline failure.
+        escalated_state = state.with_guardrail_escalation(
+            escalation_reason_code=reason_code,
+            guardrail_reason_code=reason_code,
+            policy_id=policy_id,
+        )
+        # The guardrail stage completed normally with an ESCALATE disposition.
+        # Use the annotated immutable state so structured telemetry receives the disposition and reason.
+        self._observer.stage_completed(state=escalated_state, stage=PipelineStage.GUARDRAILS_COMPLETED)
+        self._observer.stage_started(state=escalated_state, stage=PipelineStage.ESCALATED)
+        self._observer.stage_completed(state=escalated_state, stage=PipelineStage.ESCALATED)
+
+        return escalated_state
 
     # Retrieval + grounded generation
     def _retrieve_and_generate(self, state: AIState) -> AIState:
@@ -370,6 +539,29 @@ class AIOrchestrator:
             retrieved_state = state.with_retrieved_evidence(result.evidence)
             self._observer.stage_completed(state=retrieved_state, stage=PipelineStage.RETRIEVAL_COMPLETED)
             generated_state = self._complete_generation(state=retrieved_state, answer=result.generation.answer)
+            grounding_status = result.generation.grounding_status
+            if grounding_status is GroundingStatus.INSUFFICIENT_EVIDENCE:
+                return self._escalate_from_knowledge_gap(generated_state)
+
+            if grounding_status is GroundingStatus.NOT_REQUIRED:
+                return self._fail(
+                    state=generated_state,
+                    stage=PipelineStage.RESPONSE_GENERATED,
+                    code="GROUNDING_STATUS_INVALID",
+                    message="A knowledge-retrieval workflow returned an incompatible grounding status.",
+                    retryable=False,
+                    metadata={"grounding_status": grounding_status.value,},
+                )
+
+            if grounding_status is not GroundingStatus.GROUNDED:
+                return self._fail(
+                    state=generated_state,
+                    stage=PipelineStage.RESPONSE_GENERATED,
+                    code="GROUNDING_STATUS_UNSUPPORTED",
+                    message="The generation workflow returned an unsupported grounding status.",
+                    retryable=False,
+                    metadata={"grounding_status": str(grounding_status),},
+                )
 
             return self._evaluate_guardrails(generated_state)
 
@@ -462,8 +654,13 @@ class AIOrchestrator:
 
         Guardrail policy violations are normal workflow outcomes rather than evaluator exceptions.
 
-        Until dedicated refusal and escalation workflows are implemented, rejected responses are converted into controlled FAILED
-        states. This prevents an unsafe generated candidate from being treated as a successful customer response.
+        Guardrail dispositions are handled as follows:
+
+        - PASS authorizes the generated response.
+        - ESCALATE preserves the candidate internally and requests human review.
+        - REFUSE discards the candidate and substitutes an application-controlled
+        customer refusal.
+        - Unknown outcomes fail closed.
         """
         if state.stage is not PipelineStage.RESPONSE_GENERATED:
             raise RuntimeError("Guardrail evaluation reached before response generation")
@@ -489,28 +686,75 @@ class AIOrchestrator:
 
         result = self._guardrail_evaluator.evaluate(context)
         if result.outcome is GuardrailOutcome.PASS:
-            next_state = state.with_guardrails_completed()
+            next_state = state.with_guardrails_completed(
+                disposition=GuardrailDisposition.PASS,
+                reason_code=result.reason_code.value,
+                policy_id=result.policy_id,
+            )
             self._observer.stage_completed(state=next_state, stage=PipelineStage.GUARDRAILS_COMPLETED)
 
             return next_state
         
         if result.outcome is GuardrailOutcome.ESCALATE:
-            return self._escalate_from_guardrail(state=state, reason_code=result.reason_code.value)
+            return self._escalate_from_guardrail(state=state, reason_code=result.reason_code.value, policy_id=result.policy_id)
 
-        # REFUSE does not yet have its own customer-response workflow.
-        # Keep it fail-closed rather than exposing the rejected candidate.
+        if result.outcome is GuardrailOutcome.REFUSE:
+            return self._complete_safe_refusal(
+                state=state,
+                reason_code=result.reason_code.value,
+                policy_id=result.policy_id,
+            )
+
         return self._fail(
             state=state,
             stage=PipelineStage.GUARDRAILS_COMPLETED,
-            code="GUARDRAIL_REFUSED_RESPONSE",
-            message="The generated response was refused by customer-response guardrails.",
+            code="GUARDRAIL_OUTCOME_UNSUPPORTED",
+            message="The guardrail evaluator returned an unsupported disposition.",
             retryable=False,
-            metadata={
-                "guardrail_outcome": result.outcome.value,
-                "guardrail_reason_code": result.reason_code.value,
-                "guardrail_policy_id": result.policy_id,
-            },
+            metadata={"guardrail_outcome": str(result.outcome),},
         )
+    
+    def _complete_safe_refusal(self, *, state: AIState, reason_code: str, policy_id: str | None) -> AIState:
+        """
+        Replace a rejected generated candidate with an application-controlled refusal response.
+
+        The original candidate must never be returned or persisted. The refusal text is owned by the application and contains
+        no customer-controlled, provider-controlled, or policy-diagnostic content.
+        """
+        if state.stage is not PipelineStage.RESPONSE_GENERATED:
+            raise RuntimeError("Safe refusal requires a generated candidate")
+
+        if not isinstance(reason_code, str):
+            raise TypeError("reason_code must be a string")
+
+        if not reason_code.strip():
+            raise ValueError("reason_code cannot be blank")
+
+        if policy_id is not None:
+            if not isinstance(policy_id, str):
+                raise TypeError("policy_id must be a string or None")
+
+            if not policy_id.strip():
+                raise ValueError("policy_id cannot be blank when provided")
+
+        # with_generated_response() returns a new immutable state. It replaces
+        # the rejected candidate instead of mutating or exposing it.
+        refusal_state = state.with_generated_response(
+            _DEFAULT_GUARDRAIL_REFUSAL_RESPONSE
+        )
+
+        completed_state = refusal_state.with_guardrails_completed(
+            disposition=GuardrailDisposition.REFUSE,
+            reason_code=reason_code,
+            policy_id=policy_id,
+        )
+
+        self._observer.stage_completed(
+            state=completed_state,
+            stage=PipelineStage.GUARDRAILS_COMPLETED,
+        )
+
+        return completed_state
 
     # Failure handling
     def _fail(self, *, state: AIState, stage: PipelineStage, code: str, message: str, retryable: bool, metadata: dict[str, object] | None = None) -> AIState:

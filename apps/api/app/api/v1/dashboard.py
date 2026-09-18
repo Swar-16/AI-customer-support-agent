@@ -5,9 +5,11 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Query, status, Depends
 import uuid
 
-from apps.api.app.api.dependencies import ApplicationServicesDependency
-from apps.api.app.api.v1.schemas.dashboard import DashboardAPIRequestListResponse, DashboardAuditEventListResponse, DashboardLLMCallListResponse, DashboardOverviewResponse
-from apps.api.app.api.v1.schemas.dashboard import DashboardRetrievalRunListResponse, DashboardTraceDetailResponse, DashboardTraceListResponse
+from apps.api.app.api.dependencies import AdminPrincipalDependency, ApplicationServicesDependency
+from apps.api.app.api.v1.schemas.dashboard import DashboardAPIRequestListResponse, DashboardAuditEventListResponse
+from apps.api.app.api.v1.schemas.dashboard import DashboardRetrievalRunListResponse, DashboardTraceDetailResponse, KnowledgeHealthResponse
+from apps.api.app.api.v1.schemas.dashboard import ConversationAnalyticsResponse, DashboardOverviewResponse, AIAnalyticsResponse
+from apps.api.app.api.v1.schemas.dashboard import SupportAnalyticsResponse, DashboardLLMCallListResponse, DashboardTraceListResponse
 from packages.application.dashboard.get_overview import GetDashboardOverviewCommand
 from packages.application.dashboard.models import DashboardPagination, DashboardTimeRange
 from packages.application.dashboard.query_traces import QueryDashboardTracesCommand
@@ -18,6 +20,12 @@ from packages.application.dashboard.query_api_requests import QueryDashboardAPIR
 from packages.application.dashboard.query_audit_events import QueryDashboardAuditEventsCommand
 from apps.api.app.api.dependencies import require_roles
 from packages.application.auth.models import AuthRole
+from apps.api.app.api.schemas.errors import APIErrorResponse
+from packages.application.dashboard.analytics_contract import AnalyticsBucket, AnalyticsWindow
+from packages.application.dashboard.get_conversation_analytics import GetConversationAnalyticsQuery
+from packages.application.dashboard.get_ai_analytics import GetAIAnalyticsQuery
+from packages.application.dashboard.get_support_analytics import GetSupportAnalyticsQuery
+from packages.application.dashboard.get_knowledge_health import GetKnowledgeHealthQuery
 
 router = APIRouter(
     prefix="/dashboard",
@@ -26,6 +34,30 @@ router = APIRouter(
 )
 DEFAULT_OVERVIEW_WINDOW = timedelta(hours=24)
 MAX_OVERVIEW_WINDOW = timedelta(days=90)
+_ANALYTICS_RESPONSES = {
+    401: {
+        "model": APIErrorResponse,
+        "description": "Authentication required",
+    },
+    403: {
+        "model": APIErrorResponse,
+        "description": "Administrator access required",
+    },
+    422: {
+        "model": APIErrorResponse,
+        "description": "Invalid analytics time window",
+    },
+    500: {
+        "model": APIErrorResponse,
+        "description": "Unexpected internal failure",
+    },
+    503: {
+        "model": APIErrorResponse,
+        "description": (
+            "Dashboard analytics temporarily unavailable"
+        ),
+    },
+}
 
 @router.get(
     "/overview",
@@ -421,6 +453,86 @@ def query_dashboard_audit_events(
     )
 
     return DashboardAuditEventListResponse.from_application(result)
+
+@router.get(
+    "/conversation-analytics",
+    response_model=ConversationAnalyticsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get conversation analytics",
+    description="Return administrator-only conversation and message aggregates for a validated UTC time window.",
+    responses=_ANALYTICS_RESPONSES
+)
+def get_conversation_analytics(services: ApplicationServicesDependency, principal: AdminPrincipalDependency,
+                               started_at: datetime = Query(..., description="Inclusive timezone-aware beginning of the analytics window."),
+                               ended_at: datetime = Query(..., description="Exclusive timezone-aware end of the analytics window."),
+                               bucket: AnalyticsBucket = Query(default=AnalyticsBucket.DAY, description="Time-series bucket: hour, day, or week."),
+) -> ConversationAnalyticsResponse:
+    window = AnalyticsWindow(started_at=started_at, ended_at=ended_at, bucket=bucket)
+    result = services.get_conversation_analytics.execute(
+        GetConversationAnalyticsQuery(principal=principal, window=window)
+    )
+
+    return ConversationAnalyticsResponse.from_application(result)
+
+@router.get(
+    "/ai-analytics",
+    response_model=AIAnalyticsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get AI analytics",
+    description="Return administrator-only AI quality, provider, token, cost, retrieval, reranker, embedding, and guardrail aggregates.",
+    responses=_ANALYTICS_RESPONSES
+)
+def get_ai_analytics(services: ApplicationServicesDependency, principal: AdminPrincipalDependency, started_at: datetime = Query(...),
+                     ended_at: datetime = Query(...), bucket: AnalyticsBucket = Query(default=AnalyticsBucket.DAY),
+) -> AIAnalyticsResponse:
+    result = services.get_ai_analytics.execute(
+        GetAIAnalyticsQuery(principal=principal, window=AnalyticsWindow(started_at=started_at, ended_at=ended_at, bucket=bucket))
+    )
+
+    return AIAnalyticsResponse.from_application(result)
+
+@router.get(
+    "/support-analytics",
+    response_model=SupportAnalyticsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get support analytics",
+    description=(
+        "Return ticket, escalation, resolution-duration, backlog, and customer-feedback analytics for the requested UTC window. Backlog"
+        " and categorical status distributions are current-state snapshots measured at snapshot_measured_at; they are not historical backlog series."
+    ),
+    responses=_ANALYTICS_RESPONSES
+)
+def get_support_analytics(services: ApplicationServicesDependency, principal: AdminPrincipalDependency,
+    started_at: Annotated[datetime, Query(description="Inclusive reporting-window start. Timezone information is required.")],
+    ended_at: Annotated[datetime, Query(description="Exclusive reporting-window end. Timezone information is required.")],
+    bucket: Annotated[AnalyticsBucket, Query(description="UTC timeline bucket: hour, day, or week.")] = AnalyticsBucket.DAY,
+) -> SupportAnalyticsResponse:
+    window = AnalyticsWindow(started_at=started_at, ended_at=ended_at, bucket=bucket)
+    result = services.get_support_analytics.execute(GetSupportAnalyticsQuery(principal=principal, window=window))
+
+    return SupportAnalyticsResponse.from_application(result)
+
+@router.get(
+    "/knowledge-health",
+    response_model=KnowledgeHealthResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get knowledge health analytics",
+    description=(
+        "Return administrator-only Knowledge Management inventory, processing, failure, backlog, chunk, and embedding-coverage "
+        "analytics. Inventory and coverage values are current-state snapshots measured at snapshot_measured_at, while creation and "
+        "processing trends use the requested half-open UTC window."
+    ),
+    responses=_ANALYTICS_RESPONSES,
+)
+def get_knowledge_health(services: ApplicationServicesDependency, principal: AdminPrincipalDependency,
+    started_at: Annotated[datetime, Query(description="Inclusive reporting-window start. Timezone information is required.")],
+    ended_at: Annotated[datetime, Query(description="Exclusive reporting-window end. Timezone information is required.")],
+    bucket: Annotated[AnalyticsBucket, Query(description="UTC timeline bucket: hour, day, or week.")] = AnalyticsBucket.DAY,
+) -> KnowledgeHealthResponse:
+    window = AnalyticsWindow(started_at=started_at, ended_at=ended_at, bucket=bucket)
+    result = services.get_knowledge_health.execute(GetKnowledgeHealthQuery(principal=principal, window=window))
+
+    return KnowledgeHealthResponse.from_application(result)
 
 def _resolve_time_range(*, started_at: datetime | None, ended_at: datetime | None) -> DashboardTimeRange:
     resolved_end = ended_at if ended_at is not None else datetime.now(timezone.utc)

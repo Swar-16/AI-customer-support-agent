@@ -4,7 +4,9 @@ import hashlib
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from collections.abc import Callable
+from types import TracebackType
+from typing import Any, Protocol, Self
 from uuid6 import uuid7
 
 from packages.database.models.ai.retrieval_candidate import RetrievalCandidateModel
@@ -15,6 +17,19 @@ from packages.knowledge.retrieval.models import RetrievalCandidate
 from packages.knowledge.retrieval.profiles import RetrievalProfile
 from packages.knowledge.retrieval.query.models import PreparedRetrievalQuery
 
+class RetrievalTelemetryUnitOfWork(Protocol):
+    retrieval: RetrievalRepository | None
+
+    def __enter__(self) -> Self:
+        ...
+
+    def __exit__(self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None) -> None:
+        ...
+
+    def commit(self) -> None:
+        ...
+
+RetrievalTelemetryUnitOfWorkFactory = Callable[[], RetrievalTelemetryUnitOfWork]
 
 @dataclass(slots=True)
 class _CandidateTelemetry:
@@ -33,10 +48,11 @@ class RetrievalTelemetryRecorder:
 
     The recorder does not commit. Its repository must belong to the active customer-message Unit of Work.
     """
-    def __init__(self, *, repository: RetrievalRepository, ai_run_id: uuid.UUID | None = None, trace_id: uuid.UUID | None = None, 
-                 conversation_id: uuid.UUID | None = None, profile: RetrievalProfile) -> None:
-        if not isinstance(repository, RetrievalRepository):
-            raise TypeError("repository must be a RetrievalRepository")
+    def __init__(self, *, uow_factory: RetrievalTelemetryUnitOfWorkFactory, ai_run_id: uuid.UUID | None = None,
+                 trace_id: uuid.UUID | None = None, conversation_id: uuid.UUID | None = None, profile: RetrievalProfile
+    ) -> None:
+        if not callable(uow_factory):
+            raise TypeError("uow_factory must be callable")
 
         for field_name, value in (("ai_run_id", ai_run_id), ("trace_id", trace_id), ("conversation_id", conversation_id),):
             if value is not None and not isinstance(value, uuid.UUID):
@@ -45,17 +61,23 @@ class RetrievalTelemetryRecorder:
         if not isinstance(profile, RetrievalProfile):
             raise TypeError("profile must be a RetrievalProfile")
 
-        self._repository = repository
+        self._uow_factory = uow_factory
         self._ai_run_id = ai_run_id
         self._trace_id = trace_id
         self._conversation_id = conversation_id
         self._profile = profile
-        self._run: RetrievalRunModel | None = None
-        self._candidates: dict[uuid.UUID, _CandidateTelemetry] = {}
+
+        # Only an immutable identifier crosses transaction boundaries.
+        self._run_id: uuid.UUID | None = None
+
+        # Candidate information remains in memory until finalization.
+        self._candidates: dict[uuid.UUID, _CandidateTelemetry,] = {}
+
         self._vector_count = 0
         self._lexical_count = 0
         self._fused_count = 0
         self._reranked_count = 0
+
         self._vector_latency_ms: int | None = None
         self._lexical_latency_ms: int | None = None
         self._fusion_latency_ms: int | None = None
@@ -63,10 +85,10 @@ class RetrievalTelemetryRecorder:
 
     @property
     def retrieval_run_id(self) -> uuid.UUID | None:
-        return self._run.id if self._run is not None else None
+        return self._run_id
 
     def start(self, *, prepared_query: PreparedRetrievalQuery, started_at: datetime) -> uuid.UUID:
-        if self._run is not None:
+        if self._run_id is not None:
             raise RuntimeError("Retrieval telemetry has already started")
 
         if not isinstance(prepared_query, PreparedRetrievalQuery):
@@ -74,14 +96,38 @@ class RetrievalTelemetryRecorder:
 
         self._validate_datetime(started_at, field_name="started_at")
         query = prepared_query.original_query
+        run_id = uuid7()
         run = RetrievalRunModel(
-            id=uuid7(), ai_run_id=self._ai_run_id, embedding_call_id=None, trace_id=self._trace_id, conversation_id=self._conversation_id,
-            retrieval_mode=self._retrieval_mode(), profile_identity=self._profile.identity, configuration_fingerprint=self._profile.config_fingerprint,
-            query_fingerprint=self._fingerprint(query), query_character_count=len(query), requested_limit=self._profile.final_candidate_limit,
-            vector_candidate_count=0, lexical_candidate_count=0, fused_candidate_count=0, reranked_candidate_count=0, selected_candidate_count=0,
-            context_block_count=0, context_token_count=0, reranker_used=self._profile.reranking_enabled, context_truncated=False, 
-            zero_result=None, vector_latency_ms=None, lexical_latency_ms=None, fusion_latency_ms=None, reranker_latency_ms=None, 
-            context_build_latency_ms=None, total_latency_ms=None, status="started", error_code=None, error_message=None,
+            id=run_id,
+            ai_run_id=self._ai_run_id,
+            embedding_call_id=None,
+            trace_id=self._trace_id,
+            conversation_id=self._conversation_id,
+            retrieval_mode=self._retrieval_mode(),
+            profile_identity=self._profile.identity,
+            configuration_fingerprint=self._profile.config_fingerprint,
+            query_fingerprint=self._fingerprint(query),
+            query_character_count=len(query),
+            requested_limit=self._profile.final_candidate_limit,
+            vector_candidate_count=0,
+            lexical_candidate_count=0,
+            fused_candidate_count=0,
+            reranked_candidate_count=0,
+            selected_candidate_count=0,
+            context_block_count=0,
+            context_token_count=0,
+            reranker_used=self._profile.reranking_enabled,
+            context_truncated=False,
+            zero_result=None,
+            vector_latency_ms=None,
+            lexical_latency_ms=None,
+            fusion_latency_ms=None,
+            reranker_latency_ms=None,
+            context_build_latency_ms=None,
+            total_latency_ms=None,
+            status="started",
+            error_code=None,
+            error_message=None,
             metadata_={
                 "vector_enabled": self._profile.vector_enabled,
                 "lexical_enabled": self._profile.lexical_enabled,
@@ -90,11 +136,14 @@ class RetrievalTelemetryRecorder:
             completed_at=None,
         )
 
-        self._repository.add_run(run)
-        self._repository.flush()
-        self._run = run
+        with self._uow_factory() as uow:
+            repository = self._require_repository(uow)
+            repository.add_run(run)
+            repository.flush()
+            uow.commit()
 
-        return run.id
+        self._run_id = run_id
+        return run_id
 
     def attach_embedding_call(self, embedding_call_id: uuid.UUID | None) -> None:
         if embedding_call_id is None:
@@ -103,7 +152,19 @@ class RetrievalTelemetryRecorder:
         if not isinstance(embedding_call_id, uuid.UUID):
             raise TypeError("embedding_call_id must be a UUID or None")
 
-        self._require_run().embedding_call_id = embedding_call_id
+        run_id = self._require_run_id()
+        with self._uow_factory() as uow:
+            repository = self._require_repository(uow)
+            run = repository.get_run_by_id(run_id)
+
+            if run is None:
+                raise RuntimeError(f"Retrieval telemetry run does not exist: {run_id}")
+
+            if run.status != "started":
+                raise RuntimeError("Cannot attach an embedding call to a finalized retrieval run")
+
+            run.embedding_call_id = embedding_call_id
+            uow.commit()
 
     def record_vector(self, candidates: tuple[RetrievalCandidate, ...], *, latency_ms: int) -> None:
         self._validate_candidates(candidates)
@@ -156,43 +217,73 @@ class RetrievalTelemetryRecorder:
         self._validate_datetime(completed_at, field_name="completed_at")
         self._validate_latency(total_latency_ms)
         self._validate_latency(context_build_latency_ms)
-        run = self._require_run()
+        run_id = self._require_run_id()
         selected_chunk_ids = set(context.chunk_ids)
         candidate_models = tuple(
-            self._to_model(run_id=run.id, telemetry=item, selected_chunk_ids=selected_chunk_ids, recorded_at=completed_at)
+            self._to_model(run_id=run_id, telemetry=item, selected_chunk_ids=selected_chunk_ids, recorded_at=completed_at)
             for item in self._candidates.values()
         )
 
-        self._repository.add_candidates(candidate_models)
-        self._repository.mark_succeeded(
-            run,
-            completed_at=completed_at,
-            total_latency_ms=total_latency_ms,
-            vector_candidate_count=self._vector_count,
-            lexical_candidate_count=self._lexical_count,
-            fused_candidate_count=self._fused_count,
-            reranked_candidate_count=self._reranked_count,
-            selected_candidate_count=context.block_count,
-            context_block_count=context.block_count,
-            context_token_count=context.estimated_token_count,
-            reranker_used=self._profile.reranking_enabled,
-            context_truncated=context.truncated,
-            vector_latency_ms=self._vector_latency_ms,
-            lexical_latency_ms=self._lexical_latency_ms,
-            fusion_latency_ms=self._fusion_latency_ms,
-            reranker_latency_ms=self._reranker_latency_ms,
-            context_build_latency_ms=context_build_latency_ms,
-        )
-        self._repository.flush()
+        with self._uow_factory() as uow:
+            repository = self._require_repository(uow)
+            run = repository.get_run_by_id(run_id)
+            if run is None:
+                raise RuntimeError(f"Retrieval telemetry run does not exist: {run_id}")
+
+            if run.status != "started":
+                raise RuntimeError(f"Retrieval telemetry run is already finalized: {run_id} ({run.status})")
+
+            repository.add_candidates(candidate_models)
+            repository.mark_succeeded(
+                run,
+                completed_at=completed_at,
+                total_latency_ms=total_latency_ms,
+                vector_candidate_count=self._vector_count,
+                lexical_candidate_count=self._lexical_count,
+                fused_candidate_count=self._fused_count,
+                reranked_candidate_count=self._reranked_count,
+                selected_candidate_count=context.block_count,
+                context_block_count=context.block_count,
+                context_token_count=context.estimated_token_count,
+                reranker_used=self._profile.reranking_enabled,
+                context_truncated=context.truncated,
+                vector_latency_ms=self._vector_latency_ms,
+                lexical_latency_ms=self._lexical_latency_ms,
+                fusion_latency_ms=self._fusion_latency_ms,
+                reranker_latency_ms=self._reranker_latency_ms,
+                context_build_latency_ms=context_build_latency_ms,
+            )
+
+            repository.flush()
+            uow.commit()
 
     def fail(self, *, completed_at: datetime, total_latency_ms: int, error_code: str, error_message: str, timeout: bool = False) -> None:
         self._validate_datetime(completed_at, field_name="completed_at")
         self._validate_latency(total_latency_ms)
-        run = self._require_run()
-        self._repository.mark_failed(
-            run, completed_at=completed_at, total_latency_ms=total_latency_ms, error_code=error_code, error_message=error_message, timeout=timeout,
-        )
-        self._repository.flush()
+        if not isinstance(timeout, bool):
+            raise TypeError("timeout must be a boolean")
+
+        run_id = self._require_run_id()
+        with self._uow_factory() as uow:
+            repository = self._require_repository(uow)
+            run = repository.get_run_by_id(run_id)
+            if run is None:
+                raise RuntimeError(f"Retrieval telemetry run does not exist: {run_id}")
+
+            if run.status != "started":
+                raise RuntimeError(f"Retrieval telemetry run is already finalized: {run_id} ({run.status})")
+
+            repository.mark_failed(
+                run,
+                completed_at=completed_at,
+                total_latency_ms=total_latency_ms,
+                error_code=error_code,
+                error_message=error_message,
+                timeout=timeout,
+            )
+
+            repository.flush()
+            uow.commit()
 
     def _candidate(self, candidate: RetrievalCandidate) -> _CandidateTelemetry:
         existing = self._candidates.get(candidate.chunk_id)
@@ -255,11 +346,22 @@ class RetrievalTelemetryRecorder:
 
         return "lexical"
 
-    def _require_run(self) -> RetrievalRunModel:
-        if self._run is None:
+    def _require_run_id(self) -> uuid.UUID:
+        if self._run_id is None:
             raise RuntimeError("Retrieval telemetry has not been started")
 
-        return self._run
+        return self._run_id
+
+    @staticmethod
+    def _require_repository(uow: RetrievalTelemetryUnitOfWork) -> RetrievalRepository:
+        repository = uow.retrieval
+        if repository is None:
+            raise RuntimeError("Retrieval repository is unavailable in the telemetry Unit of Work")
+
+        if not isinstance(repository, RetrievalRepository):
+            raise TypeError("uow.retrieval must be a RetrievalRepository")
+
+        return repository
 
     @staticmethod
     def _fingerprint(value: str) -> str:

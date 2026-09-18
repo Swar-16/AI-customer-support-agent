@@ -316,10 +316,39 @@ class SubmitFeedback:
                 return result
 
         except IntegrityError as exc:
-            if self._is_duplicate_response_feedback(exc):
-                raise FeedbackSubmissionConflictError("Feedback already exists for the assistant response.") from exc
+            if not self._is_duplicate_response_feedback(exc):
+                raise
 
-            raise
+            return self._recover_duplicate_submission(command=command, integrity_error=exc)
+    
+    def _recover_duplicate_submission(self, *, command: SubmitFeedbackCommand, integrity_error: IntegrityError) -> SubmitFeedbackResult:
+        """
+        Recover from a concurrent unique-constraint race.
+
+        PostgreSQL's unique constraint ensures only one feedback row wins.
+        After the failed transaction has left its Unit of Work, open a fresh transaction and inspect the committed winner:
+
+        - identical winner: return it idempotently with created=False;
+        - conflicting winner: preserve the explicit conflict contract;
+        - missing winner: report a persistence-contract failure.
+
+        A fresh Unit of Work is required because the session that received the IntegrityError is in a failed transaction state and cannot be queried safely.
+        """
+        with self._uow_factory() as recovery_uow:
+            repository, _ = self._require_repositories(recovery_uow)
+            existing = repository.get_by_response_message(command.response_message_id)
+            if existing is None:
+                raise FeedbackPersistenceContractError(
+                    "Feedback uniqueness conflict occurred, but the winning feedback row could not be loaded."
+                ) from integrity_error
+
+            self._validate_existing_feedback(existing=existing, command=command)
+            result = self._to_result(feedback=existing, created=False)
+            # This is a read-only recovery transaction. Commit explicitly to
+            # preserve the Unit of Work's normal successful-exit contract.
+            recovery_uow.commit()
+
+            return result
 
     @staticmethod
     def _require_repositories(uow: SqlAlchemyUnitOfWork) -> tuple[FeedbackRepository, AuditEventRepository,]:

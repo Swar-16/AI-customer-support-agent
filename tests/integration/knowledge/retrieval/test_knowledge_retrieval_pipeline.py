@@ -11,8 +11,11 @@ from sqlalchemy import select
 from packages.ai.telemetry.retrieval_recorder import (
     RetrievalTelemetryRecorder,
 )
-from packages.ai.telemetry.transactional_embedding_recorder import (
-    TransactionalEmbeddingTelemetryRecorder,
+from packages.ai.telemetry.embedding_recorder import (
+    EmbeddingTelemetryRecorder,
+)
+from packages.database.unit_of_work.sqlalchemy_uow import (
+    SqlAlchemyUnitOfWork,
 )
 from packages.database.models.ai.embedding_call import EmbeddingCallModel
 from packages.database.models.ai.retrieval_candidate import (
@@ -1167,6 +1170,7 @@ class TestRetrievalTelemetry:
     def test_persists_complete_retrieval_telemetry(
         self,
         pipeline_session: Session,
+        test_session_factory,
     ) -> None:
         _, _, expected_chunk_id = seed_retrievable_chunk(
             pipeline_session,
@@ -1180,12 +1184,13 @@ class TestRetrievalTelemetry:
         )
         pipeline_session.commit()
 
-        embedding_recorder = (
-            TransactionalEmbeddingTelemetryRecorder(
-                repository=EmbeddingCallRepository(
-                    pipeline_session
-                ),
+        def uow_factory() -> SqlAlchemyUnitOfWork:
+            return SqlAlchemyUnitOfWork(
+                session_factory=test_session_factory
             )
+
+        embedding_recorder = EmbeddingTelemetryRecorder(
+            uow_factory=uow_factory
         )
 
         instrumented_provider = InstrumentedEmbeddingProvider(
@@ -1200,7 +1205,7 @@ class TestRetrievalTelemetry:
         )
 
         retrieval_recorder = RetrievalTelemetryRecorder(
-            repository=RetrievalRepository(pipeline_session),
+            uow_factory=uow_factory,
             ai_run_id=None,
             trace_id=None,
             conversation_id=None,
@@ -1208,7 +1213,7 @@ class TestRetrievalTelemetry:
         )
 
         components = create_knowledge_retrieval_components(
-            session=pipeline_session,
+            retrieval_uow_factory=uow_factory,
             embedding_provider=instrumented_provider,
             embedding_input_descriptor=TEST_INPUT_DESCRIPTOR,
             profile=TEST_PROFILE,

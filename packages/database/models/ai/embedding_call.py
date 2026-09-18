@@ -105,6 +105,10 @@ class EmbeddingCallModel(Base):
         ),
 
         Index(
+            "idx_embedding_calls_started_at",
+            "started_at"
+        ),
+        Index(
             "idx_embedding_calls_ai_run",
             "ai_run_id",
             "started_at",

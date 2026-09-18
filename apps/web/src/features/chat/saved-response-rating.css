@@ -1,0 +1,27 @@
+/* apps/web/src/features/chat/saved-response-rating.css */
+.saved-response-rating {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem 1rem;
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgb(184 23 119 / 16%);
+  border-radius: 16px;
+  background: #fcebf5;
+  color: #b81777;
+}
+
+.saved-response-rating__stars {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.saved-response-rating p {
+  margin: 0;
+  color: #67334f;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}

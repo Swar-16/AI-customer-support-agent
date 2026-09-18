@@ -62,6 +62,15 @@ class EscalationModel(Base):
         ),
         
         Index(
+            "idx_escalations_created_at",
+            "created_at"
+        ),
+        Index(
+            "idx_escalations_resolved_at",
+            "resolved_at",
+            postgresql_where=text("resolved_at IS NOT NULL"),
+        ),
+        Index(
             "idx_escalations_conversation_created",
             "conversation_id",
             text("created_at DESC"),

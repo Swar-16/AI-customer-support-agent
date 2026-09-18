@@ -379,6 +379,13 @@ class TelemetryOrchestrationObserver(OrchestrationObserver):
             metadata["decision"] = state.decision_result.decision.value
             metadata["decision_reason_code"] = state.decision_result.reason_code.value
 
+        if state.guardrail_disposition is not None:
+            metadata["guardrail_outcome"] = state.guardrail_disposition.value
+            # State invariants guarantee this exists whenever a disposition exists.
+            metadata["guardrail_reason_code"] = state.guardrail_reason_code
+            if state.guardrail_policy_id is not None:
+                metadata["guardrail_policy_id"] = state.guardrail_policy_id
+        
         return metadata
 
     

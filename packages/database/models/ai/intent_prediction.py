@@ -21,7 +21,22 @@ class IntentPredictionModel(Base):
             """,
             name="valid_confidence",
         ),
+        CheckConstraint(
+            """
+            jsonb_typeof(escalation_signals) = 'array'
+            AND escalation_signals
+                <@ '[
+                    "explicit_human_request",
+                    "severe_customer_dissatisfaction"
+                ]'::jsonb
+            """,
+            name="valid_escalation_signals",
+        ),
 
+        Index(
+            "idx_intent_predictions_created_at",
+            "created_at"
+        ),
         Index(
             "idx_intent_predictions_ai_run",
             "ai_run_id",
@@ -38,6 +53,11 @@ class IntentPredictionModel(Base):
         Index(
             "idx_intent_predictions_llm_call",
             "llm_call_id",
+        ),
+        Index(
+            "idx_intent_predictions_escalation_signals",
+            "escalation_signals",
+            postgresql_using="gin",
         ),
 
         {"schema": "ai"},
@@ -86,6 +106,13 @@ class IntentPredictionModel(Base):
     needs_clarification: Mapped[bool] = mapped_column(
         nullable=False,
         server_default="false",
+    )
+    
+    escalation_signals: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
     )
 
     reasoning_summary: Mapped[str | None] = mapped_column(

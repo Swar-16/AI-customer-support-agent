@@ -10,7 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from apps.api.app.api.dependencies import TRACE_HEADER_NAME
-from packages.application.conversations.process_customer_message import ConversationDoesNotExistError, ConversationNotProcessableError, CustomerMessageValidationError
+from packages.application.conversations.process_customer_message import ConversationDoesNotExistError, ConversationNotProcessableError
 from packages.application.escalations.create_escalation import CreateEscalationContractError, CreateEscalationError, EscalationIdempotencyConflictError
 from packages.application.escalations.query_escalations import EscalationDoesNotExistError as QueriedEscalationDoesNotExistError
 from packages.application.escalations.query_escalations import EscalationQueryContractError, EscalationQueryError
@@ -77,6 +77,18 @@ from packages.knowledge.domain.errors import PublishedVersionConflictError
 from packages.knowledge.embeddings.errors import EmbeddingArtifactConflictError, EmbeddingBatchConfigurationError, EmbeddingProviderIdentityMismatchError
 from packages.knowledge.embeddings.errors import EmbeddingResponseCardinalityError, EmbeddingResponseOrderingError, EmbeddingVersionError
 from packages.knowledge.embeddings.errors import EmbeddingVersionHasNoChunksError, EmbeddingVersionNotFoundError, EmbeddingVersionNotReadyError
+from packages.application.dashboard.analytics_contract import AnalyticsRangeTooLargeError, DashboardAnalyticsAccessDeniedError
+from packages.application.dashboard.analytics_contract import InvalidAnalyticsTimestampError, InvalidAnalyticsWindowError
+from packages.application.conversations.process_customer_message import CustomerMessagePipelineFailedError, CustomerMessagePipelineTimeoutError
+from packages.application.conversations.process_customer_message import CustomerMessagePipelineUnavailableError, CustomerMessageValidationError
+from packages.application.dashboard.analytics_contract import DashboardAnalyticsQueryTimeoutError, UnsupportedAnalyticsBucketError
+from packages.application.conversations.start_conversation_errors import ConversationStarterDoesNotExistError, ConversationStarterNotActiveError
+from packages.application.conversations.start_conversation_errors import ConversationStarterRoleMismatchError, ConversationStartIdempotencyConflictError
+from packages.application.conversations.start_conversation_errors import ConversationStartLeaseLostError, ConversationStartPersistenceContractError
+from packages.application.conversations.start_conversation_errors import ConversationStartReplayUnavailableError, ConversationStartRequestExpiredError
+from packages.application.conversations.start_conversation_errors import StartConversationAccessDeniedError, StartConversationValidationError
+from apps.api.app.api.browser_auth import clear_refresh_cookie
+from packages.config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +132,16 @@ ERROR_KNOWLEDGE_CONFLICT = "KNOWLEDGE_CONFLICT"
 ERROR_INVALID_KNOWLEDGE_UPLOAD = "INVALID_KNOWLEDGE_UPLOAD"
 ERROR_KNOWLEDGE_UPLOAD_TOO_LARGE = "KNOWLEDGE_UPLOAD_TOO_LARGE"
 ERROR_UNSUPPORTED_KNOWLEDGE_UPLOAD = "UNSUPPORTED_KNOWLEDGE_UPLOAD"
+ERROR_INVALID_ANALYTICS_WINDOW = "INVALID_ANALYTICS_WINDOW"
+ERROR_DASHBOARD_ANALYTICS_ACCESS_DENIED = "DASHBOARD_ANALYTICS_ACCESS_DENIED"
+ERROR_AI_PROVIDER_TIMEOUT = "AI_PROVIDER_TIMEOUT"
+ERROR_AI_SERVICE_UNAVAILABLE = "AI_SERVICE_UNAVAILABLE"
+ERROR_AI_PIPELINE_FAILED = "AI_PIPELINE_FAILED"
+ERROR_DASHBOARD_ANALYTICS_UNAVAILABLE = "DASHBOARD_ANALYTICS_UNAVAILABLE"
+ERROR_INVALID_CONVERSATION_START = "INVALID_CONVERSATION_START"
+ERROR_CONVERSATION_START_CONFLICT = "CONVERSATION_START_CONFLICT"
+ERROR_CONVERSATION_START_EXPIRED = "CONVERSATION_START_EXPIRED"
+ERROR_CONVERSATION_START_UNAVAILABLE = "CONVERSATION_START_UNAVAILABLE"
 
 # Registration
 def register_exception_handlers(app: FastAPI) -> None:
@@ -154,22 +176,29 @@ def register_exception_handlers(app: FastAPI) -> None:
         ConversationCreationAccessDeniedError, ConversationCreatorNotActiveError, ConversationCreatorRoleMismatchError,
         ConversationQueryAccessDeniedError, ConversationRequesterNotActiveError, ConversationRequesterRoleMismatchError,
         ConversationCloseAccessDeniedError, ConversationCloserNotActiveError, ConversationCloserRoleMismatchError,
+        StartConversationAccessDeniedError, ConversationStarterNotActiveError, ConversationStarterRoleMismatchError,
     ):
         app.add_exception_handler(exception_type, conversation_access_denied_handler)
         
     for exception_type in (
-        ConversationCreatorDoesNotExistError, ConversationRequesterDoesNotExistError, ConversationCloserDoesNotExistError,
+        ConversationCreatorDoesNotExistError, ConversationRequesterDoesNotExistError, ConversationCloserDoesNotExistError, ConversationStarterDoesNotExistError,
     ):
         app.add_exception_handler(exception_type, conversation_creator_not_found_handler)
         
     for exception_type in (
         ConversationCreationPersistenceContractError, ConversationQueryPersistenceContractError, ConversationClosePersistenceContractError,
+        ConversationStartPersistenceContractError, ConversationStartReplayUnavailableError,
     ):
         app.add_exception_handler(exception_type, conversation_internal_contract_handler)
     
     app.add_exception_handler(QueriedConversationDoesNotExistError, conversation_not_found_handler)
-    
     app.add_exception_handler(CustomerMessageValidationError, customer_message_validation_handler)
+    app.add_exception_handler(StartConversationValidationError, conversation_start_validation_handler)
+
+    for exception_type in (ConversationStartIdempotencyConflictError, ConversationStartRequestExpiredError,):
+        app.add_exception_handler(exception_type, conversation_start_conflict_handler)
+
+    app.add_exception_handler(ConversationStartLeaseLostError, conversation_start_unavailable_handler)
     
     for exception_type in (QueriedEscalationDoesNotExistError, UpdatedEscalationDoesNotExistError):
         app.add_exception_handler(exception_type, escalation_not_found_handler)
@@ -306,6 +335,20 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     for exception_type in (UnsupportedKnowledgeUploadTypeError, UnsupportedKnowledgeUploadMediaTypeError):
         app.add_exception_handler(exception_type, unsupported_knowledge_upload_handler)
+        
+    # Dashboard Analytics
+    for exception_type in (
+        InvalidAnalyticsTimestampError, InvalidAnalyticsWindowError, AnalyticsRangeTooLargeError, UnsupportedAnalyticsBucketError,
+    ):
+        app.add_exception_handler(exception_type, invalid_analytics_window_handler)
+
+    app.add_exception_handler(DashboardAnalyticsAccessDeniedError, dashboard_analytics_access_denied_handler)
+    
+    app.add_exception_handler(CustomerMessagePipelineTimeoutError, customer_message_pipeline_timeout_handler)
+    app.add_exception_handler(CustomerMessagePipelineUnavailableError, customer_message_pipeline_unavailable_handler)
+    app.add_exception_handler(CustomerMessagePipelineFailedError, customer_message_pipeline_failed_handler)
+    
+    app.add_exception_handler(DashboardAnalyticsQueryTimeoutError, dashboard_analytics_timeout_handler)
 
     # Must remain last conceptually: this is the safety net for unexpected failures.
     app.add_exception_handler(Exception, unhandled_exception_handler)
@@ -486,6 +529,63 @@ async def conversation_not_processable_handler(request: Request, exc: Conversati
         status_code=status.HTTP_409_CONFLICT,
         code=ERROR_CONVERSATION_NOT_PROCESSABLE,
         message="The conversation cannot accept a new customer message in its current state.",
+        trace_id=trace_id,
+    )
+    
+async def customer_message_pipeline_timeout_handler(request: Request, exc: CustomerMessagePipelineTimeoutError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.warning(
+        "customer_message_pipeline_timeout",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "failure_code": exc.failure_code,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+        code=ERROR_AI_PROVIDER_TIMEOUT,
+        message="The support assistant did not respond in time. Please try again.",
+        trace_id=trace_id,
+    )
+
+async def customer_message_pipeline_unavailable_handler(request: Request, exc: CustomerMessagePipelineUnavailableError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.warning(
+        "customer_message_pipeline_unavailable",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "failure_code": exc.failure_code,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        code=ERROR_AI_SERVICE_UNAVAILABLE,
+        message="The support assistant is temporarily unavailable. Please try again.",
+        trace_id=trace_id,
+    )
+
+async def customer_message_pipeline_failed_handler(request: Request, exc: CustomerMessagePipelineFailedError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.error(
+        "customer_message_pipeline_failed",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "failure_code": exc.failure_code,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        code=ERROR_AI_PIPELINE_FAILED,
+        message="The support assistant could not complete the request.",
         trace_id=trace_id,
     )
 
@@ -939,13 +1039,19 @@ async def invalid_refresh_token_handler(request: Request, exc: InvalidRefreshTok
         },
     )
 
-    return _error_response(
+    response = _error_response(
         status_code=status.HTTP_401_UNAUTHORIZED,
         code=ERROR_INVALID_REFRESH_TOKEN,
         message="The refresh token is invalid or expired.",
         trace_id=trace_id,
         headers={"WWW-Authenticate": "Bearer",},
     )
+    
+    settings = getattr(request.app.state, "settings", None)
+    if isinstance(settings, Settings):
+        clear_refresh_cookie(response, settings=settings)
+
+    return response
 
 async def current_user_unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
     trace_id = _resolve_trace_id(request)
@@ -1280,4 +1386,129 @@ async def unsupported_knowledge_upload_handler(request: Request, exc: Exception)
         code=ERROR_UNSUPPORTED_KNOWLEDGE_UPLOAD,
         message="Only supported UTF-8 knowledge-file formats may be uploaded.",
         trace_id=trace_id,
+    )
+    
+async def invalid_analytics_window_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "invalid_dashboard_analytics_window",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        code=ERROR_INVALID_ANALYTICS_WINDOW,
+        message="The supplied analytics time window is invalid.",
+        trace_id=trace_id,
+    )
+
+async def dashboard_analytics_access_denied_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.warning(
+        "dashboard_analytics_access_denied",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_403_FORBIDDEN,
+        code=ERROR_DASHBOARD_ANALYTICS_ACCESS_DENIED,
+        message="You are not permitted to access dashboard analytics.",
+        trace_id=trace_id,
+    )
+
+async def dashboard_analytics_timeout_handler(request: Request, exc: DashboardAnalyticsQueryTimeoutError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.warning(
+        "dashboard_analytics_query_timeout",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "timeout_ms": exc.timeout_ms,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    response = _error_response(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        code=ERROR_DASHBOARD_ANALYTICS_UNAVAILABLE,
+        message="Dashboard analytics are temporarily unavailable.",
+        trace_id=trace_id,
+    )
+    response.headers["Retry-After"] = "5"
+    return response
+
+async def conversation_start_validation_handler(request: Request, exc: StartConversationValidationError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.info(
+        "conversation_start_validation_failed",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        code=ERROR_INVALID_CONVERSATION_START,
+        message="The conversation start request is invalid.",
+        trace_id=trace_id,
+    )
+
+async def conversation_start_conflict_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    if isinstance(exc, ConversationStartRequestExpiredError):
+        code = ERROR_CONVERSATION_START_EXPIRED
+        message = "The idempotency replay period has expired. Submit the request with a new idempotency key."
+        
+    else:
+        code = ERROR_CONVERSATION_START_CONFLICT
+        message = "The idempotency key was already used for different conversation-start input."
+
+    logger.info(
+        "conversation_start_conflict",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_409_CONFLICT,
+        code=code,
+        message=message,
+        trace_id=trace_id,
+    )
+
+async def conversation_start_unavailable_handler(request: Request, exc: ConversationStartLeaseLostError) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    logger.warning(
+        "conversation_start_processing_lease_lost",
+        extra={
+            "trace_id": str(trace_id),
+            "method": request.method,
+            "path": request.url.path,
+            "start_request_id": str(exc.request_id),
+        },
+    )
+
+    return _error_response(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        code=ERROR_CONVERSATION_START_UNAVAILABLE,
+        message="The conversation was accepted, but processing could not be confirmed. Retry with the same idempotency key.",
+        trace_id=trace_id,
+        headers={"Retry-After": "2"},
     )

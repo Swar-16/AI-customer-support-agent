@@ -36,10 +36,20 @@ class ConversationModel(Base):
         ),
         
         Index(
+            "idx_conversations_created_at",
+            "created_at"
+        ),
+        Index(
+            "idx_conversations_closed_at",
+            "closed_at",
+            postgresql_where=text("closed_at IS NOT NULL"),
+        ),
+        Index(
             "idx_conversations_user_created_at",
             "user_id",
             "created_at",
         ),
+        
         {"schema": "support"},
     )
 

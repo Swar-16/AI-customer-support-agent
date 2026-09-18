@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from sqlalchemy.orm import Session, sessionmaker
+from datetime import timedelta
 
 from packages.ai.orchestration.orchestrator import OrchestrationObserver
 from packages.ai.providers.base import LLMProvider
@@ -63,6 +64,17 @@ from packages.knowledge.application.process_version import ProcessKnowledgeVersi
 from packages.knowledge.application.publish_version import PublishKnowledgeVersion
 from packages.knowledge.application.upload_document import UploadKnowledgeDocument
 from packages.knowledge.application.upload_version import UploadKnowledgeVersion
+from packages.application.dashboard.get_conversation_analytics import GetConversationAnalytics
+from packages.application.dashboard.get_ai_analytics import GetAIAnalytics
+from packages.application.dashboard.get_support_analytics import GetSupportAnalytics
+from packages.application.dashboard.get_knowledge_health import GetKnowledgeHealth
+from packages.database.repositories.dashboard.sqlalchemy_analytics_repository import SQLAlchemyDashboardAnalyticsRepository
+from packages.application.dashboard.analytics_cache import CachingDashboardAnalyticsRepository
+from packages.application.dashboard.analytics_repository import DashboardAnalyticsRepository
+from packages.application.conversations.conversation_context import ConversationContextBuilder, ConversationContextConfig
+from packages.application.conversations.accept_conversation_start import AcceptConversationStart
+from packages.application.conversations.start_conversation import StartConversation
+from packages.application.conversations.assign_conversation_title import AssignConversationTitle
 
 SessionFactory = sessionmaker[Session]
 ProviderFactory = Callable[..., LLMProvider]
@@ -83,6 +95,10 @@ class ApplicationServices:
 
     Those are created per request / per application transaction.
     """
+    accept_conversation_start: AcceptConversationStart
+    assign_conversation_title: AssignConversationTitle
+    start_conversation: StartConversation
+    
     create_conversation: CreateConversation
     list_conversations: ListConversations
     get_conversation: GetConversation
@@ -106,6 +122,11 @@ class ApplicationServices:
     query_dashboard_retrieval_runs: QueryDashboardRetrievalRuns
     query_dashboard_api_requests: QueryDashboardAPIRequests
     query_dashboard_audit_events: QueryDashboardAuditEvents
+    
+    get_conversation_analytics: GetConversationAnalytics
+    get_ai_analytics: GetAIAnalytics
+    get_support_analytics: GetSupportAnalytics
+    get_knowledge_health: GetKnowledgeHealth
     
     get_audit_event: GetAuditEvent
     list_audit_events: ListAuditEvents
@@ -188,6 +209,7 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         raise TypeError("session_factory cannot be None")
 
     resolved_provider = _resolve_provider(settings=settings, base_provider=base_provider)
+    title_provider = _resolve_title_provider(settings=settings, injected_provider=base_provider, resolved_provider=resolved_provider)
     resolved_observer = _resolve_observer(observer=observer)
     pipeline_factory = AIPipelineFactory(base_provider=resolved_provider, observer=resolved_observer)
     embedding_services = create_knowledge_embedding_services(settings)
@@ -196,6 +218,13 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
     grounding_budget = GroundingContextBudget(
         max_tokens=settings.rag_context_max_tokens,
         max_blocks=settings.rag_context_max_blocks,
+    )
+    conversation_context_builder = ConversationContextBuilder(
+        config=ConversationContextConfig(
+            max_messages=settings.conversation_context_max_messages,
+            max_characters=settings.conversation_context_max_characters,
+            max_characters_per_message=settings.conversation_context_max_characters_per_message,
+        )
     )
 
     def uow_factory() -> SqlAlchemyUnitOfWork:
@@ -213,6 +242,25 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         This UoW exposes documents, versions, chunks, embeddings, embedding_calls, and audit_events.
         """
         return SQLAlchemyKnowledgeUnitOfWork(session_factory=session_factory)
+    
+    dashboard_analytics_repository = SQLAlchemyDashboardAnalyticsRepository(
+        session_factory=session_factory,
+        statement_timeout_ms=settings.dashboard_analytics_statement_timeout_ms,
+    )
+
+    cached_dashboard_analytics_repository = CachingDashboardAnalyticsRepository(
+        repository=dashboard_analytics_repository,
+        ttl_seconds=settings.dashboard_analytics_cache_ttl_seconds,
+        max_entries=settings.dashboard_analytics_cache_max_entries,
+    )
+
+    def dashboard_analytics_repository_factory() -> DashboardAnalyticsRepository:
+        return cached_dashboard_analytics_repository
+
+    get_conversation_analytics = GetConversationAnalytics(repository_factory=dashboard_analytics_repository_factory)
+    get_ai_analytics = GetAIAnalytics(repository_factory=dashboard_analytics_repository_factory)
+    get_support_analytics = GetSupportAnalytics(repository_factory=dashboard_analytics_repository_factory)
+    get_knowledge_health = GetKnowledgeHealth(repository_factory=dashboard_analytics_repository_factory)
     
     create_conversation = CreateConversation(uow_factory=uow_factory)
     list_conversations = ListConversations(uow_factory=uow_factory)
@@ -292,6 +340,11 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         knowledge_upload_max_bytes=settings.knowledge_upload_max_bytes,
     )
     
+    accept_conversation_start = AcceptConversationStart(
+        uow_factory=uow_factory,
+        idempotency_ttl=timedelta(seconds=settings.conversation_start_idempotency_ttl_seconds),
+    )
+    
     process_customer_message = ProcessCustomerMessage(
         uow_factory=uow_factory,
         pipeline_factory=pipeline_factory,
@@ -300,9 +353,28 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         retrieval_profile=retrieval_profile,
         grounding_context_budget=grounding_budget,
         knowledge_application=knowledge_application,
+        conversation_context_builder=conversation_context_builder,
+    )
+    
+    assign_conversation_title = AssignConversationTitle(
+        uow_factory=uow_factory,
+        base_provider=title_provider,
+        enabled=settings.conversation_title_enabled,
+        max_input_characters=settings.conversation_title_max_input_characters,
+    )
+    
+    start_conversation = StartConversation(
+        uow_factory=uow_factory,
+        accept_conversation_start=accept_conversation_start,
+        process_customer_message=process_customer_message,
+        assign_conversation_title=assign_conversation_title,
+        processing_lease_duration=timedelta(seconds=settings.conversation_start_processing_lease_seconds),
     )
 
     return ApplicationServices(
+        accept_conversation_start=accept_conversation_start,
+        start_conversation=start_conversation,
+        assign_conversation_title=assign_conversation_title,
         create_conversation=create_conversation,
         list_conversations=list_conversations,
         get_conversation=get_conversation,
@@ -324,6 +396,10 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         query_dashboard_retrieval_runs=query_dashboard_retrieval_runs,
         query_dashboard_api_requests=query_dashboard_api_requests,
         query_dashboard_audit_events=query_dashboard_audit_events,
+        get_conversation_analytics=get_conversation_analytics,
+        get_ai_analytics=get_ai_analytics,
+        get_support_analytics=get_support_analytics,
+        get_knowledge_health=get_knowledge_health,
         get_audit_event=get_audit_event,
         list_audit_events=list_audit_events,
         get_entity_audit_history=get_entity_audit_history,
@@ -382,6 +458,44 @@ def _resolve_provider(*, settings: Settings, base_provider: LLMProvider | None) 
 
     except Exception as exc:
         raise ApplicationConfigurationError("Failed to configure LLM provider") from exc
+    
+def _resolve_title_provider(*, settings: Settings, injected_provider: LLMProvider | None, resolved_provider: LLMProvider) -> LLMProvider:
+    """
+    Resolve the provider used only for conversation titles.
+
+    Tests and explicit dependency injection reuse the injected provider.
+
+    Production Groq configuration receives a separate provider instance with a shorter timeout and smaller completion budget.
+    This avoids changing the limits used by classification and grounded answer generation.
+    """
+    if injected_provider is not None:
+        if not isinstance(injected_provider, LLMProvider):
+            raise TypeError("injected_provider must implement LLMProvider")
+
+        return injected_provider
+
+    if not isinstance(resolved_provider, LLMProvider):
+        raise TypeError("resolved_provider must implement LLMProvider")
+
+    if not settings.conversation_title_enabled:
+        # The provider will never be called while title generation is disabled, so creating another client would be unnecessary.
+        return resolved_provider
+
+    # The current provider factory reads the regular Groq configuration fields.
+    # Produce a validated Settings copy containing title-specific limits, leaving the original Settings instance unchanged.
+    title_settings = settings.model_copy(
+        update={
+            "groq_timeout_seconds": settings.conversation_title_timeout_seconds,
+            "groq_max_completion_tokens": settings.conversation_title_max_completion_tokens,
+            "groq_temperature": 0.0,
+        },
+    )
+
+    try:
+        return create_llm_provider(settings=title_settings)
+    
+    except Exception as exc:
+        raise ApplicationConfigurationError("Failed to configure conversation title provider") from exc
 
 def _resolve_observer(*, observer: OrchestrationObserver | None) -> OrchestrationObserver:
     """

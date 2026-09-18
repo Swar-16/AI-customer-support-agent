@@ -84,6 +84,10 @@ class FeedbackModel(Base):
         ),
         
         Index(
+            "idx_feedback_created_at",
+            "created_at"
+        ),
+        Index(
             "idx_feedback_conversation_created",
             "conversation_id",
             text("created_at DESC"),

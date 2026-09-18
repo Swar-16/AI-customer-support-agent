@@ -27,6 +27,8 @@ class IntentType(StrEnum):
     RETURN_EXCHANGE = "return_exchange"
     PRIVACY_SECURITY = "privacy_security"
     GENERAL_QUESTION = "general_question"
+    CONVERSATIONAL = "conversational"
+    OUT_OF_SCOPE = "out_of_scope"
     UNKNOWN = "unknown"
 
 
@@ -132,8 +134,30 @@ _INTENT_DEFINITIONS: Final[dict[IntentType, IntentDefinition]] = {
 
     IntentType.GENERAL_QUESTION: IntentDefinition(
         intent=IntentType.GENERAL_QUESTION,
-        description="The customer asks a supported informational question that does not belong to a more specific canonical intent.",
-        examples=("What payment methods do you accept?", "What are your support hours?", "How does your service work?",)
+        description=(
+            "The customer asks a supported company, service, or policy-related informational question that does not belong to a more specific canonical intent. This intent requires trusted knowledge retrieval."
+        ),
+        examples=("What payment methods do you accept?", "What are your support hours?", "How does your service work?",),
+    ),
+    
+    IntentType.CONVERSATIONAL: IntentDefinition(
+        intent=IntentType.CONVERSATIONAL,
+        description=(
+            "The customer sends a greeting, thanks the assistant, says goodbye, or asks what customer-support topics the assistant can help with. "
+            "The message does not require company facts, policy retrieval, operational lookup, or a business action."
+        ),
+        examples=("Hello!", "Thank you for your help.", "What types of help can I get from you?", "Goodbye.",),
+    ),
+    
+    IntentType.OUT_OF_SCOPE: IntentDefinition(
+        intent=IntentType.OUT_OF_SCOPE,
+        description=(
+            "The customer asks for something unrelated to the supported customer-service domain, such as general trivia, programming help, "
+            "creative writing, unrelated professional advice, or another request that should not be answered as company support."
+        ),
+        examples=(
+            "Write a sorting algorithm for me.", "Who won the football match yesterday?", "Write a poem about the ocean.", "Help me solve my mathematics homework.",
+        ),
     ),
 
     IntentType.UNKNOWN: IntentDefinition(

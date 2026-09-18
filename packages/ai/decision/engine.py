@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from packages.ai.decision.policies import IntentDecisionPolicy, RetrievalKind, get_intent_decision_policy
 from packages.ai.decision.schemas import DecisionReasonCode, DecisionResult, DecisionType
-from packages.ai.intent.schemas import IntentResult
+from packages.ai.intent.schemas import EscalationSignal, IntentResult
 from packages.ai.intent.taxonomy import IntentType
 
 
@@ -51,28 +51,41 @@ class DecisionEngine:
 
         Evaluation order matters:
 
-            1. unknown intent
-            2. insufficient classification confidence
-            3. classifier-detected missing information
-            4. canonical intent decision policy
+            1. explicit human-support request
+            2. severe unresolved customer dissatisfaction
+            3. security-sensitive intent
+            4. unknown intent
+            5. insufficient classification confidence
+            6. deterministically required workflow information
+            7. classifier-detected clarification requirement
+            8. canonical intent decision policy
 
-        Safety/clarification gates therefore always take precedence over the normal routing policy.
+        Explicit human handoff and safety-sensitive escalation therefore take precedence over clarification and ordinary intent routing.
         """
-
         if not isinstance(intent_result, IntentResult):
             raise TypeError("intent_result must be an IntentResult instance")
 
-        # 1. Genuine unknown intent
+        # 1-2. Explicit allowlisted escalation signals take precedence over ambiguity, confidence, missing identifiers, and normal intent policy.
+        signal_decision = self._decision_from_escalation_signals(intent_result)
+        if signal_decision is not None:
+            return signal_decision
+
+        # 3. Security-sensitive requests are escalated conservatively even when
+        # classification confidence is imperfect or additional operational information is unavailable.
+        if intent_result.intent is IntentType.PRIVACY_SECURITY:
+            return self._decision_from_policy(intent_result=intent_result, policy=get_intent_decision_policy(IntentType.PRIVACY_SECURITY))
+
+        # 4. Genuine unknown support intent.
         if intent_result.intent is IntentType.UNKNOWN:
             return DecisionResult(
                 decision=DecisionType.ASK_CLARIFICATION,
                 reason_code=DecisionReasonCode.UNKNOWN_INTENT,
-                reason_summary="The customer's intent cannot be determined reliably.",
+                reason_summary="The customer's support intent cannot be determined reliably.",
                 confidence=intent_result.confidence,
                 required_information=("customer_intent",),
             )
 
-        # 2. Classification confidence is too low for safe routing
+        # 5. Classification confidence is too low for safe normal routing.
         if intent_result.confidence < self._config.low_confidence_threshold:
             return DecisionResult(
                 decision=DecisionType.ASK_CLARIFICATION,
@@ -82,7 +95,18 @@ class DecisionEngine:
                 required_information=("clarification",),
             )
 
-        # 3. Intent is understood, but required information is missing
+        # 6. Enforce mandatory workflow information independently of the classifier's needs_clarification flag.
+        mandatory_missing_information = self._resolve_mandatory_missing_information(intent_result)
+        if mandatory_missing_information:
+            return DecisionResult(
+                decision=DecisionType.ASK_CLARIFICATION,
+                reason_code=DecisionReasonCode.MISSING_REQUIRED_INFORMATION,
+                reason_summary="The request is missing information required by the selected support workflow.",
+                confidence=intent_result.confidence,
+                required_information=mandatory_missing_information,
+            )
+
+        # 7. The classifier identified another clarification requirement.
         if intent_result.needs_clarification:
             missing_information = self._infer_missing_information(intent_result)
             return DecisionResult(
@@ -93,13 +117,49 @@ class DecisionEngine:
                 required_information=missing_information,
             )
 
-        # 4. Resolve declarative routing policy
+        # 8. Resolve the normal declarative routing policy.
         policy = get_intent_decision_policy(intent_result.intent)
 
-        return self._decision_from_policy(
-            intent_result=intent_result,
-            policy=policy,
-        )
+        return self._decision_from_policy(intent_result=intent_result, policy=policy)
+    
+    @staticmethod
+    def _decision_from_escalation_signals(intent_result: IntentResult) -> DecisionResult | None:
+        """
+        Translate allowlisted classifier signals into deterministic escalation.
+
+        Signal precedence is deliberate:
+
+        1. an explicit request for a human;
+        2. severe unresolved dissatisfaction.
+
+        When both are present, the explicit customer request is the clearest reason for the handoff.
+        """
+        signals = frozenset(intent_result.escalation_signals)
+        if EscalationSignal.EXPLICIT_HUMAN_REQUEST in signals:
+            return DecisionResult(
+                decision=DecisionType.ESCALATE,
+                reason_code=DecisionReasonCode.CUSTOMER_REQUESTED_HUMAN,
+                reason_summary="The customer explicitly requested assistance from a human support agent.",
+                confidence=intent_result.confidence,
+                metadata={
+                    "escalation_signal": EscalationSignal.EXPLICIT_HUMAN_REQUEST.value,
+                    "priority": "normal",
+                },
+            )
+
+        if EscalationSignal.SEVERE_CUSTOMER_DISSATISFACTION in signals:
+            return DecisionResult(
+                decision=DecisionType.ESCALATE,
+                reason_code=DecisionReasonCode.SEVERE_CUSTOMER_DISSATISFACTION,
+                reason_summary="The customer described severe unresolved dissatisfaction requiring human review.",
+                confidence=intent_result.confidence,
+                metadata={
+                    "escalation_signal": EscalationSignal.SEVERE_CUSTOMER_DISSATISFACTION.value,
+                    "priority": "high",
+                },
+            )
+
+        return None
 
     @staticmethod
     def _decision_from_policy(*, intent_result: IntentResult, policy: IntentDecisionPolicy) -> DecisionResult:
@@ -164,6 +224,27 @@ class DecisionEngine:
         raise RuntimeError(f"Unsupported default decision policy: {policy.default_decision!r}")
 
     @staticmethod
+    def _resolve_mandatory_missing_information(intent_result: IntentResult) -> tuple[str, ...]:
+        """
+        Resolve information that a workflow always requires.
+
+        These requirements are deterministic application rules. They must be enforced even if the probabilistic classifier returns needs_clarification=False.
+
+        Only requirements that are universally necessary for the current workflow belong here.
+        Do not require identifiers merely because they might be useful.
+
+        For the MVP, order-status handling cannot proceed without an explicit order identifier.
+        Once that identifier is available, the request is escalated because no trusted operational order-data source is configured.
+        """
+        if not isinstance(intent_result, IntentResult):
+            raise TypeError("intent_result must be an IntentResult instance")
+
+        if intent_result.intent is IntentType.ORDER_STATUS and intent_result.entities.order_id is None:
+            return ("order_id",)
+
+        return ()
+
+    @staticmethod
     def _infer_missing_information(intent_result: IntentResult) -> tuple[str, ...]:
         """
         Infer missing information from the currently supported semantic contracts.
@@ -176,9 +257,6 @@ class DecisionEngine:
         This method will later be replaced by a dedicated requirement/rule resolver when operational workflows are implemented.
         """
         entities = intent_result.entities
-        if intent_result.intent is IntentType.ORDER_STATUS:
-            if entities.order_id is None:
-                return ("order_id",)
 
         if intent_result.intent is IntentType.PAYMENT_ISSUE:
             if entities.order_id is None and entities.transaction_id is None:

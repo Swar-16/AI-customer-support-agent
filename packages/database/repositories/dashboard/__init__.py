@@ -5,6 +5,7 @@ from packages.database.repositories.dashboard.llm_call_repository import Dashboa
 from packages.database.repositories.dashboard.retrieval_run_repository import DashboardRetrievalRunRecord, DashboardRetrievalRunRepository
 from packages.database.repositories.dashboard.api_request_repository import DashboardAPIRequestRecord, DashboardAPIRequestRepository
 from packages.database.repositories.dashboard.audit_event_repository import DashboardAuditEventRecord, DashboardAuditEventRepository
+from packages.database.repositories.dashboard.sqlalchemy_analytics_repository import SQLAlchemyDashboardAnalyticsRepository
 
 __all__ = [
     "DashboardOverviewRepository",
@@ -21,4 +22,5 @@ __all__ = [
     "DashboardAPIRequestRepository",
     "DashboardAuditEventRecord",
     "DashboardAuditEventRepository",
+    "SQLAlchemyDashboardAnalyticsRepository",
 ]

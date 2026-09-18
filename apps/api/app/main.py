@@ -4,9 +4,14 @@ import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from starlette.types import ASGIApp
+from typing import Any
 
+from apps.api.app.api.openapi_contract import apply_transport_contract
+from apps.api.app.middleware.browser_security import BrowserSecurityMiddleware
+from packages.config.settings import Settings
 from apps.api.app.api.v1.router import router as v1_router
-from apps.api.app.bootstrap.application import APIBootstrapError, get_application_services
+from apps.api.app.bootstrap.application import APIBootstrapError, get_application_services, get_runtime_settings
 from apps.api.app.api.errors import register_exception_handlers as register_api_exception_handlers
 from apps.api.app.middleware.request_observability import RequestObservabilityMiddleware
 
@@ -44,6 +49,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
 
     try:
+        app.state.settings = get_runtime_settings()
         services = get_application_services()
 
     except APIBootstrapError:
@@ -88,6 +94,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # can be useful only during controlled tests/reinitialization.
         if hasattr(app.state, "application_services"):
             del app.state.application_services
+            
+        if hasattr(app.state, "settings"):
+            del app.state.settings
 
         logger.info(
             "api_stopped",
@@ -97,6 +106,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             },
         )
 
+class BrowserReadyFastAPI(FastAPI):
+    """Keep browser response policy outside FastAPI's error middleware."""
+    def _browser_settings(self) -> Settings:
+        settings = getattr(self.state, "settings", None)
+        if not isinstance(settings, Settings):
+            raise RuntimeError("API settings have not been initialized.")
+        
+        return settings
+
+    def build_middleware_stack(self) -> ASGIApp:
+        return BrowserSecurityMiddleware(
+            super().build_middleware_stack(),
+            settings_provider=self._browser_settings,
+        )
+        
+    def openapi(self) -> dict[str, Any]:
+        if self.openapi_schema is None:
+            self.openapi_schema = apply_transport_contract(super().openapi())
+            
+        return self.openapi_schema
 
 # Application factory
 def create_api_app() -> FastAPI:
@@ -110,7 +139,7 @@ def create_api_app() -> FastAPI:
     - future worker or CLI processes remain independent from FastAPI
     """
 
-    application = FastAPI(
+    application = BrowserReadyFastAPI(
         title=APP_TITLE,
         description=APP_DESCRIPTION,
         version=APP_VERSION,

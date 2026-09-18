@@ -138,6 +138,37 @@ class ConversationRepository:
 
         return int(sequence_number)
 
+    def set_title_if_absent(self, conversation_id: uuid.UUID, *, title: str, updated_at: datetime) -> bool:
+        """
+        Atomically assign a title only when the conversation remains untitled.
+
+        This compare-and-set operation prevents:
+
+        - generated titles from replacing explicit customer titles;
+        - retries from rewriting an existing title;
+        - concurrent title generators from overwriting one another;
+        - a late provider response from replacing a title set elsewhere.
+
+        Returns:
+            True when this transaction assigned the title. False when the conversation does not exist or already has a title.
+
+        Transaction commit remains the Unit of Work's responsibility.
+        """
+        self._validate_uuid(conversation_id, field_name="conversation_id")
+        normalized_title = self._normalize_title(title)
+        self._validate_aware_datetime(updated_at, field_name="updated_at")
+
+        statement = (update(ConversationModel)
+                     .where(ConversationModel.id == conversation_id,
+                            ConversationModel.title.is_(None))
+                     .values(title=normalized_title, updated_at=updated_at)
+                     .returning(ConversationModel.id)
+        )
+
+        assigned_id = self._session.scalar(statement)
+
+        return assigned_id is not None
+
     # Lifecycle updates
     def mark_resolved(self, conversation: ConversationModel, *, resolved_at: datetime) -> None:
         self._validate_conversation_instance(conversation)
@@ -189,3 +220,32 @@ class ConversationRepository:
 
         if offset < 0:
             raise ValueError("offset must not be negative")
+    
+    @staticmethod
+    def _validate_uuid(value: uuid.UUID, *, field_name: str) -> None:
+        if not isinstance(value, uuid.UUID):
+            raise TypeError(f"{field_name} must be a UUID")
+
+    @staticmethod
+    def _normalize_title(value: str) -> str:
+        if not isinstance(value, str):
+            raise TypeError("title must be a string")
+
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("title cannot be blank")
+
+        # This is the database/repository compatibility limit. Generated
+        # titles apply the stricter 80-character policy before reaching here.
+        if len(normalized) > 500:
+            raise ValueError("title must not exceed 500 characters")
+
+        return normalized
+
+    @staticmethod
+    def _validate_aware_datetime(value: datetime, *, field_name: str) -> None:
+        if not isinstance(value, datetime):
+            raise TypeError(f"{field_name} must be a datetime")
+
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError(f"{field_name} must be timezone-aware")

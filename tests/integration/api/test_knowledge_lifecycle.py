@@ -26,6 +26,9 @@ from packages.database.models.knowledge.document import (
 from packages.database.models.knowledge.document_version import (
     KnowledgeDocumentVersionModel,
 )
+from packages.knowledge.application.process_version import (
+    ProcessKnowledgeVersion,
+)
 
 
 def _trace_headers(trace_id: UUID) -> dict[str, str]:
@@ -738,3 +741,77 @@ class TestUploadedKnowledgeLifecycle:
         # Administrative read APIs expose metadata, not source contents.
         assert "source_content" not in version_detail_body
         assert content.decode("utf-8") not in version_detail.text
+        
+def test_processing_failure_is_persisted_and_version_can_be_retried(
+    admin_client: TestClient,
+    admin_identity,
+    test_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _create_document(
+        admin_client,
+        trace_id=uuid7(),
+        title="Processing Failure Recovery",
+    )
+    version = _create_version(
+        admin_client,
+        document_id=document["document_id"],
+        trace_id=uuid7(),
+        content="# Recovery Policy\n\nCustomers can request support.",
+        source_name="recovery-policy.md",
+    )
+    version_id = version["version_id"]
+    failure_trace = uuid7()
+    original_error = RuntimeError("Deterministic ingestion failure")
+
+    def fail_processing(self, snapshot):
+        raise original_error
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            ProcessKnowledgeVersion,
+            "_process",
+            fail_processing,
+        )
+        with pytest.raises(RuntimeError) as captured:
+            admin_client.post(
+                f"/v1/knowledge/versions/{version_id}/process",
+                headers=_trace_headers(failure_trace),
+            )
+
+    assert captured.value is original_error
+
+    with test_session_factory() as session:
+        persisted = session.get(
+            KnowledgeDocumentVersionModel,
+            UUID(version_id),
+        )
+        assert persisted is not None
+        assert persisted.status == "failed"
+        assert persisted.ingestion_status == "failed"
+        assert persisted.processing_completed_at is not None
+
+        events = tuple(
+            session.scalars(
+                select(AuditEventModel).where(
+                    AuditEventModel.trace_id == failure_trace,
+                    AuditEventModel.event_type
+                    == "knowledge_version.processing_failed",
+                )
+            )
+        )
+        assert len(events) == 1
+        assert events[0].actor_type == "system"
+        assert events[0].actor_id is None
+        assert events[0].metadata_["initiated_by_admin_id"] == str(
+            admin_identity.user_id
+        )
+
+    retried = _process_version(
+        admin_client,
+        version_id=version_id,
+        trace_id=uuid7(),
+    )
+    assert retried["version_status"] == "ready"
+    assert retried["ingestion_status"] == "completed"
+    assert retried["chunk_count"] >= 1
