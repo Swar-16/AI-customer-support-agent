@@ -71,14 +71,36 @@ class ConversationListResponse(APIModel):
     has_more: bool
     next_offset: int | None = Field(default=None, ge=0)
     
-class ConversationMessageResponse(BaseModel):
+class ConversationMessageFeedbackResponse(APIModel):
+    """
+    Customer-safe feedback summary attached to historical assistant messages.
+
+    Customer comments, reason codes, administrative review data, metadata, and internal telemetry are intentionally excluded.
+    """
+    feedback_id: uuid.UUID
+    rating: int = Field(..., ge=1, le=5, description="Customer rating previously submitted for this response.")
+    helpful: bool | None = Field(default=None, description="Previously submitted helpfulness value, when provided.")
+    created_at: datetime
+
+class ConversationMessageResponse(APIModel):
     message_id: uuid.UUID
     conversation_id: uuid.UUID
-    role: Literal["customer", "assistant", "support_agent",]
+    role: Literal["customer", "assistant", "support_agent"]
     content: str
-    sequence_number: int
+    sequence_number: int = Field(..., ge=1)
     created_at: datetime
-    model_config = ConfigDict(from_attributes=True)
+    ai_run_id: uuid.UUID | None = Field(
+        default=None,
+        description="Completed AI run that produced this assistant response. Null for customer messages, support-agent messages, and assistant messages without valid persisted provenance.",
+    )
+    feedback_eligible: bool = Field(
+        default=False,
+        description="Whether this message represents an assistant response with valid completed AI-run provenance.",
+    )
+    feedback: ConversationMessageFeedbackResponse | None = Field(
+        default=None,
+        description="Previously submitted customer-safe feedback summary, when feedback exists for this assistant response.",
+    )
 
 class ConversationMessageListResponse(BaseModel):
     items: list[ConversationMessageResponse]

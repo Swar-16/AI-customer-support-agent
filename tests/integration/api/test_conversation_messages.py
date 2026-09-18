@@ -399,3 +399,221 @@ class TestSendCustomerMessage:
         assert seeded_published_return_policy[
             "chunk_id"
         ] is not None
+        
+class TestConversationMessageFeedbackHistory:
+    def test_history_exposes_feedback_eligibility_and_ai_run(
+        self,
+        client: TestClient,
+        seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
+    ) -> None:
+        send_response = client.post(
+            (
+                f"/v1/conversations/"
+                f"{seeded_conversation}/messages"
+            ),
+            headers=customer_auth_headers,
+            json={
+                "message": "Hello support assistant",
+            },
+        )
+
+        assert send_response.status_code == 200
+        send_body = send_response.json()
+
+        assistant_message_id = send_body[
+            "assistant_message_id"
+        ]
+        ai_run_id = send_body["ai_run_id"]
+
+        assert assistant_message_id is not None
+
+        history_response = client.get(
+            (
+                f"/v1/conversations/"
+                f"{seeded_conversation}/messages"
+            ),
+            headers=customer_auth_headers,
+        )
+
+        assert history_response.status_code == 200
+        history = history_response.json()
+
+        assert history["total"] == 2
+        assert history["count"] == 2
+
+        customer_message = next(
+            item
+            for item in history["items"]
+            if item["role"] == "customer"
+        )
+        assistant_message = next(
+            item
+            for item in history["items"]
+            if item["role"] == "assistant"
+        )
+
+        assert customer_message["ai_run_id"] is None
+        assert customer_message["feedback_eligible"] is False
+        assert customer_message["feedback"] is None
+
+        assert (
+            assistant_message["message_id"]
+            == assistant_message_id
+        )
+        assert assistant_message["ai_run_id"] == ai_run_id
+        assert assistant_message["feedback_eligible"] is True
+        assert assistant_message["feedback"] is None
+
+    def test_saved_feedback_is_returned_after_history_reload(
+        self,
+        client: TestClient,
+        seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
+    ) -> None:
+        send_response = client.post(
+            (
+                f"/v1/conversations/"
+                f"{seeded_conversation}/messages"
+            ),
+            headers=customer_auth_headers,
+            json={
+                "message": "Hello support assistant",
+            },
+        )
+
+        assert send_response.status_code == 200
+        send_body = send_response.json()
+
+        assistant_message_id = send_body[
+            "assistant_message_id"
+        ]
+        ai_run_id = send_body["ai_run_id"]
+
+        assert assistant_message_id is not None
+
+        feedback_response = client.post(
+            (
+                f"/v1/conversations/"
+                f"{seeded_conversation}/feedback"
+            ),
+            headers=customer_auth_headers,
+            json={
+                "response_message_id": assistant_message_id,
+                "ai_run_id": ai_run_id,
+                "rating": 4,
+                "helpful": True,
+                "comment": (
+                    "The response clearly explained the "
+                    "available support."
+                ),
+                "reason_codes": [],
+                "metadata": {
+                    "must_not_appear_in_history": True,
+                },
+            },
+        )
+
+        assert feedback_response.status_code == 201
+        submitted_feedback = feedback_response.json()
+
+        history_response = client.get(
+            (
+                f"/v1/conversations/"
+                f"{seeded_conversation}/messages"
+            ),
+            headers=customer_auth_headers,
+        )
+
+        assert history_response.status_code == 200
+        history = history_response.json()
+
+        assistant_message = next(
+            item
+            for item in history["items"]
+            if item["message_id"] == assistant_message_id
+        )
+
+        assert assistant_message["ai_run_id"] == ai_run_id
+        assert assistant_message["feedback_eligible"] is True
+
+        feedback = assistant_message["feedback"]
+
+        assert feedback is not None
+        assert feedback["feedback_id"] == (
+            submitted_feedback["feedback_id"]
+        )
+        assert feedback["rating"] == 4
+        assert feedback["helpful"] is True
+        assert feedback["created_at"] is not None
+
+        # Conversation history exposes only the deliberate customer-safe
+        # feedback summary.
+        assert set(feedback) == {
+            "feedback_id",
+            "rating",
+            "helpful",
+            "created_at",
+        }
+
+        serialized_message = str(
+            assistant_message
+        ).lower()
+
+        for prohibited_field in (
+            "comment",
+            "reason_codes",
+            "metadata",
+            "review_notes",
+            "reviewed_by_user_id",
+            "row_version",
+        ):
+            assert prohibited_field not in serialized_message
+
+    def test_orphan_assistant_message_is_not_feedback_eligible(
+        self,
+        client: TestClient,
+        test_session_factory,
+        seeded_conversation: uuid.UUID,
+        customer_auth_headers: dict[str, str],
+    ) -> None:
+        assistant_message_id = uuid7()
+
+        with test_session_factory() as session:
+            session.add(
+                MessageModel(
+                    id=assistant_message_id,
+                    conversation_id=seeded_conversation,
+                    role="assistant",
+                    content=(
+                        "Legacy assistant response without "
+                        "AI-run provenance."
+                    ),
+                    sequence_number=1,
+                    metadata_={},
+                )
+            )
+            session.commit()
+
+        response = client.get(
+            (
+                f"/v1/conversations/"
+                f"{seeded_conversation}/messages"
+            ),
+            headers=customer_auth_headers,
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+
+        assert body["total"] == 1
+
+        message = body["items"][0]
+
+        assert message["message_id"] == str(
+            assistant_message_id
+        )
+        assert message["role"] == "assistant"
+        assert message["ai_run_id"] is None
+        assert message["feedback_eligible"] is False
+        assert message["feedback"] is None

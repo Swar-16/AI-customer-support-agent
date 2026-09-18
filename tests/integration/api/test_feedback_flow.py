@@ -9,6 +9,8 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from uuid6 import uuid7
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from packages.database.models.ai.run import AIRunModel
 from packages.database.models.support.conversation import (
@@ -17,6 +19,20 @@ from packages.database.models.support.conversation import (
 from packages.database.models.support.feedback import FeedbackModel
 from packages.database.models.support.message import MessageModel
 # from packages.database.models.support.user import UserModel
+from packages.application.auth.models import (
+    AuthenticatedPrincipal,
+    AuthRole,
+)
+from packages.application.composition.application_factory import (
+    ApplicationServices,
+)
+from packages.application.feedback.submit_feedback import (
+    SubmitFeedbackCommand,
+    FeedbackSubmissionConflictError,
+)
+from packages.database.repositories.support.feedback_repository import (
+    FeedbackRepository,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,6 +264,266 @@ class TestFeedbackSubmission:
             second_body["feedback_id"]
             == first_body["feedback_id"]
         )
+    
+    def test_concurrent_identical_submissions_are_idempotent(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        application_services: ApplicationServices,
+        test_session_factory,
+        feedback_context: FeedbackTestContext,
+    ) -> None:
+        """
+        Force both submissions to observe no existing feedback before either
+        inserts.
+
+        PostgreSQL must select one winner through the unique constraint. The
+        losing identical request must then recover the winner and return it
+        with created=False.
+        """
+        synchronization_point = threading.Barrier(
+            parties=2,
+            timeout=10,
+        )
+
+        original_get_by_response_message = (
+            FeedbackRepository.get_by_response_message
+        )
+
+        def synchronized_get_by_response_message(
+            repository: FeedbackRepository,
+            response_message_id: uuid.UUID,
+        ) -> FeedbackModel | None:
+            existing = original_get_by_response_message(
+                repository,
+                response_message_id,
+            )
+
+            # Synchronize only the two initial "not found" reads. The recovery
+            # lookup sees the committed winner and must not wait here.
+            if existing is None:
+                synchronization_point.wait()
+
+            return existing
+
+        monkeypatch.setattr(
+            FeedbackRepository,
+            "get_by_response_message",
+            synchronized_get_by_response_message,
+        )
+
+        payload = _feedback_payload(feedback_context)
+
+        def submit() -> object:
+            principal = AuthenticatedPrincipal(
+                user_id=feedback_context.customer_id,
+                session_id=uuid7(),
+                role=AuthRole.CUSTOMER,
+            )
+
+            return application_services.submit_feedback.execute(
+                SubmitFeedbackCommand(
+                    conversation_id=(
+                        feedback_context.conversation_id
+                    ),
+                    response_message_id=(
+                        feedback_context.assistant_message_id
+                    ),
+                    ai_run_id=feedback_context.ai_run_id,
+                    rating=payload["rating"],
+                    helpful=payload["helpful"],
+                    comment=payload["comment"],
+                    reason_codes=tuple(
+                        payload["reason_codes"]
+                    ),
+                    metadata=payload["metadata"],
+                    principal=principal,
+                    trace_id=uuid7(),
+                )
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(submit)
+                for _ in range(2)
+            ]
+
+            results = tuple(
+                future.result(timeout=20)
+                for future in futures
+            )
+
+        assert len(results) == 2
+
+        assert {
+            result.created
+            for result in results
+        } == {
+            True,
+            False,
+        }
+
+        assert (
+            results[0].feedback_id
+            == results[1].feedback_id
+        )
+
+        assert all(
+            result.response_message_id
+            == feedback_context.assistant_message_id
+            for result in results
+        )
+
+        assert all(
+            result.ai_run_id
+            == feedback_context.ai_run_id
+            for result in results
+        )
+
+        with test_session_factory() as session:
+            persisted_feedback = tuple(
+                session.query(FeedbackModel)
+                .filter(
+                    FeedbackModel.response_message_id
+                    == feedback_context.assistant_message_id
+                )
+                .all()
+            )
+
+        assert len(persisted_feedback) == 1
+        assert (
+            persisted_feedback[0].id
+            == results[0].feedback_id
+        )
+    
+    def test_concurrent_conflicting_submissions_create_one_record(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        application_services: ApplicationServices,
+        test_session_factory,
+        feedback_context: FeedbackTestContext,
+    ) -> None:
+        """
+        Force two conflicting submissions to observe no existing feedback.
+
+        Exactly one submission may win. The loser must receive the explicit
+        feedback-conflict error, and PostgreSQL must contain only one row.
+        """
+        synchronization_point = threading.Barrier(
+            parties=2,
+            timeout=10,
+        )
+
+        original_get_by_response_message = (
+            FeedbackRepository.get_by_response_message
+        )
+
+        def synchronized_get_by_response_message(
+            repository: FeedbackRepository,
+            response_message_id: uuid.UUID,
+        ) -> FeedbackModel | None:
+            existing = original_get_by_response_message(
+                repository,
+                response_message_id,
+            )
+
+            if existing is None:
+                synchronization_point.wait()
+
+            return existing
+
+        monkeypatch.setattr(
+            FeedbackRepository,
+            "get_by_response_message",
+            synchronized_get_by_response_message,
+        )
+
+        first_payload = _feedback_payload(
+            feedback_context,
+            rating=2,
+        )
+
+        second_payload = _feedback_payload(
+            feedback_context,
+            rating=5,
+        )
+        second_payload["helpful"] = True
+        second_payload["comment"] = (
+            "The response fully answered my question."
+        )
+
+        def submit(payload: dict[str, Any]) -> object:
+            principal = AuthenticatedPrincipal(
+                user_id=feedback_context.customer_id,
+                session_id=uuid7(),
+                role=AuthRole.CUSTOMER,
+            )
+
+            return application_services.submit_feedback.execute(
+                SubmitFeedbackCommand(
+                    conversation_id=(
+                        feedback_context.conversation_id
+                    ),
+                    response_message_id=(
+                        feedback_context.assistant_message_id
+                    ),
+                    ai_run_id=feedback_context.ai_run_id,
+                    rating=payload["rating"],
+                    helpful=payload["helpful"],
+                    comment=payload["comment"],
+                    reason_codes=tuple(
+                        payload["reason_codes"]
+                    ),
+                    metadata=payload["metadata"],
+                    principal=principal,
+                    trace_id=uuid7(),
+                )
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = (
+                executor.submit(submit, first_payload),
+                executor.submit(submit, second_payload),
+            )
+
+            successful_results: list[object] = []
+            conflicts: list[
+                FeedbackSubmissionConflictError
+            ] = []
+
+            for future in futures:
+                try:
+                    successful_results.append(
+                        future.result(timeout=20)
+                    )
+                except FeedbackSubmissionConflictError as exc:
+                    conflicts.append(exc)
+
+        assert len(successful_results) == 1
+        assert len(conflicts) == 1
+
+        winner = successful_results[0]
+
+        assert winner.created is True
+        assert winner.rating in {2, 5}
+
+        with test_session_factory() as session:
+            persisted_feedback = tuple(
+                session.query(FeedbackModel)
+                .filter(
+                    FeedbackModel.response_message_id
+                    == feedback_context.assistant_message_id
+                )
+                .all()
+            )
+
+        assert len(persisted_feedback) == 1
+
+        persisted = persisted_feedback[0]
+
+        assert persisted.id == winner.feedback_id
+        assert persisted.rating == winner.rating
+        assert persisted.helpful == winner.helpful
+        assert persisted.comment == winner.comment
 
     def test_conflicting_duplicate_returns_409(
         self,

@@ -1,7 +1,7 @@
 # AI-customer-support-agent\packages\application\conversations\get_conversation_messages.py
 from __future__ import annotations
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Final
@@ -12,6 +12,8 @@ from packages.application.conversations.query_conversations import ConversationR
 from packages.application.conversations.query_conversations import ConversationRequesterRoleMismatchError, QueriedConversationDoesNotExistError
 from packages.database.models.support.conversation import ConversationModel
 from packages.database.models.support.message import MessageModel
+from packages.database.models.ai.run import AIRunModel
+from packages.database.models.support.feedback import FeedbackModel
 from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
@@ -37,6 +39,18 @@ class GetConversationMessagesQuery:
         _validate_pagination(limit=self.limit, offset=self.offset)
 
 @dataclass(frozen=True, slots=True)
+class ConversationMessageFeedbackView:
+    """
+    Customer-safe historical feedback summary.
+
+    Administrative review notes, customer comments, metadata, reason codes, and reviewer identities are intentionally excluded.
+    """
+    feedback_id: uuid.UUID
+    rating: int
+    helpful: bool | None
+    created_at: datetime
+
+@dataclass(frozen=True, slots=True)
 class ConversationMessageView:
     message_id: uuid.UUID
     conversation_id: uuid.UUID
@@ -44,6 +58,9 @@ class ConversationMessageView:
     content: str
     sequence_number: int
     created_at: datetime
+    ai_run_id: uuid.UUID | None
+    feedback_eligible: bool
+    feedback: ConversationMessageFeedbackView | None
 
 @dataclass(frozen=True, slots=True)
 class ConversationMessagePage:
@@ -86,9 +103,21 @@ class GetConversationMessages:
                 raise QueriedConversationDoesNotExistError(query.conversation_id)
 
             _authorize_access(conversation=conversation, principal=query.principal)
-            messages = uow.messages.list_visible_by_conversation(query.conversation_id, limit=query.limit, offset=query.offset)
+            messages = tuple(uow.messages.list_visible_by_conversation(query.conversation_id, limit=query.limit, offset=query.offset))
             total = uow.messages.count_visible_by_conversation(query.conversation_id)
-            items = tuple(_to_message_view(message) for message in messages)
+            assistant_message_ids = tuple(message.id for message in messages if (message.role == "assistant" and message.id is not None))
+            runs = uow.ai_runs.list_by_response_message_ids(assistant_message_ids)
+            feedback_records = uow.feedback.list_by_response_message_ids(assistant_message_ids)
+            runs_by_response_message = _group_runs_by_response_message(runs=runs, conversation_id=conversation.id)
+            feedback_by_response_message = _map_feedback_by_response_message(
+                feedback_records=feedback_records,
+                conversation_id=conversation.id,
+                customer_id=conversation.user_id,
+            )
+            items = tuple(
+                _to_message_view(message, runs_by_response_message=runs_by_response_message, feedback_by_response_message=feedback_by_response_message)
+                for message in messages
+            )
             consumed = query.offset + len(items)
             next_offset = consumed if consumed < total else None
 
@@ -113,6 +142,12 @@ def _require_repositories(uow: SqlAlchemyUnitOfWork) -> None:
 
     if uow.messages is None:
         raise ConversationQueryPersistenceContractError("MessageRepository unavailable")
+    
+    if uow.ai_runs is None:
+        raise ConversationQueryPersistenceContractError("AIRunRepository unavailable")
+
+    if uow.feedback is None:
+        raise ConversationQueryPersistenceContractError("FeedbackRepository unavailable")
 
 def _validate_principal(*, principal: AuthenticatedPrincipal, uow: SqlAlchemyUnitOfWork) -> None:
     requester = uow.users.get_by_id(principal.user_id)
@@ -135,15 +170,34 @@ def _authorize_access(*, conversation: ConversationModel, principal: Authenticat
     # Conceal other customers' conversation existence.
     raise QueriedConversationDoesNotExistError(conversation.id)
 
-def _to_message_view(message: MessageModel) -> ConversationMessageView:
+def _to_message_view(message: MessageModel, *, runs_by_response_message: dict[uuid.UUID, tuple[AIRunModel, ...]],
+                     feedback_by_response_message: dict[uuid.UUID, FeedbackModel]
+) -> ConversationMessageView:
     if message.id is None:
         raise ConversationQueryPersistenceContractError("Persisted message has no ID")
 
     if message.created_at is None:
         raise ConversationQueryPersistenceContractError("Persisted message has no created_at")
 
-    if message.role not in {"customer", "assistant", "support_agent",}:
+    if message.role not in {"customer", "assistant", "support_agent"}:
         raise ConversationQueryPersistenceContractError("Repository returned a non-visible message role")
+
+    if message.role != "assistant":
+        return ConversationMessageView(
+            message_id=message.id,
+            conversation_id=message.conversation_id,
+            role=message.role,
+            content=message.content,
+            sequence_number=message.sequence_number,
+            created_at=message.created_at,
+            ai_run_id=None,
+            feedback_eligible=False,
+            feedback=None,
+        )
+
+    feedback_record = feedback_by_response_message.get(message.id)
+    selected_run = _select_response_run(runs=runs_by_response_message.get(message.id, (),), feedback=feedback_record)
+    feedback_view = _to_feedback_view(feedback_record) if feedback_record is not None else None
 
     return ConversationMessageView(
         message_id=message.id,
@@ -152,6 +206,9 @@ def _to_message_view(message: MessageModel) -> ConversationMessageView:
         content=message.content,
         sequence_number=message.sequence_number,
         created_at=message.created_at,
+        ai_run_id=selected_run.id if selected_run is not None else None,
+        feedback_eligible=selected_run is not None,
+        feedback=feedback_view,
     )
 
 def _validate_pagination(*, limit: int, offset: int) -> None:
@@ -169,3 +226,68 @@ def _validate_pagination(*, limit: int, offset: int) -> None:
 
     if offset < 0:
         raise ValueError("offset must not be negative")
+
+def _group_runs_by_response_message(*, runs: Sequence[AIRunModel], conversation_id: uuid.UUID) -> dict[uuid.UUID, tuple[AIRunModel, ...]]:
+    grouped: dict[uuid.UUID, list[AIRunModel]] = {}
+
+    for run in runs:
+        response_message_id = run.response_message_id
+        if response_message_id is None:
+            continue
+
+        if run.conversation_id != conversation_id:
+            continue
+
+        grouped.setdefault(response_message_id, []).append(run)
+
+    return {response_message_id: tuple(grouped_runs) for response_message_id, grouped_runs in grouped.items()}
+
+def _map_feedback_by_response_message(*, feedback_records: Sequence[FeedbackModel], conversation_id: uuid.UUID, customer_id: uuid.UUID) -> dict[uuid.UUID, FeedbackModel]:
+    result: dict[uuid.UUID, FeedbackModel] = {}
+
+    for feedback in feedback_records:
+        if feedback.conversation_id != conversation_id:
+            continue
+
+        if feedback.customer_id != customer_id:
+            continue
+
+        # The database unique constraint guarantees one feedback record per response message.
+        # Preserve the first deterministic repository row if inconsistent legacy data somehow exists.
+        result.setdefault(feedback.response_message_id, feedback)
+
+    return result
+
+def _select_response_run(*, runs: tuple[AIRunModel, ...], feedback: FeedbackModel | None) -> AIRunModel | None:
+    completed_runs = tuple(run for run in runs if (run.status == "completed" and run.id is not None and run.response_message_id is not None))
+    if not completed_runs:
+        return None
+
+    # Existing feedback contains the strongest persisted association.
+    if feedback is not None and feedback.ai_run_id is not None:
+        for run in completed_runs:
+            if run.id == feedback.ai_run_id:
+                return run
+
+        # Do not silently associate historical feedback with a different AI run if persisted provenance is inconsistent.
+        return None
+
+    # AIRunRepository returns newest runs first for each response message.
+    return completed_runs[0]
+
+def _to_feedback_view(feedback: FeedbackModel) -> ConversationMessageFeedbackView:
+    if feedback.id is None:
+        raise ConversationQueryPersistenceContractError("Persisted feedback has no ID")
+
+    if feedback.created_at is None:
+        raise ConversationQueryPersistenceContractError("Persisted feedback has no created_at")
+
+    if isinstance(feedback.rating, bool) or not isinstance(feedback.rating, int) or feedback.rating < 1 or feedback.rating > 5:
+        raise ConversationQueryPersistenceContractError("Persisted feedback has an invalid rating")
+
+    return ConversationMessageFeedbackView(
+        feedback_id=feedback.id,
+        rating=feedback.rating,
+        helpful=feedback.helpful,
+        created_at=feedback.created_at,
+    )

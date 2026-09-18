@@ -1247,6 +1247,48 @@
         "title": "ConversationListResponse",
         "type": "object"
       },
+      "ConversationMessageFeedbackResponse": {
+        "additionalProperties": false,
+        "description": "Customer-safe feedback summary attached to historical assistant messages.\n\nCustomer comments, reason codes, administrative review data, metadata, and internal telemetry are intentionally excluded.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "feedback_id": {
+            "format": "uuid",
+            "title": "Feedback Id",
+            "type": "string"
+          },
+          "helpful": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Previously submitted helpfulness value, when provided.",
+            "title": "Helpful"
+          },
+          "rating": {
+            "description": "Customer rating previously submitted for this response.",
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Rating",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "feedback_id",
+          "rating",
+          "created_at"
+        ],
+        "title": "ConversationMessageFeedbackResponse",
+        "type": "object"
+      },
       "ConversationMessageListResponse": {
         "properties": {
           "count": {
@@ -1301,7 +1343,21 @@
         "type": "object"
       },
       "ConversationMessageResponse": {
+        "additionalProperties": false,
         "properties": {
+          "ai_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Completed AI run that produced this assistant response. Null for customer messages, support-agent messages, and assistant messages without valid persisted provenance.",
+            "title": "Ai Run Id"
+          },
           "content": {
             "title": "Content",
             "type": "string"
@@ -1315,6 +1371,23 @@
             "format": "date-time",
             "title": "Created At",
             "type": "string"
+          },
+          "feedback": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConversationMessageFeedbackResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Previously submitted customer-safe feedback summary, when feedback exists for this assistant response."
+          },
+          "feedback_eligible": {
+            "default": false,
+            "description": "Whether this message represents an assistant response with valid completed AI-run provenance.",
+            "title": "Feedback Eligible",
+            "type": "boolean"
           },
           "message_id": {
             "format": "uuid",
@@ -1331,6 +1404,7 @@
             "type": "string"
           },
           "sequence_number": {
+            "minimum": 1.0,
             "title": "Sequence Number",
             "type": "integer"
           }
@@ -5316,6 +5390,264 @@
         "title": "SendMessageResponse",
         "type": "object"
       },
+      "StartConversationProcessingResponse": {
+        "additionalProperties": false,
+        "description": "Returned when another request currently owns the processing lease.\n\nThe client should wait for ``retry_after_seconds`` and resend the same request with the same idempotency key.",
+        "properties": {
+          "conversation_id": {
+            "format": "uuid",
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "idempotency_status": {
+            "const": "processing",
+            "default": "processing",
+            "title": "Idempotency Status",
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "maximum": 300.0,
+            "minimum": 1.0,
+            "title": "Retry After Seconds",
+            "type": "integer"
+          },
+          "start_request_id": {
+            "format": "uuid",
+            "title": "Start Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start_request_id",
+          "conversation_id",
+          "retry_after_seconds"
+        ],
+        "title": "StartConversationProcessingResponse",
+        "type": "object"
+      },
+      "StartConversationRequest": {
+        "additionalProperties": false,
+        "description": "Start a conversation with its first customer message.\n\nThe required idempotency key is supplied through the ``Idempotency-Key`` HTTP header, not this request body.",
+        "properties": {
+          "channel": {
+            "default": "web",
+            "description": "Channel through which the conversation begins.",
+            "enum": [
+              "web",
+              "mobile",
+              "email",
+              "api"
+            ],
+            "title": "Channel",
+            "type": "string"
+          },
+          "message": {
+            "description": "Customer-authored support message.",
+            "examples": [
+              "I was charged twice for order ORD-123."
+            ],
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional explicit customer-visible title. When omitted, a title may be generated later.",
+            "title": "Title"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "StartConversationRequest",
+        "type": "object"
+      },
+      "StartConversationResponse": {
+        "additionalProperties": false,
+        "description": "Terminal result of an idempotent conversation-start operation.\n\nA failed AI result still returns the stable conversation and accepted customer-message identifiers.\nThis lets the frontend recover honestly without creating another conversation or duplicating the first message.",
+        "properties": {
+          "ai_run_id": {
+            "format": "uuid",
+            "title": "Ai Run Id",
+            "type": "string"
+          },
+          "assistant_message_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Persisted customer-visible assistant message ID. Present only when an approved response was created.",
+            "title": "Assistant Message Id"
+          },
+          "conversation_id": {
+            "format": "uuid",
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "created": {
+            "description": "Whether this HTTP operation created the conversation. False for an idempotent replay.",
+            "title": "Created",
+            "type": "boolean"
+          },
+          "customer_message_id": {
+            "format": "uuid",
+            "title": "Customer Message Id",
+            "type": "string"
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Canonical routing decision, if available.",
+            "examples": [
+              "retrieve_information"
+            ],
+            "title": "Decision"
+          },
+          "escalation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Persistent human-review escalation ID. Present when the pipeline ended in escalation.",
+            "title": "Escalation Id"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Safe stable pipeline failure code when succeeded is false.",
+            "title": "Failure Code"
+          },
+          "failure_retryable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether the failed AI operation may be retried safely inside the already-created conversation.",
+            "title": "Failure Retryable"
+          },
+          "idempotency_status": {
+            "description": "Terminal state of the durable start request.",
+            "enum": [
+              "completed",
+              "failed"
+            ],
+            "title": "Idempotency Status",
+            "type": "string"
+          },
+          "intent": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Canonical intent classification, if available.",
+            "examples": [
+              "refund_request"
+            ],
+            "title": "Intent"
+          },
+          "pipeline_stage": {
+            "description": "Final pipeline stage reached during processing.",
+            "examples": [
+              "guardrails_completed"
+            ],
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Pipeline Stage",
+            "type": "string"
+          },
+          "replayed": {
+            "description": "Whether the response was reconstructed from a stored terminal snapshot.",
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "response": {
+            "anyOf": [
+              {
+                "maxLength": 30000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Guardrail-approved customer-visible assistant response. An internal generated candidate is never returned when guardrails escalate or reject it.",
+            "title": "Response"
+          },
+          "start_request_id": {
+            "description": "Durable identifier of the idempotent start request.",
+            "format": "uuid",
+            "title": "Start Request Id",
+            "type": "string"
+          },
+          "succeeded": {
+            "description": "Whether the application pipeline completed without entering the failed stage. An escalation is a successful workflow outcome and therefore may return true.",
+            "title": "Succeeded",
+            "type": "boolean"
+          },
+          "trace_id": {
+            "format": "uuid",
+            "title": "Trace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "customer_message_id",
+          "ai_run_id",
+          "trace_id",
+          "pipeline_stage",
+          "succeeded",
+          "start_request_id",
+          "idempotency_status",
+          "created",
+          "replayed"
+        ],
+        "title": "StartConversationResponse",
+        "type": "object"
+      },
       "SubmitFeedbackRequest": {
         "additionalProperties": false,
         "properties": {
@@ -8557,6 +8889,254 @@
           }
         ],
         "summary": "Create a customer conversation",
+        "tags": [
+          "conversations"
+        ]
+      }
+    },
+    "/v1/conversations/start": {
+      "post": {
+        "description": "Atomically create a customer conversation and its first message using a customer-scoped idempotency key, then run the AI support pipeline.",
+        "operationId": "start_conversation_v1_conversations_start_post",
+        "parameters": [
+          {
+            "description": "High-entropy client-generated key scoped to the authenticated customer.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "description": "High-entropy client-generated key scoped to the authenticated customer.",
+              "maxLength": 255,
+              "minLength": 16,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Trace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Trace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartConversationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartConversationResponse"
+                }
+              }
+            },
+            "description": "Existing terminal result replayed",
+            "headers": {
+              "X-Trace-ID": {
+                "description": "Application request correlation identifier.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartConversationResponse"
+                }
+              }
+            },
+            "description": "Successful Response",
+            "headers": {
+              "X-Trace-ID": {
+                "description": "Application request correlation identifier.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartConversationProcessingResponse"
+                }
+              }
+            },
+            "description": "An identical request is still processing",
+            "headers": {
+              "X-Trace-ID": {
+                "description": "Application request correlation identifier.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid first message or idempotency key",
+            "headers": {
+              "X-Trace-ID": {
+                "description": "Application request correlation identifier.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required",
+            "headers": {
+              "X-Trace-ID": {
+                "description": "Application request correlation identifier.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            },
+            "description": "Customer access required",
+            "headers": {
+              "X-Trace-ID": {
+                "description": "Application request correlation identifier.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            },
+            "description": "Idempotency key reused with conflicting input or its replay period expired",
+            "headers": {
+              "X-Trace-ID": {
+                "description": "Application request correlation identifier.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed",
+            "headers": {
+              "X-Trace-ID": {
+                "description": "Application request correlation identifier.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            },
+            "description": "Unexpected internal failure",
+            "headers": {
+              "X-Trace-ID": {
+                "description": "Application request correlation identifier.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            },
+            "description": "The conversation was accepted but processing ownership could not be confirmed",
+            "headers": {
+              "X-Trace-ID": {
+                "description": "Application request correlation identifier.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Start a conversation with its first message",
         "tags": [
           "conversations"
         ]

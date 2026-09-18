@@ -12,13 +12,14 @@ from packages.application.conversations.process_customer_message import ProcessC
 from apps.api.app.api.dependencies import ApplicationServicesDependency, CurrentPrincipalDependency, CustomerPrincipalDependency, TraceIdDependency
 from apps.api.app.api.schemas.errors import APIErrorResponse
 from apps.api.app.api.v1.schemas.conversations import ConversationChannel, ConversationListResponse, ConversationResponse, ConversationStatus
-from apps.api.app.api.v1.schemas.conversations import CreateConversationRequest, CreateConversationResponse, SendMessageRequest, SendMessageResponse
+from apps.api.app.api.v1.schemas.conversations import CreateConversationRequest, CreateConversationResponse, SendMessageRequest
 from apps.api.app.api.v1.schemas.conversations import ConversationMessageListResponse, ConversationMessageResponse, CloseConversationResponse
 from apps.api.app.api.v1.schemas.conversations import StartConversationProcessingResponse, StartConversationRequest, StartConversationResponse
+from apps.api.app.api.v1.schemas.conversations import ConversationMessageFeedbackResponse, SendMessageResponse
 from packages.application.conversations.process_customer_message import ProcessCustomerMessageCommand
 from packages.application.conversations.create_conversation import CreateConversationCommand, CreateConversationResult
 from packages.application.conversations.query_conversations import ConversationPage, ConversationView, GetConversationQuery, ListConversationsQuery
-from packages.application.conversations.get_conversation_messages import GetConversationMessagesQuery
+from packages.application.conversations.get_conversation_messages import GetConversationMessagesQuery, ConversationMessageView
 from packages.application.conversations.close_conversation import CloseConversationCommand
 from packages.application.conversations.start_conversation import StartConversationCommand, StartConversationResult
 from packages.application.conversations.start_conversation_errors import ConversationStartProcessingInProgressError
@@ -253,16 +254,7 @@ def list_conversation_messages(
     )
 
     return ConversationMessageListResponse(
-        items=[ConversationMessageResponse(
-                message_id=item.message_id,
-                conversation_id=item.conversation_id,
-                role=item.role,
-                content=item.content,
-                sequence_number=item.sequence_number,
-                created_at=item.created_at,
-            )
-            for item in result.items
-        ],
+        items=[_conversation_message_response(item) for item in result.items],
         total=result.total,
         count=result.count,
         limit=result.limit,
@@ -457,4 +449,26 @@ def _conversation_list_response(page: ConversationPage) -> ConversationListRespo
         offset=page.offset,
         has_more=page.has_more,
         next_offset=page.next_offset,
+    )
+
+def _conversation_message_response(message: ConversationMessageView) -> ConversationMessageResponse:
+    feedback = message.feedback
+    feedback_response = ConversationMessageFeedbackResponse(
+        feedback_id=feedback.feedback_id,
+        rating=feedback.rating,
+        helpful=feedback.helpful,
+        created_at=feedback.created_at,
+    ) if feedback is not None else None
+
+
+    return ConversationMessageResponse(
+        message_id=message.message_id,
+        conversation_id=message.conversation_id,
+        role=message.role,
+        content=message.content,
+        sequence_number=message.sequence_number,
+        created_at=message.created_at,
+        ai_run_id=message.ai_run_id,
+        feedback_eligible=message.feedback_eligible,
+        feedback=feedback_response,
     )
