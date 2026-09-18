@@ -2,7 +2,15 @@
 
 import { lazy, Suspense } from 'react';
 import type { ReactNode } from 'react';
-import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from 'react-router';
+import {
+  createBrowserRouter,
+  Link,
+  Navigate,
+  Route,
+  RouterProvider,
+  Routes,
+  useLocation,
+} from 'react-router';
 
 import { useSession } from '../shared/auth/session-context';
 import { canOpenWorkspace, homePath } from '../shared/auth/workspace-access';
@@ -12,6 +20,8 @@ import { LogoutPage } from '../features/auth/logout-page';
 import { loginDestination } from '../features/auth/login-destination';
 import { RouteErrorBoundary } from './route-error-boundary';
 import { LogoutDialogProvider } from '../features/auth/logout-dialog';
+import { NavigationProtectionProvider } from '../shared/navigation/navigation-protection-provider';
+import { ChatNavigationGuard } from '../features/chat/chat-navigation-guard';
 
 const ChatPage = lazy(() => import('../features/chat/chat-page'));
 const OperationsPage = lazy(() => import('../features/operations/operations-page'));
@@ -103,79 +113,97 @@ function RequireWorkspace({
   return children;
 }
 
-export function ApplicationRoutes() {
+export function ApplicationRoutes({
+  enableNavigationGuard = false,
+}: {
+  readonly enableNavigationGuard?: boolean;
+}) {
   const location = useLocation();
 
   return (
-    <LogoutDialogProvider>
-      <RouteErrorBoundary key={location.pathname}>
-        <Suspense
-          fallback={
-            <Notice title="Opening workspace">
-              <p role="status">Loading the application screen…</p>
-            </Notice>
-          }
-        >
-          <Routes>
-            <Route path="/" element={<Home />} />
-            <Route path="/login" element={<LoginEntry />} />
-            <Route path="/logout" element={<LogoutPage />} />
+    <NavigationProtectionProvider>
+      <LogoutDialogProvider>
+        {enableNavigationGuard && <ChatNavigationGuard />}
+        <RouteErrorBoundary key={location.pathname}>
+          <Suspense
+            fallback={
+              <Notice title="Opening workspace">
+                <p role="status">Loading the application screen…</p>
+              </Notice>
+            }
+          >
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route path="/login" element={<LoginEntry />} />
+              <Route path="/logout" element={<LogoutPage />} />
 
-            <Route
-              path="/chat"
-              element={
-                <RequireWorkspace workspace="chat">
-                  <ChatPage />
-                </RequireWorkspace>
-              }
-            />
-            <Route
-              path="/chat/:conversationId"
-              element={
-                <RequireWorkspace workspace="chat">
-                  <ChatPage />
-                </RequireWorkspace>
-              }
-            />
+              <Route
+                path="/chat"
+                element={
+                  <RequireWorkspace workspace="chat">
+                    <ChatPage />
+                  </RequireWorkspace>
+                }
+              />
+              <Route
+                path="/chat/:conversationId"
+                element={
+                  <RequireWorkspace workspace="chat">
+                    <ChatPage />
+                  </RequireWorkspace>
+                }
+              />
 
-            <Route
-              path="/operations"
-              element={
-                <RequireWorkspace workspace="operations">
-                  <OperationsPage />
-                </RequireWorkspace>
-              }
-            />
+              <Route
+                path="/operations"
+                element={
+                  <RequireWorkspace workspace="operations">
+                    <OperationsPage />
+                  </RequireWorkspace>
+                }
+              />
 
-            <Route
-              path="/knowledge"
-              element={
-                <RequireWorkspace workspace="knowledge">
-                  <KnowledgePage />
-                </RequireWorkspace>
-              }
-            />
+              <Route
+                path="/knowledge"
+                element={
+                  <RequireWorkspace workspace="knowledge">
+                    <KnowledgePage />
+                  </RequireWorkspace>
+                }
+              />
 
-            <Route
-              path="*"
-              element={
-                <Notice title="Page not found">
-                  <p>This address does not match an available page.</p>
-                  <Link to="/">Go to your workspace</Link>
-                </Notice>
-              }
-            />
-          </Routes>
-        </Suspense>
-      </RouteErrorBoundary>
-    </LogoutDialogProvider>
+              <Route
+                path="*"
+                element={
+                  <Notice title="Page not found">
+                    <p>This address does not match an available page.</p>
+                    <Link to="/">Go to your workspace</Link>
+                  </Notice>
+                }
+              />
+            </Routes>
+          </Suspense>
+        </RouteErrorBoundary>
+      </LogoutDialogProvider>
+    </NavigationProtectionProvider>
   );
 }
 
+// Create once, outside React rendering.
+const applicationRouter = createBrowserRouter([
+  {
+    path: '*',
+    element: <ApplicationRoutes enableNavigationGuard />,
+  },
+]);
+
+// Release the previous router when Vite replaces this module.
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    applicationRouter.dispose();
+  });
+}
+
 export function ApplicationRouter() {
-  return (
-    <BrowserRouter>
-      <ApplicationRoutes />
-    </BrowserRouter>
-  );
+  return <RouterProvider router={applicationRouter} />;
 }

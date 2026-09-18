@@ -1,5 +1,5 @@
 // apps/web/src/features/chat/use-chat-submission.ts
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { SafeApiError } from '../../shared/api/safe-error';
@@ -9,6 +9,7 @@ import type { SendMessageResult } from './chat-contract';
 import { chatKeys, useChatApi } from './chat-queries';
 import { customerEscalationKey } from './customer-escalation-query';
 import { rememberResponseFeedbackTarget } from './response-feedback-target';
+import type { OutgoingMessage } from './outgoing-message';
 
 interface ChatSubmissionOptions {
   readonly conversationId: string;
@@ -26,12 +27,37 @@ export function useChatSubmission({ conversationId, onPageChange }: ChatSubmissi
   const session = useSession();
   const controller = useSessionController();
   const mounted = useRef(false);
+  const [outgoing, setOutgoing] = useState<OutgoingMessage | null>(null);
+  const outgoingRef = useRef<OutgoingMessage | null>(null);
+  const attemptRef = useRef(0);
+  const sendingRef = useRef(false);
+
+  const publishOutgoing = useCallback((next: OutgoingMessage | null) => {
+    outgoingRef.current = next;
+    if (mounted.current) setOutgoing(next);
+  }, []);
+
+  function updateOutgoing(localId: string, patch: Partial<OutgoingMessage>) {
+    const current = outgoingRef.current;
+    if (current?.localId === localId) publishOutgoing({ ...current, ...patch });
+  }
+
+  function clearOutgoing() {
+    if (!sendingRef.current) publishOutgoing(null);
+  }
+
+  useEffect(() => {
+    return controller.subscribe(() => {
+      if (controller.getSnapshot() !== session) publishOutgoing(null);
+    });
+  }, [controller, session, publishOutgoing]);
 
   useEffect(() => {
     mounted.current = true;
 
     return () => {
       mounted.current = false;
+      outgoingRef.current = null;
     };
   }, []);
 
@@ -74,10 +100,43 @@ export function useChatSubmission({ conversationId, onPageChange }: ChatSubmissi
   });
 
   async function send(message: string): Promise<TransportResult<SendMessageResult>> {
+    requireCurrentSession();
+    if (!mounted.current || sendingRef.current) throw SafeApiError.fromLocal('aborted');
+
+    sendingRef.current = true;
+    const localId = `${conversationId}:${++attemptRef.current}`;
+    publishOutgoing({
+      localId,
+      content: message,
+      createdAt: new Date().toISOString(),
+      messageId: null,
+      phase: 'sending',
+    });
+
     try {
-      return await mutation.mutateAsync(message);
+      const result = await mutation.mutateAsync(message);
+      requireCurrentSession();
+      if (result.ok) {
+        updateOutgoing(localId, {
+          messageId: result.data.customer_message_id,
+          phase: 'syncing',
+        });
+      } else {
+        const uncertain =
+          result.error.kind !== 'http' ||
+          result.error.status === null ||
+          result.error.status >= 500 ||
+          result.error.status === 409;
+        updateOutgoing(localId, {
+          phase: uncertain ? 'uncertain' : 'rejected',
+        });
+      }
+      return result;
+    } catch (error) {
+      updateOutgoing(localId, { phase: 'uncertain' });
+      throw error;
     } finally {
-      // The composer retains a notice, not the mutation's response payload.
+      sendingRef.current = false;
       if (mounted.current) mutation.reset();
     }
   }
@@ -149,6 +208,16 @@ export function useChatSubmission({ conversationId, onPageChange }: ChatSubmissi
 
       onPageChange(latestOffset);
 
+      const pending = outgoingRef.current;
+      if (
+        pending?.messageId &&
+        [...firstPage.items, ...latestPage.items].some(
+          (item) => item.message_id === pending.messageId,
+        )
+      ) {
+        publishOutgoing(null);
+      }
+
       // A message can create or change the latest escalation.
       // Failure here must not turn confirmed message reconciliation
       // into a failed send.
@@ -172,10 +241,17 @@ export function useChatSubmission({ conversationId, onPageChange }: ChatSubmissi
       return !latestPage.has_more;
     } catch {
       return false;
+    } finally {
+      const current = outgoingRef.current;
+      if (current?.phase === 'syncing') {
+        updateOutgoing(current.localId, { phase: 'saved' });
+      }
     }
   }
 
   return {
+    outgoing,
+    clearOutgoing,
     send,
     reconcile,
     isPending: mutation.isPending,

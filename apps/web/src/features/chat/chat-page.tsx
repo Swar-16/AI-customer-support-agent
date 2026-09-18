@@ -1,19 +1,19 @@
 // apps/web/src/features/chat/chat-page.tsx
 
 import { useEffect, useRef, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ArrowLeft, ArrowRight, LogOut, Plus, RefreshCw } from 'lucide-react';
 
 import { ChatWelcome } from './chat-welcome';
-import { SafeApiError } from '../../shared/api/safe-error';
-import { useSession, useSessionController } from '../../shared/auth/session-context';
+import { useSession } from '../../shared/auth/session-context';
 import { identity } from '../../shared/branding/identity';
 import { conversationIdSchema } from './chat-contract';
-import { chatKeys, useChatApi, useConversations } from './chat-queries';
+import { useConversations } from './chat-queries';
+import { ConversationDraft } from './conversation-draft';
 import { ConversationHistory } from './conversation-history';
 import { useConversationCapacity } from './use-conversation-capacity';
-import { useLogoutDialog } from '../auth/logout-dialog';
+import { useLogoutDialog } from '../auth/logout-dialog-context';
+import { DraftExitDialog } from './draft-exit-dialog';
 
 import './chat-page.css';
 
@@ -25,39 +25,55 @@ function readOffset(value: string | null): number {
 
 export default function ChatPage() {
   const session = useSession();
-  const controller = useSessionController();
-  const api = useChatApi();
-  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { conversationId } = useParams<{ conversationId: string }>();
   const [search, setSearch] = useSearchParams();
+  const isDraft = conversationId === undefined && search.get('draft') === '1';
 
   const listOffset = readOffset(search.get('conversationsOffset'));
   const messageOffset = readOffset(search.get('messagesOffset'));
   const { listAreaRef, limit: conversationLimit } = useConversationCapacity();
   const conversations = useConversations(listOffset, conversationLimit);
 
-  const [creationError, setCreationError] = useState<string | null>(null);
-  const [creationBlocked, setCreationBlocked] = useState(false);
-  const submitting = useRef(false);
   const heading = useRef<HTMLHeadingElement>(null);
+
+  const [draftRevision, setDraftRevision] = useState(0);
+  const [draftExit, setDraftExit] = useState<
+    { readonly kind: 'new' } | { readonly kind: 'navigate'; readonly to: string } | null
+  >(null);
+
+  function draftNeedsConfirmation() {
+    return document.querySelector('.conversation-draft[data-navigation-blocked="true"]') !== null;
+  }
+
+  function requestDraftNavigation(to: string) {
+    if (draftNeedsConfirmation()) {
+      setDraftExit({ kind: 'navigate', to });
+    } else {
+      setExitNotice(null);
+      navigate(to);
+    }
+  }
+
+  function confirmDraftExit() {
+    const action = draftExit;
+    setDraftExit(null);
+    setExitNotice(null);
+
+    if (action?.kind === 'new') {
+      setDraftRevision((revision) => revision + 1);
+    } else if (action?.kind === 'navigate') {
+      navigate(action.to);
+    }
+  }
 
   const requestLogout = useLogoutDialog();
   const [exitNotice, setExitNotice] = useState<string | null>(null);
 
-  const create = useMutation({
-    retry: false,
-    mutationFn: async () => {
-      const result = await api.create();
-      if (!result.ok) throw result.error;
-      return result.data;
-    },
-  });
-
   useEffect(() => {
     document.title = `Customer Chat · ${identity.productName}`;
     heading.current?.focus();
-  }, [conversationId]);
+  }, [conversationId, isDraft]);
 
   const parsedId = conversationId ? conversationIdSchema.safeParse(conversationId) : null;
 
@@ -87,52 +103,48 @@ export default function ChatPage() {
     return `/chat/${id}${suffix ? `?${suffix}` : ''}`;
   }
 
-  async function createConversation() {
-    if (submitting.current || creationBlocked) return;
-
-    const startingSession = controller.getSnapshot();
-    if (startingSession.phase !== 'authenticated' || startingSession.user?.role !== 'customer') {
+  function createConversation() {
+    if (session.phase !== 'authenticated' || session.user?.role !== 'customer') {
       return;
     }
 
-    submitting.current = true;
-    setCreationError(null);
-
-    try {
-      const created = await create.mutateAsync();
-
-      // Do not navigate or repopulate caches after a session transition.
-      if (controller.getSnapshot() !== startingSession) return;
-
-      void queryClient.invalidateQueries({
-        queryKey: chatKeys.all(startingSession.user.id),
-      });
-
-      navigate(`/chat/${created.conversation_id}`);
-    } catch (error: unknown) {
-      if (controller.getSnapshot() !== startingSession) return;
-
-      const uncertain =
-        !(error instanceof SafeApiError) ||
-        error.kind !== 'http' ||
-        (error.status !== null && error.status >= 500);
-
-      setCreationBlocked(uncertain);
-      setCreationError(
-        uncertain
-          ? 'Creation could not be confirmed. Refresh the conversation list and inspect it before starting another conversation.'
-          : error instanceof SafeApiError
-            ? error.message
-            : 'The conversation could not be created.',
-      );
-    } finally {
-      submitting.current = false;
+    if (isDraft) {
+      if (draftNeedsConfirmation()) {
+        setDraftExit({ kind: 'new' });
+      } else {
+        setExitNotice(null);
+        setDraftRevision((revision) => revision + 1);
+      }
+      return;
     }
+
+    const query = new URLSearchParams();
+    query.set('draft', '1');
+
+    if (listOffset > 0) {
+      query.set('conversationsOffset', String(listOffset));
+    }
+
+    navigate(`/chat?${query.toString()}`);
   }
 
   return (
     <div
       className="chat-workspace"
+      onClickCapture={(event) => {
+        if (!isDraft || !(event.target instanceof Element)) return;
+
+        const link = event.target.closest('a[href]');
+        const href = link?.getAttribute('href');
+
+        if (href == null || href.startsWith('#') || !draftNeedsConfirmation()) {
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        setDraftExit({ kind: 'navigate', to: href });
+      }}
       onKeyDown={(event) => {
         if (event.defaultPrevented || event.nativeEvent.isComposing || event.repeat) return;
 
@@ -141,7 +153,7 @@ export default function ChatPage() {
           return;
         }
 
-        if (!parsedId?.success) return;
+        if (!parsedId?.success && !isDraft) return;
 
         // Let dialogs and support details handle their own dismissal first.
         if (
@@ -155,7 +167,7 @@ export default function ChatPage() {
           '.message-composer[data-navigation-blocked="true"]',
         );
 
-        if (create.isPending || blockedComposer) {
+        if (blockedComposer) {
           event.preventDefault();
 
           setExitNotice(
@@ -208,19 +220,14 @@ export default function ChatPage() {
         <button
           type="button"
           className="chat-primary chat-new-conversation"
-          aria-busy={create.isPending}
-          disabled={create.isPending || creationBlocked || session.phase !== 'authenticated'}
-          onClick={() => {
-            void createConversation();
-          }}
+          disabled={session.phase !== 'authenticated'}
+          onClick={createConversation}
         >
           <span className="chat-new-conversation__icon" aria-hidden="true">
             <Plus size={17} strokeWidth={2.6} />
           </span>
-          <span>{create.isPending ? 'Creating conversation…' : 'New conversation'}</span>
+          <span>New conversation</span>
         </button>
-
-        {creationError && <p role="alert">{creationError}</p>}
 
         <section className="chat-conversations" aria-labelledby="conversations-heading">
           <div className="chat-conversations__heading">
@@ -340,11 +347,13 @@ export default function ChatPage() {
       <main
         id="chat-content"
         className={
-          parsedId === null
-            ? 'chat-reading chat-reading--welcome'
-            : parsedId.success
-              ? 'chat-reading chat-reading--conversation'
-              : 'chat-reading'
+          isDraft
+            ? 'chat-reading chat-reading--draft'
+            : parsedId === null
+              ? 'chat-reading chat-reading--welcome'
+              : parsedId.success
+                ? 'chat-reading chat-reading--conversation'
+                : 'chat-reading'
         }
         tabIndex={-1}
         aria-labelledby="chat-title"
@@ -353,14 +362,21 @@ export default function ChatPage() {
           Customer Chat
         </h1>
 
-        {parsedId?.success && exitNotice && (
+        {(parsedId?.success || isDraft) && exitNotice && (
           <p className="chat-exit-notice" role="status">
             {exitNotice}
           </p>
         )}
 
         {parsedId === null ? (
-          <ChatWelcome />
+          isDraft ? (
+            <ConversationDraft
+              key={draftRevision}
+              onRequestLeave={() => requestDraftNavigation('/chat')}
+            />
+          ) : (
+            <ChatWelcome />
+          )
         ) : !parsedId.success ? (
           <p role="alert">This conversation address is invalid.</p>
         ) : (
@@ -373,6 +389,13 @@ export default function ChatPage() {
           />
         )}
       </main>
+      {draftExit !== null && (
+        <DraftExitDialog
+          startingNew={draftExit.kind === 'new'}
+          onCancel={() => setDraftExit(null)}
+          onConfirm={confirmDraftExit}
+        />
+      )}
     </div>
   );
 }

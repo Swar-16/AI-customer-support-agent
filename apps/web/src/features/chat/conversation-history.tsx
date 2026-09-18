@@ -14,6 +14,8 @@ import { MessageScrollBoundary } from './message-scroll-boundary';
 import { useCustomerEscalation } from './customer-escalation-query';
 import { ConversationSupportDrawer } from './conversation-support-drawer';
 import { ResponseRating } from './response-rating';
+import { OutgoingTurn } from './outgoing-turn';
+import { shouldShowOutgoing } from './outgoing-message';
 
 interface ConversationHistoryProps {
   readonly conversationId: string;
@@ -45,6 +47,7 @@ export function ConversationHistory({
 }: ConversationHistoryProps) {
   const conversation = useConversation(conversationId);
   const history = useConversationHistory(conversationId, offset);
+  const [historyAtSend, setHistoryAtSend] = useState<typeof history.data>(undefined);
   useEffect(() => {
     if (!openLatest || !history.isSuccess) return;
 
@@ -97,6 +100,7 @@ export function ConversationHistory({
     }
 
     mutationLockRef.current = 'send';
+    setHistoryAtSend(history.data);
 
     try {
       return await submission.send(message);
@@ -124,7 +128,11 @@ export function ConversationHistory({
     );
   }
 
-  const lastSequence = history.data?.items.at(-1)?.sequence_number ?? null;
+  const visibleHistory =
+    submission.outgoing?.phase === 'sending' ? (historyAtSend ?? history.data) : history.data;
+  const lastSequence = visibleHistory?.items.at(-1)?.sequence_number ?? null;
+  const outgoing = submission.outgoing;
+  const showOutgoing = shouldShowOutgoing(outgoing, visibleHistory?.items ?? []);
 
   return (
     <section
@@ -217,9 +225,9 @@ export function ConversationHistory({
                   </p>
                 )}
 
-                {history.isPending || (openLatest && history.isSuccess) ? (
+                {(history.isPending && !visibleHistory) || (openLatest && history.isSuccess) ? (
                   <p role="status">Loading messages…</p>
-                ) : history.isError ? (
+                ) : history.isError && !visibleHistory ? (
                   <div>
                     <p role="alert">Message history could not be loaded.</p>
                     <button
@@ -230,17 +238,17 @@ export function ConversationHistory({
                       Reload messages
                     </button>
                   </div>
-                ) : (
+                ) : visibleHistory ? (
                   <>
                     {history.isFetching && <p role="status">Updating messages…</p>}
 
-                    {history.data.items.length === 0 ? (
+                    {visibleHistory.items.length === 0 && !outgoing ? (
                       <p>
                         {offset === 0 ? 'No messages yet.' : 'There are no messages on this page.'}
                       </p>
                     ) : (
                       <ol className="chat-history__messages" aria-label="Messages">
-                        {history.data.items.map((message) => (
+                        {visibleHistory.items.map((message) => (
                           <li
                             key={message.message_id}
                             className="chat-history__message"
@@ -262,6 +270,7 @@ export function ConversationHistory({
                                   <ResponseRating
                                     conversationId={conversationId}
                                     responseMessageId={message.message_id}
+                                    message={message}
                                   />
                                 </>
                               ) : (
@@ -273,7 +282,15 @@ export function ConversationHistory({
                       </ol>
                     )}
 
-                    {(offset > 0 || history.data.has_more) && (
+                    {outgoing && (
+                      <OutgoingTurn
+                        key={outgoing.localId}
+                        message={outgoing}
+                        showBubble={showOutgoing}
+                      />
+                    )}
+
+                    {(offset > 0 || visibleHistory.has_more) && (
                       <nav className="chat-pagination" aria-label="Message pages">
                         {offset > 0 && (
                           <button
@@ -281,7 +298,7 @@ export function ConversationHistory({
                             className="chat-icon-button"
                             aria-label="Earlier messages"
                             title="Earlier messages"
-                            disabled={history.isFetching}
+                            disabled={history.isFetching || submission.isPending}
                             onClick={() => onPageChange(Math.max(0, offset - 50))}
                           >
                             <ArrowLeft size={18} aria-hidden="true" />
@@ -289,18 +306,18 @@ export function ConversationHistory({
                         )}
 
                         <span className="chat-pagination__count">
-                          {history.data.total} messages total
+                          {visibleHistory.total} messages total
                         </span>
 
-                        {history.data.has_more && (
+                        {visibleHistory.has_more && (
                           <button
                             type="button"
                             className="chat-icon-button"
                             aria-label="Later messages"
                             title="Later messages"
-                            disabled={history.isFetching}
+                            disabled={history.isFetching || submission.isPending}
                             onClick={() => {
-                              const next = history.data.next_offset;
+                              const next = visibleHistory.next_offset;
                               if (next !== null) onPageChange(next);
                             }}
                           >
@@ -310,7 +327,7 @@ export function ConversationHistory({
                       </nav>
                     )}
                   </>
-                )}
+                ) : null}
               </div>
             </MessageScrollBoundary>
           </div>
@@ -325,6 +342,7 @@ export function ConversationHistory({
                 history.isError ||
                 closure.blocksSending
               }
+              onDiscardOutgoing={submission.clearOutgoing}
               onSend={sendMessage}
               onReconcile={submission.reconcile}
             />

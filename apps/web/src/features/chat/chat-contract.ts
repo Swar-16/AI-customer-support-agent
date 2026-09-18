@@ -45,13 +45,23 @@ const conversationSchema = createdConversationSchema.extend({
   closed_at: timestamp.nullable().default(null),
 }) satisfies z.ZodType<Conversation>;
 
+const historicalFeedbackSchema = z.object({
+  feedback_id: conversationIdSchema,
+  rating: z.number().int().min(1).max(5),
+  helpful: z.boolean().nullable().default(null),
+  created_at: timestamp,
+}) satisfies z.ZodType<components['schemas']['ConversationMessageFeedbackResponse']>;
+
 const messageSchema = z.object({
   message_id: conversationIdSchema,
   conversation_id: conversationIdSchema,
   role: z.enum(['customer', 'assistant', 'support_agent']),
   content: z.string(),
-  sequence_number: z.number().int(),
+  sequence_number: z.number().int().min(1),
   created_at: timestamp,
+  ai_run_id: conversationIdSchema.nullable().default(null),
+  feedback_eligible: z.boolean().default(false),
+  feedback: historicalFeedbackSchema.nullable().default(null),
 }) satisfies z.ZodType<components['schemas']['ConversationMessageResponse']>;
 
 const paginationFields = {
@@ -85,7 +95,7 @@ export const customerMessageSchema = z
     message: 'Use 20,000 characters or fewer.',
   });
 
-const sendMessageSchema = z.object({
+export const sendMessageSchema = z.object({
   conversation_id: conversationIdSchema,
   customer_message_id: conversationIdSchema,
   ai_run_id: conversationIdSchema,

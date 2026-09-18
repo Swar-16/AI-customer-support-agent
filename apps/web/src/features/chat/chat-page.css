@@ -1666,3 +1666,15 @@
     color: HighlightText;
   }
 }
+
+/* Keep assistant answers readable without stretching across the full lane. */
+.chat-history__message[data-speaker='assistant'] {
+  width: fit-content;
+  max-width: min(85%, 680px);
+}
+
+@media (max-width: 600px) {
+  .chat-history__message[data-speaker='assistant'] {
+    max-width: 96%;
+  }
+}

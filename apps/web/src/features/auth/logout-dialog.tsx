@@ -1,27 +1,16 @@
 // apps/web/src/features/auth/logout-dialog.tsx
-import { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router';
 import { Check, LoaderCircle, LogOut, X } from 'lucide-react';
 
 import { useSession, useSessionController } from '../../shared/auth/session-context';
+import { LogoutDialogContext } from './logout-dialog-context';
 
 import './logout-dialog.css';
 
 type DialogState = 'idle' | 'pending' | 'confirmed' | 'unconfirmed';
-
-const LogoutDialogContext = createContext<(() => void) | null>(null);
-
-export function useLogoutDialog(): () => void {
-  const requestLogout = useContext(LogoutDialogContext);
-
-  if (requestLogout === null) {
-    throw new Error('LogoutDialogProvider is required.');
-  }
-
-  return requestLogout;
-}
 
 export function LogoutDialogProvider({ children }: { readonly children: ReactNode }) {
   const session = useSession();

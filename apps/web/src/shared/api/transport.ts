@@ -21,11 +21,18 @@ type RequestBody =
   | { readonly kind: 'json'; readonly value: unknown }
   | { readonly kind: 'multipart'; readonly value: FormData };
 
+export interface TransportResponseContext {
+  readonly status: number;
+  readonly traceId: string | null;
+  readonly retryAfterMs: number | null;
+}
+
 export interface TransportRequest<T> {
   readonly path: `/v1/${string}`;
   readonly method: 'GET' | 'POST' | 'PATCH';
   readonly authentication: Authentication;
-  readonly decode: (value: unknown) => T;
+  readonly decode: (value: unknown, context: TransportResponseContext) => T;
+  readonly idempotencyKey?: string;
   readonly query?: URLSearchParams;
   readonly body?: RequestBody;
   readonly signal?: AbortSignal;
@@ -43,6 +50,19 @@ interface TransportOptions {
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 2_147_483_647;
 const PATH_PATTERN = /^\/v1\/[a-zA-Z0-9/_-]+$/u;
+const IDEMPOTENCY_KEY_PATTERN = /^[!-~]{16,255}$/u;
+
+function hasValidIdempotencyKey<T>(input: TransportRequest<T>): boolean {
+  if (input.idempotencyKey === undefined) {
+    return true;
+  }
+
+  return (
+    input.method === 'POST' &&
+    input.path === '/v1/conversations/start' &&
+    IDEMPOTENCY_KEY_PATTERN.test(input.idempotencyKey)
+  );
+}
 
 function failure(error: SafeApiError, retryAfterMs: number | null = null): TransportResult<never> {
   return { ok: false, error, retryAfterMs };
@@ -77,7 +97,8 @@ export function createTransport(options: TransportOptions) {
       !Number.isInteger(timeoutMs) ||
       timeoutMs <= 0 ||
       timeoutMs > MAX_TIMEOUT_MS ||
-      (input.method === 'GET' && input.body !== undefined)
+      (input.method === 'GET' && input.body !== undefined) ||
+      !hasValidIdempotencyKey(input)
     ) {
       // Programming/configuration failure: no request is sent.
       return failure(SafeApiError.fromLocal('invalid-response'));
@@ -111,6 +132,9 @@ export function createTransport(options: TransportOptions) {
 
     try {
       const headers = new Headers({ Accept: 'application/json' });
+      if (input.idempotencyKey !== undefined) {
+        headers.set('Idempotency-Key', input.idempotencyKey);
+      }
       const usesBearer =
         input.authentication === 'bearer' || input.authentication === 'bearer-cookie';
 
@@ -194,7 +218,11 @@ export function createTransport(options: TransportOptions) {
 
       try {
         // Feature decoders validate enums/shapes and return allowlisted fields.
-        const data = input.decode(payload);
+        const data = input.decode(payload, {
+          status: response.status,
+          traceId,
+          retryAfterMs: parseRetryAfter(response.headers.get('Retry-After')),
+        });
         return { ok: true, data, traceId };
       } catch {
         return failure(SafeApiError.fromLocal('invalid-response', traceId));

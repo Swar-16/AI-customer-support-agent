@@ -135,6 +135,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/conversations/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a conversation with its first message
+         * @description Atomically create a customer conversation and its first message using a customer-scoped idempotency key, then run the AI support pipeline.
+         */
+        post: operations["start_conversation_v1_conversations_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/conversations/{conversation_id}": {
         parameters: {
             query?: never;
@@ -1353,6 +1373,34 @@ export interface components {
             /** Total */
             total: number;
         };
+        /**
+         * ConversationMessageFeedbackResponse
+         * @description Customer-safe feedback summary attached to historical assistant messages.
+         *
+         *     Customer comments, reason codes, administrative review data, metadata, and internal telemetry are intentionally excluded.
+         */
+        ConversationMessageFeedbackResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Feedback Id
+             * Format: uuid
+             */
+            feedback_id: string;
+            /**
+             * Helpful
+             * @description Previously submitted helpfulness value, when provided.
+             */
+            helpful?: boolean | null;
+            /**
+             * Rating
+             * @description Customer rating previously submitted for this response.
+             */
+            rating: number;
+        };
         /** ConversationMessageListResponse */
         ConversationMessageListResponse: {
             /** Count */
@@ -1372,6 +1420,11 @@ export interface components {
         };
         /** ConversationMessageResponse */
         ConversationMessageResponse: {
+            /**
+             * Ai Run Id
+             * @description Completed AI run that produced this assistant response. Null for customer messages, support-agent messages, and assistant messages without valid persisted provenance.
+             */
+            ai_run_id?: string | null;
             /** Content */
             content: string;
             /**
@@ -1384,6 +1437,14 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** @description Previously submitted customer-safe feedback summary, when feedback exists for this assistant response. */
+            feedback?: components["schemas"]["ConversationMessageFeedbackResponse"] | null;
+            /**
+             * Feedback Eligible
+             * @description Whether this message represents an assistant response with valid completed AI-run provenance.
+             * @default false
+             */
+            feedback_eligible: boolean;
             /**
              * Message Id
              * Format: uuid
@@ -2900,6 +2961,157 @@ export interface components {
              */
             trace_id: string;
         };
+        /**
+         * StartConversationProcessingResponse
+         * @description Returned when another request currently owns the processing lease.
+         *
+         *     The client should wait for ``retry_after_seconds`` and resend the same request with the same idempotency key.
+         */
+        StartConversationProcessingResponse: {
+            /**
+             * Conversation Id
+             * Format: uuid
+             */
+            conversation_id: string;
+            /**
+             * Idempotency Status
+             * @default processing
+             * @constant
+             */
+            idempotency_status: "processing";
+            /** Retry After Seconds */
+            retry_after_seconds: number;
+            /**
+             * Start Request Id
+             * Format: uuid
+             */
+            start_request_id: string;
+        };
+        /**
+         * StartConversationRequest
+         * @description Start a conversation with its first customer message.
+         *
+         *     The required idempotency key is supplied through the ``Idempotency-Key`` HTTP header, not this request body.
+         */
+        StartConversationRequest: {
+            /**
+             * Channel
+             * @description Channel through which the conversation begins.
+             * @default web
+             * @enum {string}
+             */
+            channel: "web" | "mobile" | "email" | "api";
+            /**
+             * Message
+             * @description Customer-authored support message.
+             * @example I was charged twice for order ORD-123.
+             */
+            message: string;
+            /**
+             * Title
+             * @description Optional explicit customer-visible title. When omitted, a title may be generated later.
+             */
+            title?: string | null;
+        };
+        /**
+         * StartConversationResponse
+         * @description Terminal result of an idempotent conversation-start operation.
+         *
+         *     A failed AI result still returns the stable conversation and accepted customer-message identifiers.
+         *     This lets the frontend recover honestly without creating another conversation or duplicating the first message.
+         */
+        StartConversationResponse: {
+            /**
+             * Ai Run Id
+             * Format: uuid
+             */
+            ai_run_id: string;
+            /**
+             * Assistant Message Id
+             * @description Persisted customer-visible assistant message ID. Present only when an approved response was created.
+             */
+            assistant_message_id?: string | null;
+            /**
+             * Conversation Id
+             * Format: uuid
+             */
+            conversation_id: string;
+            /**
+             * Created
+             * @description Whether this HTTP operation created the conversation. False for an idempotent replay.
+             */
+            created: boolean;
+            /**
+             * Customer Message Id
+             * Format: uuid
+             */
+            customer_message_id: string;
+            /**
+             * Decision
+             * @description Canonical routing decision, if available.
+             * @example retrieve_information
+             */
+            decision?: string | null;
+            /**
+             * Escalation Id
+             * @description Persistent human-review escalation ID. Present when the pipeline ended in escalation.
+             */
+            escalation_id?: string | null;
+            /**
+             * Failure Code
+             * @description Safe stable pipeline failure code when succeeded is false.
+             */
+            failure_code?: string | null;
+            /**
+             * Failure Retryable
+             * @description Whether the failed AI operation may be retried safely inside the already-created conversation.
+             */
+            failure_retryable?: boolean | null;
+            /**
+             * Idempotency Status
+             * @description Terminal state of the durable start request.
+             * @enum {string}
+             */
+            idempotency_status: "completed" | "failed";
+            /**
+             * Intent
+             * @description Canonical intent classification, if available.
+             * @example refund_request
+             */
+            intent?: string | null;
+            /**
+             * Pipeline Stage
+             * @description Final pipeline stage reached during processing.
+             * @example guardrails_completed
+             */
+            pipeline_stage: string;
+            /**
+             * Replayed
+             * @description Whether the response was reconstructed from a stored terminal snapshot.
+             */
+            replayed: boolean;
+            /**
+             * Response
+             * @description Guardrail-approved customer-visible assistant response. An internal generated candidate is never returned when guardrails escalate or reject it.
+             */
+            response?: string | null;
+            /**
+             * Start Request Id
+             * Format: uuid
+             * @description Durable identifier of the idempotent start request.
+             */
+            start_request_id: string;
+            /**
+             * Succeeded
+             * @description Whether the application pipeline completed without entering the failed stage. An escalation is a successful workflow outcome and therefore may return true.
+             */
+            succeeded: boolean;
+            /**
+             * Trace Id
+             * Format: uuid
+             */
+            trace_id: string;
+        };
         /** SubmitFeedbackRequest */
         SubmitFeedbackRequest: {
             /**
@@ -4150,6 +4362,135 @@ export interface operations {
             };
             /** @description Unexpected internal failure */
             500: {
+                headers: {
+                    /** @description Application request correlation identifier. */
+                    "X-Trace-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIErrorResponse"];
+                };
+            };
+        };
+    };
+    start_conversation_v1_conversations_start_post: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description High-entropy client-generated key scoped to the authenticated customer. */
+                "Idempotency-Key": string;
+                "X-Trace-ID"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartConversationRequest"];
+            };
+        };
+        responses: {
+            /** @description Existing terminal result replayed */
+            200: {
+                headers: {
+                    /** @description Application request correlation identifier. */
+                    "X-Trace-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartConversationResponse"];
+                };
+            };
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    /** @description Application request correlation identifier. */
+                    "X-Trace-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartConversationResponse"];
+                };
+            };
+            /** @description An identical request is still processing */
+            202: {
+                headers: {
+                    /** @description Application request correlation identifier. */
+                    "X-Trace-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartConversationProcessingResponse"];
+                };
+            };
+            /** @description Invalid first message or idempotency key */
+            400: {
+                headers: {
+                    /** @description Application request correlation identifier. */
+                    "X-Trace-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIErrorResponse"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    /** @description Application request correlation identifier. */
+                    "X-Trace-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIErrorResponse"];
+                };
+            };
+            /** @description Customer access required */
+            403: {
+                headers: {
+                    /** @description Application request correlation identifier. */
+                    "X-Trace-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIErrorResponse"];
+                };
+            };
+            /** @description Idempotency key reused with conflicting input or its replay period expired */
+            409: {
+                headers: {
+                    /** @description Application request correlation identifier. */
+                    "X-Trace-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIErrorResponse"];
+                };
+            };
+            /** @description Request validation failed */
+            422: {
+                headers: {
+                    /** @description Application request correlation identifier. */
+                    "X-Trace-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIErrorResponse"];
+                };
+            };
+            /** @description Unexpected internal failure */
+            500: {
+                headers: {
+                    /** @description Application request correlation identifier. */
+                    "X-Trace-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIErrorResponse"];
+                };
+            };
+            /** @description The conversation was accepted but processing ownership could not be confirmed */
+            503: {
                 headers: {
                     /** @description Application request correlation identifier. */
                     "X-Trace-ID"?: string;

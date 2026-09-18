@@ -9,12 +9,21 @@ import { createResponseFeedbackApi, feedbackRatingSchema } from './response-feed
 import { useResponseFeedbackTarget, type ResponseFeedbackTarget } from './response-feedback-target';
 import { createResponseFeedbackReadback } from './response-feedback-readback';
 import { RatingStars } from './rating-stars';
+import type { components } from '../../shared/api/generated/schema';
+import { chatKeys } from './chat-queries';
+import { SavedResponseRating } from './saved-response-rating';
 import './response-rating.css';
 
 interface ResponseRatingProps {
   readonly conversationId: string;
   readonly responseMessageId: string;
+  readonly message?: components['schemas']['ConversationMessageResponse'];
 }
+
+type RatingTarget = Pick<
+  ResponseFeedbackTarget,
+  'conversationId' | 'responseMessageId' | 'aiRunId'
+>;
 
 interface RatingFormValues {
   readonly rating: number | null;
@@ -31,10 +40,54 @@ type RatingSubmission =
   | { readonly phase: 'unconfirmed' }
   | { readonly phase: 'rejected' };
 
-export function ResponseRating({ conversationId, responseMessageId }: ResponseRatingProps) {
-  const target = useResponseFeedbackTarget(conversationId, responseMessageId);
+export function ResponseRating({
+  conversationId,
+  responseMessageId,
+  message,
+}: ResponseRatingProps) {
+  const session = useSession();
+  const cachedTarget = useResponseFeedbackTarget(conversationId, responseMessageId);
 
-  if (!target) return null;
+  if (
+    session.phase !== 'authenticated' ||
+    session.user?.role !== 'customer' ||
+    session.user.status !== 'active'
+  ) {
+    return null;
+  }
+
+  let target: RatingTarget;
+
+  if (message !== undefined) {
+    if (
+      message.role !== 'assistant' ||
+      message.conversation_id !== conversationId ||
+      message.message_id !== responseMessageId
+    ) {
+      return null;
+    }
+
+    // A stored rating remains visible even if new submissions are ineligible.
+    if (message.feedback != null) {
+      return <SavedResponseRating rating={message.feedback.rating} />;
+    }
+
+    // When history is supplied, it is authoritative.
+    // Do not fall back to cached eligibility.
+    if (!message.feedback_eligible || message.ai_run_id == null) {
+      return null;
+    }
+
+    target = {
+      conversationId,
+      responseMessageId,
+      aiRunId: message.ai_run_id,
+    };
+  } else {
+    // Compatibility for existing callers while history wiring is migrated.
+    if (!cachedTarget) return null;
+    target = cachedTarget;
+  }
 
   return (
     <RatingForm
@@ -44,7 +97,7 @@ export function ResponseRating({ conversationId, responseMessageId }: ResponseRa
   );
 }
 
-function RatingForm({ target }: { readonly target: ResponseFeedbackTarget }) {
+function RatingForm({ target }: { readonly target: RatingTarget }) {
   const id = useId();
   const session = useSession();
   const controller = useSessionController();
@@ -96,6 +149,14 @@ function RatingForm({ target }: { readonly target: ResponseFeedbackTarget }) {
 
   function sessionIsCurrent() {
     return customerId !== null && controller.getSnapshot() === session;
+  }
+
+  function refreshSavedFeedback() {
+    if (customerId === null || !sessionIsCurrent()) return;
+
+    void queryClient.invalidateQueries({
+      queryKey: [...chatKeys.conversation(customerId, target.conversationId), 'messages'],
+    });
   }
 
   async function submit(values: RatingFormValues): Promise<void> {
@@ -151,12 +212,20 @@ function RatingForm({ target }: { readonly target: ResponseFeedbackTarget }) {
       }
 
       queryClient.setQueryData<RatingSubmission>(submissionKey, outcome);
+      if (
+        outcome.phase === 'confirmed' ||
+        outcome.phase === 'conflict' ||
+        outcome.phase === 'unconfirmed'
+      ) {
+        refreshSavedFeedback();
+      }
     } catch {
       if (!sessionIsCurrent()) return;
 
       queryClient.setQueryData<RatingSubmission>(submissionKey, {
         phase: 'unconfirmed',
       });
+      refreshSavedFeedback();
     }
   }
 
@@ -202,6 +271,7 @@ function RatingForm({ target }: { readonly target: ResponseFeedbackTarget }) {
           rating: result.rating,
           created: false,
         };
+        refreshSavedFeedback();
 
         queryClient.setQueryData<RatingSubmission>(submissionKey, () => confirmed);
 

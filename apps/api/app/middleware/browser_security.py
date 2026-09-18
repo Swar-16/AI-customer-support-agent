@@ -25,7 +25,7 @@ class BrowserSecurityMiddleware:
                 allow_origins=list(settings.browser_allowed_origins),
                 allow_credentials=True,
                 allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
-                allow_headers=["Authorization", "Content-Type", "X-Trace-ID"],
+                allow_headers=["Authorization", "Content-Type", "X-Trace-ID", "Idempotency-Key"],
                 expose_headers=["X-Trace-ID", "Retry-After"],
                 max_age=600,
             )

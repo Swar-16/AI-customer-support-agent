@@ -101,3 +101,28 @@ h1 {
   font-size: 0.8125rem;
   line-height: 1.6;
 }
+
+/* Shared text-selection treatment across all workspaces. */
+:root {
+  --text-selection-background: #973065;
+  --text-selection-foreground: #ffffff;
+}
+
+::selection {
+  background-color: var(--text-selection-background);
+  color: var(--text-selection-foreground);
+  text-shadow: none;
+}
+
+*::selection {
+  background-color: var(--text-selection-background);
+  color: var(--text-selection-foreground);
+  text-shadow: none;
+}
+
+input::selection,
+textarea::selection {
+  background-color: var(--text-selection-background);
+  color: var(--text-selection-foreground);
+  text-shadow: none;
+}

@@ -6,6 +6,8 @@ import { z } from 'zod';
 
 import type { TransportResult } from '../../shared/api/transport';
 import { customerMessageSchema, type Conversation, type SendMessageResult } from './chat-contract';
+import { useDraftUnloadWarning } from './use-draft-unload-warning';
+import { useNavigationProtection } from '../../shared/navigation/navigation-protection';
 
 import './message-composer.css';
 
@@ -18,6 +20,7 @@ type MessageForm = z.infer<typeof formSchema>;
 interface MessageComposerProps {
   readonly status: Conversation['status'];
   readonly disabled?: boolean;
+  readonly onDiscardOutgoing?: () => void;
   readonly onSend: (message: string) => Promise<TransportResult<SendMessageResult>>;
 
   /**
@@ -81,6 +84,7 @@ export function MessageComposer({
   disabled = false,
   onSend,
   onReconcile,
+  onDiscardOutgoing,
 }: MessageComposerProps) {
   const id = useId();
   const inFlight = useRef(false);
@@ -131,6 +135,10 @@ export function MessageComposer({
     name: 'message',
     defaultValue: '',
   });
+
+  useNavigationProtection(message.length > 0 || busy || reviewRequired);
+
+  useDraftUnloadWarning(message.length > 0 || busy || reviewRequired);
 
   const messageField = register('message');
 
@@ -297,6 +305,7 @@ export function MessageComposer({
     focusAfterSubmitRef.current = true;
     // Explicitly discard the old draft; this action never sends anything.
     reset({ message: '' });
+    onDiscardOutgoing?.();
     setReviewRequired(false);
     setHistoryRefreshed(false);
     setReviewed(false);
@@ -396,16 +405,7 @@ export function MessageComposer({
         )}
       </form>
 
-      {busy && (
-        <div className="message-composer__processing" role="status">
-          <span className="message-composer__dots" aria-hidden="true">
-            <i />
-            <i />
-            <i />
-          </span>
-          <span>Updating your conversation…</span>
-        </div>
-      )}
+      {busy && reviewRequired && <p role="status">Refreshing message history…</p>}
 
       {notice && <p role={notice.tone}>{notice.text}</p>}
 
