@@ -1,0 +1,507 @@
+/* apps/web/src/features/operations/operations-conversation-queue.css */
+.oversight-workspace {
+  display: grid;
+  grid-template-columns: minmax(20rem, 0.85fr) minmax(30rem, 1.35fr);
+  gap: 1rem;
+  max-width: 96rem;
+  margin: 0 auto;
+  align-items: start;
+}
+
+.oversight-queue-panel,
+.oversight-detail,
+.oversight-detail-placeholder {
+  background: rgb(255 255 255 / 92%);
+  border: 1px solid var(--operations-border);
+  border-radius: 1.15rem;
+  box-shadow: 0 0.9rem 2.4rem rgb(57 34 48 / 5%);
+  backdrop-filter: blur(14px);
+}
+
+.oversight-queue-panel,
+.oversight-detail {
+  min-width: 0;
+  padding: 1rem;
+}
+
+.oversight-queue-toolbar,
+.oversight-detail__header,
+.oversight-conversation-card__topline,
+.oversight-conversation-card__footer,
+.oversight-history__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.oversight-queue-toolbar h2,
+.oversight-detail__header h2 {
+  margin: 0.25rem 0;
+}
+
+.oversight-queue-toolbar p:last-child {
+  margin: 0;
+  color: var(--operations-muted);
+  font-size: 0.82rem;
+}
+
+.oversight-refresh,
+.oversight-detail__icon-button {
+  width: 2.55rem;
+  height: 2.55rem;
+  color: var(--operations-magenta-dark);
+  background: white;
+  border: 1px solid #dfc8d5;
+}
+
+.oversight-refresh:hover:not(:disabled),
+.oversight-detail__icon-button:hover:not(:disabled) {
+  color: white;
+  background: var(--operations-magenta);
+  border-color: var(--operations-magenta);
+}
+
+.oversight-filter-bar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(9rem, 1fr));
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding: 0.9rem;
+  background: #fbf8fa;
+  border: 1px solid #eee5ea;
+  border-radius: 0.9rem;
+}
+
+.oversight-filter-bar label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.oversight-filter-bar label > span {
+  color: var(--operations-muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.oversight-filter-bar select {
+  min-height: 2.55rem;
+  padding: 0.5rem 0.65rem;
+  color: var(--operations-ink);
+  font: inherit;
+  font-size: 0.8rem;
+  background: white;
+  border: 1px solid #d9ccd4;
+  border-radius: 0.65rem;
+  outline: none;
+}
+
+.oversight-filter-bar select:focus {
+  border-color: var(--operations-magenta);
+  box-shadow: 0 0 0 3px rgb(194 24 120 / 11%);
+}
+
+.oversight-list-summary {
+  display: flex;
+  min-height: 3rem;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--operations-muted);
+  font-size: 0.75rem;
+}
+
+.oversight-conversation-list {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.oversight-conversation-card {
+  display: grid;
+  width: 100%;
+  gap: 0.6rem;
+  padding: 1rem;
+  color: var(--operations-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: white;
+  border: 1px solid #e8dfe4;
+  border-radius: 0.95rem;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.oversight-conversation-card:hover {
+  border-color: rgb(194 24 120 / 36%);
+  box-shadow: 0 0.7rem 1.8rem rgb(194 24 120 / 8%);
+  transform: translateY(-1px);
+}
+
+.oversight-conversation-card.is-selected {
+  background: #fffafd;
+  border-color: var(--operations-magenta);
+  box-shadow: 0 0 0 3px rgb(194 24 120 / 9%);
+}
+
+.oversight-conversation-card.is-escalated {
+  background: radial-gradient(circle at 100% 0%, rgb(178 38 58 / 10%), transparent 12rem), white;
+}
+
+.oversight-conversation-card__customer,
+.oversight-conversation-card__footer span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.oversight-conversation-card__customer,
+.oversight-conversation-card__footer {
+  color: var(--operations-muted);
+  font-size: 0.72rem;
+}
+
+.oversight-status,
+.oversight-channel {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 1.5rem;
+  align-items: center;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.63rem;
+  font-weight: 850;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: 999px;
+}
+
+.oversight-status--open {
+  color: #176647;
+  background: #e5f7ef;
+}
+
+.oversight-status--waiting_for_customer {
+  color: #66530b;
+  background: #fff6c9;
+}
+
+.oversight-status--waiting_for_agent {
+  color: #315c91;
+  background: #eaf3ff;
+}
+
+.oversight-status--escalated {
+  color: #9b273b;
+  background: #ffe7eb;
+}
+
+.oversight-status--resolved {
+  color: #176647;
+  background: #e5f7ef;
+}
+
+.oversight-status--closed {
+  color: #625a61;
+  background: #eeebef;
+}
+
+.oversight-channel {
+  color: var(--operations-magenta-dark);
+  background: #fff0f8;
+}
+
+.oversight-pagination,
+.oversight-message-pagination {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid #eee5ea;
+}
+
+.oversight-pagination > div:last-child,
+.oversight-message-pagination > div:last-child {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.oversight-pagination > span,
+.oversight-message-pagination > span {
+  color: var(--operations-muted);
+  font-size: 0.75rem;
+}
+
+.oversight-pagination .operations-button,
+.oversight-message-pagination .operations-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.oversight-detail,
+.oversight-detail-placeholder {
+  position: sticky;
+  top: 1rem;
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+}
+
+.oversight-detail__header {
+  padding-bottom: 1rem;
+  border-bottom: 1px solid #eee5ea;
+}
+
+.oversight-detail__header-actions {
+  display: flex;
+  gap: 0.45rem;
+}
+
+.oversight-detail__loading {
+  display: grid;
+  gap: 0.8rem;
+  padding-top: 1rem;
+}
+
+.oversight-detail__loading .operations-skeleton {
+  height: 5rem;
+}
+
+.oversight-detail__summary {
+  padding: 1rem 0;
+  border-bottom: 1px solid #eee5ea;
+}
+
+.oversight-detail__summary > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.oversight-detail__summary dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin: 1rem 0 0;
+}
+
+.oversight-detail__summary dl div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.oversight-detail__summary dt {
+  color: var(--operations-muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+}
+
+.oversight-detail__summary dd {
+  margin: 0;
+  font-size: 0.76rem;
+  font-weight: 750;
+}
+
+.oversight-history {
+  padding-top: 1rem;
+}
+
+.oversight-history__heading h3 {
+  margin: 0.25rem 0;
+  font-size: 1rem;
+}
+
+.oversight-history__heading > span {
+  color: var(--operations-muted);
+  font-size: 0.72rem;
+}
+
+.oversight-message-list {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 0.8rem;
+}
+
+.oversight-message {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.9rem;
+  background: white;
+  border: 1px solid #e8dfe4;
+  border-radius: 0.9rem;
+}
+
+.oversight-message--customer {
+  margin-left: 2rem;
+  background: #fff1f8;
+  border-color: #f0cade;
+}
+
+.oversight-message--assistant {
+  margin-right: 2rem;
+}
+
+.oversight-message--support_agent {
+  background: #f3f7ff;
+  border-color: #dce6f5;
+}
+
+.oversight-message header,
+.oversight-message footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.oversight-message header span,
+.oversight-message footer span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.oversight-message time,
+.oversight-message footer {
+  color: var(--operations-muted);
+  font-size: 0.68rem;
+}
+
+.oversight-message > p {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.oversight-message__feedback {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.6rem;
+  color: var(--operations-magenta-dark);
+  font-size: 0.72rem;
+  font-weight: 750;
+  text-decoration: none;
+  background: #fff0f8;
+  border: 1px solid #efcce0;
+  border-radius: 0.65rem;
+}
+
+.oversight-message__feedback small {
+  color: var(--operations-muted);
+}
+
+.oversight-readonly-notice {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 1rem;
+  padding: 0.85rem;
+  color: #315c91;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  background: #edf5ff;
+  border: 1px solid #d7e6f8;
+  border-radius: 0.8rem;
+}
+
+.oversight-error,
+.oversight-link-warning {
+  display: flex;
+  gap: 0.7rem;
+  margin-top: 1rem;
+  padding: 0.9rem;
+  color: #7e2633;
+  background: #fff2f4;
+  border: 1px solid #efc7ce;
+  border-radius: 0.8rem;
+}
+
+.oversight-error p,
+.oversight-link-warning p {
+  margin: 0.3rem 0 0.75rem;
+  font-size: 0.78rem;
+}
+
+.oversight-link-warning > button {
+  margin-left: auto;
+  color: inherit;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+}
+
+.oversight-empty-state,
+.oversight-detail-placeholder,
+.oversight-history__empty {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  text-align: center;
+}
+
+.oversight-empty-state {
+  min-height: 20rem;
+}
+
+.oversight-detail-placeholder {
+  min-height: 25rem;
+  padding: 2rem;
+}
+
+.oversight-empty-state h2,
+.oversight-detail-placeholder h2 {
+  margin: 0.8rem 0 0.35rem;
+}
+
+.oversight-empty-state p,
+.oversight-detail-placeholder p,
+.oversight-history__empty p {
+  max-width: 25rem;
+  color: var(--operations-muted);
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.oversight-conversation-skeleton {
+  height: 9rem;
+}
+
+.oversight-message-skeleton {
+  height: 8rem;
+}
+
+@media (max-width: 1100px) {
+  .oversight-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .oversight-detail,
+  .oversight-detail-placeholder {
+    position: static;
+    max-height: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .oversight-filter-bar,
+  .oversight-detail__summary dl {
+    grid-template-columns: 1fr;
+  }
+
+  .oversight-message--customer,
+  .oversight-message--assistant {
+    margin-inline: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oversight-conversation-card {
+    transition: none;
+  }
+}

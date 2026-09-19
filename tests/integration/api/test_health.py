@@ -60,6 +60,7 @@ def make_application_services(*, provider_healthy: bool = True) -> ApplicationSe
         update_escalation=Mock(),
 
         create_ticket=Mock(),
+        create_ticket_from_escalation=Mock(),
         add_ticket_comment=Mock(),
         get_ticket=Mock(),
         list_tickets=Mock(),

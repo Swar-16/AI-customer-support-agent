@@ -39,6 +39,13 @@ const statusNames = {
   closed: 'Closed',
 } as const;
 
+const supportStatusNames = {
+  open: 'Requested',
+  in_review: 'In review',
+  resolved: 'Resolved',
+  dismissed: 'Closed',
+} as const;
+
 export function ConversationHistory({
   conversationId,
   offset,
@@ -68,8 +75,6 @@ export function ConversationHistory({
     supportHttpStatus === 401 || supportHttpStatus === 403 || supportHttpStatus === 404;
 
   const escalation = conversation.isSuccess && !supportAccessUnavailable ? support.data : undefined;
-
-  const activeEscalation = escalation?.status === 'open' || escalation?.status === 'in_review';
 
   const supportOpen = escalation !== undefined && openEscalationId === escalation.escalation_id;
 
@@ -160,13 +165,15 @@ export function ConversationHistory({
             onCheckStatus={closure.checkStatus}
           />
 
-          {(activeEscalation || supportOpen) && escalation && (
+          {escalation && (
             <button
               ref={supportButtonRef}
               type="button"
               className="chat-action chat-action--outline"
+              aria-label="Human support"
               aria-expanded={supportOpen}
               aria-controls={supportOpen ? 'conversation-support-panel' : undefined}
+              data-support-status={escalation.status}
               onClick={() => {
                 if (supportOpen) {
                   closeSupportPanel();
@@ -176,7 +183,11 @@ export function ConversationHistory({
               }}
             >
               <Headphones size={18} aria-hidden="true" />
-              Human support
+
+              <span>Human support</span>
+
+              <span className="chat-action__status">{supportStatusNames[escalation.status]}</span>
+
               {support.isError && <span className="chat-thread__stale">Last known</span>}
             </button>
           )}

@@ -7,6 +7,7 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Any, Mapping
 
+from packages.database.models.support.ticket import TicketModel
 from packages.database.models.support.escalation import EscalationModel
 from packages.database.repositories.support.escalation_repository import EscalationRepository
 from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
@@ -25,6 +26,14 @@ class EscalationDoesNotExistError(EscalationQueryError):
 
 class EscalationQueryContractError(EscalationQueryError):
     """Raised when Unit of Work or persistence wiring is incomplete."""
+
+@dataclass(frozen=True, slots=True)
+class LinkedEscalationTicketView:
+    """Minimal linked-ticket information required by escalation details."""
+    ticket_id: uuid.UUID
+    ticket_number: int
+    ticket_reference: str
+    status: str
 
 @dataclass(frozen=True, slots=True)
 class EscalationView:
@@ -47,6 +56,7 @@ class EscalationView:
     created_at: datetime
     updated_at: datetime
     resolved_at: datetime | None
+    linked_ticket: LinkedEscalationTicketView | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
@@ -172,12 +182,15 @@ class GetEscalation:
         with self._uow_factory() as uow:
             repository = _require_repository(uow)
             escalation = repository.get_by_id(query.escalation_id)
-
             if escalation is None:
                 raise EscalationDoesNotExistError(query.escalation_id)
 
+            if uow.tickets is None:
+                raise EscalationQueryContractError("TicketRepository unavailable")
+
+            linked_ticket = uow.tickets.get_by_escalation_id(query.escalation_id)
             # No commit is needed for this read-only Unit of Work.
-            return _to_view(escalation)
+            return _to_view(escalation, linked_ticket=linked_ticket)
 
 class ListConversationEscalations:
     """Retrieve escalation history for one conversation."""
@@ -241,9 +254,24 @@ def _require_repository(uow: SqlAlchemyUnitOfWork) -> EscalationRepository:
 def _to_views(escalations: Sequence[EscalationModel]) -> tuple[EscalationView, ...]:
     return tuple(_to_view(escalation) for escalation in escalations)
 
-def _to_view(escalation: EscalationModel) -> EscalationView:
+def _to_view(escalation: EscalationModel, *, linked_ticket: TicketModel | None = None) -> EscalationView:
     if escalation.id is None:
         raise EscalationQueryContractError("Persisted escalation has no ID")
+
+    linked_ticket_view: LinkedEscalationTicketView | None = None
+    if linked_ticket is not None:
+        if linked_ticket.id is None:
+            raise EscalationQueryContractError("Persisted linked ticket has no ID")
+
+        if linked_ticket.ticket_number is None:
+            raise EscalationQueryContractError("Persisted linked ticket has no ticket number")
+
+        linked_ticket_view = LinkedEscalationTicketView(
+            ticket_id=linked_ticket.id,
+            ticket_number=linked_ticket.ticket_number,
+            ticket_reference=f"TKT-{linked_ticket.ticket_number:08d}",
+            status=linked_ticket.status,
+        )
 
     return EscalationView(
         escalation_id=escalation.id,
@@ -260,4 +288,5 @@ def _to_view(escalation: EscalationModel) -> EscalationView:
         created_at=escalation.created_at,
         updated_at=escalation.updated_at,
         resolved_at=escalation.resolved_at,
+        linked_ticket=linked_ticket_view,
     )

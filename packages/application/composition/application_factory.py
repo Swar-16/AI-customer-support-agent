@@ -75,6 +75,7 @@ from packages.application.conversations.conversation_context import Conversation
 from packages.application.conversations.accept_conversation_start import AcceptConversationStart
 from packages.application.conversations.start_conversation import StartConversation
 from packages.application.conversations.assign_conversation_title import AssignConversationTitle
+from packages.application.tickets.create_ticket_from_escalation import CreateTicketFromEscalation
 
 SessionFactory = sessionmaker[Session]
 ProviderFactory = Callable[..., LLMProvider]
@@ -140,6 +141,7 @@ class ApplicationServices:
     update_escalation: UpdateEscalation
     
     create_ticket: CreateTicket
+    create_ticket_from_escalation: CreateTicketFromEscalation
     add_ticket_comment: AddTicketComment
     get_ticket: GetTicket
     list_tickets: ListTickets
@@ -322,6 +324,7 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
     update_escalation = UpdateEscalation(uow_factory=uow_factory)
     
     create_ticket = CreateTicket(uow_factory=uow_factory)
+    create_ticket_from_escalation = CreateTicketFromEscalation(uow_factory=uow_factory, create_ticket=create_ticket)
     add_ticket_comment = AddTicketComment(uow_factory=uow_factory)
     get_ticket = GetTicket(uow_factory=uow_factory)
     list_tickets = ListTickets(uow_factory=uow_factory)
@@ -410,6 +413,7 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         get_customer_escalation_status=get_customer_escalation_status,
         update_escalation=update_escalation,
         create_ticket=create_ticket,
+        create_ticket_from_escalation=create_ticket_from_escalation,
         add_ticket_comment=add_ticket_comment,
         get_ticket=get_ticket,
         list_tickets=list_tickets,

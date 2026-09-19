@@ -1612,6 +1612,57 @@
         "title": "CreateConversationResponse",
         "type": "object"
       },
+      "CreateEscalationTicketRequest": {
+        "additionalProperties": false,
+        "description": "Agent-reviewed fields used when converting an escalation into a ticket.\n\nConversation, customer, triggering-message, and escalation identifiers\nare derived by the application service and are not trusted from the client.",
+        "properties": {
+          "category": {
+            "default": "general",
+            "enum": [
+              "billing",
+              "refund",
+              "order",
+              "account",
+              "technical",
+              "security",
+              "product",
+              "general",
+              "other"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "description": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Description",
+            "type": "string"
+          },
+          "priority": {
+            "default": "normal",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "urgent"
+            ],
+            "title": "Priority",
+            "type": "string"
+          },
+          "subject": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject",
+          "description"
+        ],
+        "title": "CreateEscalationTicketRequest",
+        "type": "object"
+      },
       "CreateKnowledgeDocumentRequest": {
         "additionalProperties": false,
         "properties": {
@@ -3604,6 +3655,155 @@
         "title": "EmbedKnowledgeVersionResponse",
         "type": "object"
       },
+      "EscalationDetailResponse": {
+        "additionalProperties": false,
+        "description": "Detailed escalation representation including its linked ticket.\n\nQueue responses deliberately omit this relationship to avoid an additional ticket lookup for every queue item.",
+        "properties": {
+          "ai_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Run Id"
+          },
+          "conversation_id": {
+            "format": "uuid",
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "escalation_id": {
+            "format": "uuid",
+            "title": "Escalation Id",
+            "type": "string"
+          },
+          "handoff_summary": {
+            "anyOf": [
+              {
+                "maxLength": 5000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handoff Summary"
+          },
+          "linked_ticket": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LinkedEscalationTicketResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "priority": {
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "urgent"
+            ],
+            "title": "Priority",
+            "type": "string"
+          },
+          "reason_code": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "reason_summary": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Summary"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "source": {
+            "enum": [
+              "decision",
+              "guardrail",
+              "system",
+              "manual"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "open",
+              "in_review",
+              "resolved",
+              "dismissed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "trigger_message_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Message Id"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "escalation_id",
+          "conversation_id",
+          "source",
+          "reason_code",
+          "priority",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "EscalationDetailResponse",
+        "type": "object"
+      },
       "EscalationListResponse": {
         "additionalProperties": false,
         "description": "Paginated escalation queue response.",
@@ -4854,6 +5054,48 @@
         ],
         "title": "KnowledgeVisibility",
         "type": "string"
+      },
+      "LinkedEscalationTicketResponse": {
+        "additionalProperties": false,
+        "description": "Ticket currently linked to an escalation.",
+        "properties": {
+          "status": {
+            "enum": [
+              "open",
+              "in_progress",
+              "waiting_for_customer",
+              "resolved",
+              "closed",
+              "reopened"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "ticket_id": {
+            "format": "uuid",
+            "title": "Ticket Id",
+            "type": "string"
+          },
+          "ticket_number": {
+            "minimum": 1.0,
+            "title": "Ticket Number",
+            "type": "integer"
+          },
+          "ticket_reference": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Ticket Reference",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket_id",
+          "ticket_number",
+          "ticket_reference",
+          "status"
+        ],
+        "title": "LinkedEscalationTicketResponse",
+        "type": "object"
       },
       "LoginRequest": {
         "additionalProperties": false,
@@ -13721,7 +13963,7 @@
     },
     "/v1/escalations/{escalation_id}": {
       "get": {
-        "description": "Return one escalation with its AI and conversation provenance.",
+        "description": "Return one escalation with AI, conversation, and ticket provenance.",
         "operationId": "get_escalation_v1_escalations__escalation_id__get",
         "parameters": [
           {
@@ -13758,7 +14000,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EscalationResponse"
+                  "$ref": "#/components/schemas/EscalationDetailResponse"
                 }
               }
             },
@@ -14008,6 +14250,234 @@
         "summary": "Update escalation status",
         "tags": [
           "escalations"
+        ]
+      }
+    },
+    "/v1/escalations/{escalation_id}/ticket": {
+      "post": {
+        "description": "Convert an active escalation into an idempotently linked support ticket after agent review.",
+        "operationId": "create_ticket_from_escalation_v1_escalations__escalation_id__ticket_post",
+        "parameters": [
+          {
+            "description": "Escalation being converted into a ticket.",
+            "in": "path",
+            "name": "escalation_id",
+            "required": true,
+            "schema": {
+              "description": "Escalation being converted into a ticket.",
+              "format": "uuid",
+              "title": "Escalation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Trace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Trace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEscalationTicketRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateTicketResponse"
+                }
+              }
+            },
+            "description": "The escalation already had a linked ticket",
+            "headers": {
+              "X-Trace-ID": {
+                "description": "Application request correlation identifier.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateTicketResponse"
+                }
+              }
+            },
+            "description": "Successful Response",
+            "headers": {
+              "X-Trace-ID": {
+                "description": "Application request correlation identifier.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid ticket operation",
+            "headers": {
+              "X-Trace-ID": {
+                "description": "Application request correlation identifier.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication credentials are invalid or expired.",
+            "headers": {
+              "X-Trace-ID": {
+                "description": "Application request correlation identifier.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            },
+            "description": "Ticket access denied",
+            "headers": {
+              "X-Trace-ID": {
+                "description": "Application request correlation identifier.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            },
+            "description": "Ticket or related resource not found",
+            "headers": {
+              "X-Trace-ID": {
+                "description": "Application request correlation identifier.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            },
+            "description": "Ticket lifecycle or concurrency conflict",
+            "headers": {
+              "X-Trace-ID": {
+                "description": "Application request correlation identifier.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed",
+            "headers": {
+              "X-Trace-ID": {
+                "description": "Application request correlation identifier.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIErrorResponse"
+                }
+              }
+            },
+            "description": "Unexpected internal failure",
+            "headers": {
+              "X-Trace-ID": {
+                "description": "Application request correlation identifier.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Create a ticket from an escalation",
+        "tags": [
+          "tickets"
         ]
       }
     },

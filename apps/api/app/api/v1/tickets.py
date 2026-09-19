@@ -2,18 +2,20 @@
 from __future__ import annotations
 import uuid
 from typing import Any
-from fastapi import APIRouter, Path, Query, status, Depends
+from fastapi import APIRouter, Depends, Path, Query, Response, status
 
 from apps.api.app.api.dependencies import ApplicationServicesDependency, CurrentPrincipalDependency, TraceIdDependency, require_roles
 from apps.api.app.api.schemas.errors import APIErrorResponse
-from apps.api.app.api.v1.schemas.tickets import AddTicketCommentRequest, AddTicketCommentResponse, CreateTicketRequest, CreateTicketResponse
+from apps.api.app.api.v1.schemas.tickets import AddTicketCommentRequest, AddTicketCommentResponse, CreateTicketRequest
 from apps.api.app.api.v1.schemas.tickets import TicketCategory, TicketCommentResponse, TicketDetailResponse, TicketListResponse, TicketPriority
-from apps.api.app.api.v1.schemas.tickets import TicketRequesterRole, TicketResponse, TicketStatus, UpdateTicketRequest, UpdateTicketResponse
+from apps.api.app.api.v1.schemas.tickets import TicketRequesterRole, TicketResponse, TicketStatus, UpdateTicketRequest
+from apps.api.app.api.v1.schemas.tickets import CreateEscalationTicketRequest, CreateTicketResponse, UpdateTicketResponse
 from packages.application.tickets.add_ticket_comment import AddTicketCommentCommand, AddTicketCommentResult
 from packages.application.tickets.create_ticket import CreateTicketCommand, CreateTicketResult
 from packages.application.tickets.query_tickets import GetTicketQuery, ListTicketsQuery, TicketCommentView, TicketDetail, TicketPage, TicketView
 from packages.application.tickets.update_ticket import UpdateTicketCommand, UpdateTicketResult
 from packages.application.auth.models import AuthRole
+from packages.application.tickets.create_ticket_from_escalation import CreateTicketFromEscalationCommand
 
 router = APIRouter(tags=["tickets"])
 _COMMON_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
@@ -50,6 +52,42 @@ def create_ticket(payload: CreateTicketRequest, services: ApplicationServicesDep
     )
 
     result = services.create_ticket.execute(command)
+    return _create_ticket_response(result)
+
+@router.post(
+    "/escalations/{escalation_id}/ticket",
+    response_model=CreateTicketResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a ticket from an escalation",
+    description="Convert an active escalation into an idempotently linked support ticket after agent review.",
+    responses={
+        **_COMMON_ERROR_RESPONSES,
+        status.HTTP_200_OK: {
+            "model": CreateTicketResponse,
+            "description": "The escalation already had a linked ticket",
+        },
+    },
+    dependencies=[Depends(require_roles(AuthRole.SUPPORT_AGENT, AuthRole.ADMIN,))],
+)
+def create_ticket_from_escalation(payload: CreateEscalationTicketRequest, response: Response, services: ApplicationServicesDependency,
+                                  principal: CurrentPrincipalDependency, trace_id: TraceIdDependency, 
+                                  escalation_id: uuid.UUID = Path(..., description="Escalation being converted into a ticket.")
+) -> CreateTicketResponse:
+    result = services.create_ticket_from_escalation.execute(
+        CreateTicketFromEscalationCommand(
+            escalation_id=escalation_id,
+            subject=payload.subject,
+            description=payload.description,
+            category=payload.category,
+            priority=payload.priority,
+            principal=principal,
+            trace_id=trace_id,
+        )
+    )
+
+    if not result.created:
+        response.status_code = status.HTTP_200_OK
+
     return _create_ticket_response(result)
 
 @router.get(

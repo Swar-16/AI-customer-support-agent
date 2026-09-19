@@ -5,8 +5,18 @@ from datetime import datetime
 from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from apps.api.app.api.v1.schemas.tickets import TicketStatus
+
 EscalationStatus = Literal["open", "in_review", "resolved", "dismissed"]
 EscalationPriority = Literal["low", "normal", "high", "urgent"]
+
+class LinkedEscalationTicketResponse(BaseModel):
+    """Ticket currently linked to an escalation."""
+    model_config = ConfigDict(extra="forbid")
+    ticket_id: uuid.UUID
+    ticket_number: int = Field(ge=1)
+    ticket_reference: str = Field(min_length=1, max_length=32)
+    status: TicketStatus
 
 class EscalationResponse(BaseModel):
     """API representation of one support escalation."""
@@ -25,6 +35,14 @@ class EscalationResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     resolved_at: datetime | None = None
+
+class EscalationDetailResponse(EscalationResponse):
+    """
+    Detailed escalation representation including its linked ticket.
+
+    Queue responses deliberately omit this relationship to avoid an additional ticket lookup for every queue item.
+    """
+    linked_ticket: LinkedEscalationTicketResponse | None = None
 
 class EscalationListResponse(BaseModel):
     """Paginated escalation queue response."""
