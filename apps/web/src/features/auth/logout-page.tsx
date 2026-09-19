@@ -29,7 +29,7 @@ export function LogoutPage() {
 
     const timeoutId = window.setTimeout(() => {
       void navigate('/login', { replace: true });
-    }, 1500);
+    }, 100);
 
     return () => window.clearTimeout(timeoutId);
   }, [state, navigate]);

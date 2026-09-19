@@ -155,7 +155,7 @@ export function ApplicationRoutes({
               />
 
               <Route
-                path="/operations"
+                path="/operations/*"
                 element={
                   <RequireWorkspace workspace="operations">
                     <OperationsPage />
