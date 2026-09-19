@@ -1678,3 +1678,42 @@
     max-width: 96%;
   }
 }
+
+.chat-action__status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.35rem;
+  padding: 0.12rem 0.48rem;
+  border-radius: 999px;
+  background: #fcebf5;
+  color: #9d145f;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.chat-action[data-support-status='in_review'] .chat-action__status {
+  background: #fff4d8;
+  color: #8a5a00;
+}
+
+.chat-action[data-support-status='resolved'] .chat-action__status {
+  background: #e7f7ef;
+  color: #176b46;
+}
+
+.chat-action[data-support-status='dismissed'] .chat-action__status {
+  background: #f0eef1;
+  color: #625b63;
+}
+
+.chat-support__summary {
+  margin: 0;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid rgba(184, 23, 119, 0.14);
+  border-radius: 0.85rem;
+  background: linear-gradient(135deg, rgba(252, 235, 245, 0.8), rgba(255, 255, 255, 0.92));
+  color: #51464e;
+  line-height: 1.55;
+}

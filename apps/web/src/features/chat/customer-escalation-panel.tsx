@@ -23,6 +23,13 @@ const priorityLabels = {
   urgent: 'Urgent',
 } as const;
 
+const statusDescriptions = {
+  open: 'Your request for human support has been received.',
+  in_review: 'A support specialist is reviewing your conversation.',
+  resolved: 'Your human-support request has been marked as resolved.',
+  dismissed: 'Your human-support request has been closed.',
+} as const;
+
 export function CustomerEscalationPanel({ conversationId, enabled }: CustomerEscalationPanelProps) {
   const titleId = useId();
   const query = useCustomerEscalation(conversationId, enabled);
@@ -74,6 +81,10 @@ export function CustomerEscalationPanel({ conversationId, enabled }: CustomerEsc
             <>
               <p className="chat-support__scope">
                 {query.isError ? 'Last known escalation' : 'Latest escalation'}
+              </p>
+
+              <p className="chat-support__summary" role="status">
+                {statusDescriptions[data.status]}
               </p>
 
               <dl className="chat-support__details">
