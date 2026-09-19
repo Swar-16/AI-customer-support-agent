@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import {
   Activity,
+  ArrowUpRight,
   Bot,
   CircleAlert,
   Clock3,
@@ -20,12 +21,17 @@ import {
   type DashboardOverviewMetric,
 } from './operations-contract';
 import { useDashboardOverview } from './operations-queries';
+import { DashboardJellySwitch } from './dashboard-jelly-switch';
 
 const windowLabels: Record<OverviewWindow, string> = {
   '24h': '24 hours',
   '7d': '7 days',
   '30d': '30 days',
 };
+
+type SpotlightTone = 'escalation' | 'ticket' | 'feedback' | 'ai';
+type AttentionTone = 'urgent' | 'high' | 'ticket' | 'knowledge';
+type SignalTone = 'api' | 'ai' | 'retrieval' | 'feedback';
 
 function metric(
   overview: DashboardOverview,
@@ -40,7 +46,9 @@ function metricNumber(overview: DashboardOverview, section: string, key: string)
 }
 
 function formatMetric(value: DashboardOverviewMetric | null): string {
-  if (value === null || value.metadata.has_data === false) return '—';
+  if (value === null || value.metadata.has_data === false) {
+    return '—';
+  }
 
   switch (value.unit) {
     case 'percent':
@@ -82,20 +90,34 @@ function formatTimestamp(value: string): string {
 
 function OverviewSkeleton() {
   return (
-    <div className="operations-overview" aria-busy="true">
-      <div className="operations-skeleton operations-skeleton--toolbar" />
+    <section
+      className="operations-dashboard-loader"
+      role="status"
+      aria-live="polite"
+      aria-label="Loading operations dashboard"
+    >
+      <div className="operations-dashboard-loader__visual" aria-hidden="true">
+        <span className="operations-dashboard-loader__orbit operations-dashboard-loader__orbit--one" />
+        <span className="operations-dashboard-loader__orbit operations-dashboard-loader__orbit--two" />
 
-      <div className="operations-stat-grid">
-        {Array.from({ length: 4 }, (_, index) => (
-          <div className="operations-skeleton operations-skeleton--stat" key={index} />
-        ))}
+        <span className="operations-dashboard-loader__core">
+          <Activity size={27} />
+        </span>
       </div>
 
-      <div className="operations-overview-grid">
-        <div className="operations-skeleton operations-skeleton--panel" />
-        <div className="operations-skeleton operations-skeleton--panel" />
+      <div className="operations-dashboard-loader__copy">
+        <p className="operations-kicker">Operations intelligence</p>
+        <h2>Preparing your operational pulse</h2>
+        <p>Gathering queue health, AI activity, customer feedback, and knowledge signals.</p>
       </div>
-    </div>
+
+      <div className="operations-dashboard-loader__signals" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+        <span />
+      </div>
+    </section>
   );
 }
 
@@ -104,6 +126,7 @@ interface AttentionItem {
   readonly detail: string;
   readonly value: number;
   readonly destination: string;
+  readonly tone: AttentionTone;
 }
 
 export function OperationsOverview() {
@@ -123,9 +146,11 @@ export function OperationsOverview() {
     return (
       <section className="operations-state-card" role="alert">
         <CircleAlert aria-hidden="true" />
+
         <div>
           <h2>Overview unavailable</h2>
           <p>{message}</p>
+
           <button
             type="button"
             className="operations-button operations-button--primary"
@@ -142,92 +167,142 @@ export function OperationsOverview() {
 
   const data = overview.data;
 
-  const spotlightCards = [
+  const spotlightCards: ReadonlyArray<{
+    readonly label: string;
+    readonly value: DashboardOverviewMetric | null;
+    readonly icon: typeof ShieldCheck;
+    readonly destination: string;
+    readonly tone: SpotlightTone;
+    readonly action: string;
+  }> = [
     {
       label: 'Open escalations',
-      value: metric(data, 'escalations', 'open'),
+      value: metric(data, 'escalations', 'open_escalations'),
       icon: ShieldCheck,
-      destination: '/operations/escalations',
+      destination: '/operations/escalations?view=active',
+      tone: 'escalation',
+      action: 'Review queue',
     },
     {
       label: 'Active tickets',
-      value: metric(data, 'tickets', 'active'),
+      value: metric(data, 'tickets', 'active_tickets'),
       icon: TicketCheck,
-      destination: '/operations/tickets',
+      destination: '/operations/tickets?view=active',
+      tone: 'ticket',
+      action: 'Open tickets',
     },
     {
       label: 'Feedback awaiting review',
-      value: metric(data, 'feedback', 'pending'),
+      value: metric(data, 'feedback', 'pending_feedback'),
       icon: Star,
-      destination: '/operations/feedback',
+      destination: '/operations/feedback?tab=pending',
+      tone: 'feedback',
+      action: 'Review feedback',
     },
     {
       label: 'AI runs in progress',
       value: metric(data, 'ai_runs', 'running_runs'),
       icon: Bot,
       destination: '/operations/ai-activity',
+      tone: 'ai',
+      action: 'View activity',
     },
-  ] as const;
+  ];
 
-  const attentionItems: AttentionItem[] = [
-    {
-      label: 'Urgent escalations',
-      detail: 'Require immediate support review',
-      value: metricNumber(data, 'escalations', 'urgent_priority_active'),
-      destination: '/operations/escalations',
-    },
-    {
-      label: 'High-priority escalations',
-      detail: 'Active high-priority customer cases',
-      value: metricNumber(data, 'escalations', 'high_priority_active'),
-      destination: '/operations/escalations',
-    },
-    {
-      label: 'Unassigned tickets',
-      detail: 'Active tickets without an owner',
-      value: metricNumber(data, 'tickets', 'unassigned_active'),
-      destination: '/operations/tickets',
-    },
-    {
-      label: 'Failed knowledge versions',
-      detail: 'Knowledge processing requires attention',
-      value: metricNumber(data, 'knowledge', 'failed'),
-      destination: '/operations/knowledge-health',
-    },
-  ].filter((item) => item.value > 0);
+  const attentionItems = (
+    [
+      {
+        label: 'Urgent escalations',
+        detail: 'Require immediate support review',
+        value: metricNumber(data, 'escalations', 'urgent_priority_active'),
+        destination: '/operations/escalations?view=active&priority=urgent',
+        tone: 'urgent',
+      },
+      {
+        label: 'High-priority escalations',
+        detail: 'Active high-priority customer cases',
+        value: metricNumber(data, 'escalations', 'high_priority_active'),
+        destination: '/operations/escalations?view=active&priority=high',
+        tone: 'high',
+      },
+      {
+        label: 'Unassigned tickets',
+        detail: 'Active tickets without an owner',
+        value: metricNumber(data, 'tickets', 'unassigned_active_tickets'),
+        destination: '/operations/tickets?view=active&scope=unassigned',
+        tone: 'ticket',
+      },
+      {
+        label: 'Failed knowledge versions',
+        detail: 'Knowledge processing requires attention',
+        value: metricNumber(data, 'knowledge', 'failed_versions'),
+        destination: '/operations/knowledge-health',
+        tone: 'knowledge',
+      },
+    ] satisfies AttentionItem[]
+  ).filter((item) => item.value > 0);
 
-  const systemSignals = [
+  const systemSignals: ReadonlyArray<{
+    readonly label: string;
+    readonly detail: string;
+    readonly value: DashboardOverviewMetric | null;
+    readonly icon: typeof Activity;
+    readonly suffix: string;
+    readonly destination: string;
+    readonly tone: SignalTone;
+  }> = [
     {
       label: 'API error rate',
+      detail: 'Request reliability',
       value: metric(data, 'api', 'error_rate'),
       icon: Activity,
+      suffix: '',
+      destination: '/operations/ai-activity',
+      tone: 'api',
     },
     {
       label: 'AI success rate',
+      detail: 'Completed AI runs',
       value: metric(data, 'ai_runs', 'success_rate'),
       icon: Bot,
+      suffix: '',
+      destination: '/operations/ai-activity',
+      tone: 'ai',
     },
     {
       label: 'Retrieval zero-result rate',
+      detail: 'Searches without evidence',
       value: metric(data, 'retrieval', 'zero_result_rate'),
       icon: CircleAlert,
+      suffix: '',
+      destination: '/operations/ai-activity',
+      tone: 'retrieval',
     },
     {
       label: 'Average feedback rating',
+      detail: 'Customer response score',
       value: metric(data, 'feedback', 'average_rating'),
       icon: Star,
       suffix: ' / 5',
+      destination: '/operations/feedback?tab=reviewed',
+      tone: 'feedback',
     },
-  ] as const;
+  ];
+
+  const isUpdating = overview.isFetching && overview.data !== undefined;
 
   return (
-    <div className="operations-overview">
+    <div
+      className={`operations-overview${isUpdating ? ' is-updating' : ''}`}
+      aria-busy={isUpdating}
+    >
       <div className="operations-toolbar">
         <div>
           <p className="operations-toolbar__eyebrow">
             <Clock3 size={15} aria-hidden="true" />
             Generated {formatTimestamp(data.generated_at)}
           </p>
+
           <p className="operations-toolbar__range">
             {formatTimestamp(data.time_range.started_at)} to{' '}
             {formatTimestamp(data.time_range.ended_at)}
@@ -235,20 +310,15 @@ export function OperationsOverview() {
         </div>
 
         <div className="operations-toolbar__actions">
-          <div className="operations-window-picker" aria-label="Overview period">
-            {overviewWindows.map((candidate) => (
-              <button
-                type="button"
-                aria-pressed={candidate === window}
-                key={candidate}
-                onClick={() => {
-                  setWindow(candidate);
-                }}
-              >
-                {windowLabels[candidate]}
-              </button>
-            ))}
-          </div>
+          <DashboardJellySwitch
+            label="Overview period"
+            value={window}
+            options={overviewWindows.map((candidate) => ({
+              value: candidate,
+              label: windowLabels[candidate],
+            }))}
+            onChange={setWindow}
+          />
 
           <button
             type="button"
@@ -269,6 +339,18 @@ export function OperationsOverview() {
         </div>
       </div>
 
+      {isUpdating ? (
+        <div className="operations-overview-update" role="status" aria-live="polite">
+          <span className="operations-overview-update__animation" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
+
+          <span>Updating the {windowLabels[window]} view…</span>
+        </div>
+      ) : null}
+
       {overview.isError ? (
         <p className="operations-inline-warning" role="status">
           The latest refresh failed. Previously loaded metrics are still shown.
@@ -288,7 +370,12 @@ export function OperationsOverview() {
             const Icon = card.icon;
 
             return (
-              <Link className="operations-stat-card" to={card.destination} key={card.label}>
+              <Link
+                className={`operations-stat-card operations-stat-card--${card.tone}`}
+                to={card.destination}
+                key={card.label}
+                aria-label={`${card.label}: ${formatMetric(card.value)}. ${card.action}`}
+              >
                 <span className="operations-stat-card__icon">
                   <Icon size={20} aria-hidden="true" />
                 </span>
@@ -296,6 +383,11 @@ export function OperationsOverview() {
                 <span className="operations-stat-card__value">{formatMetric(card.value)}</span>
 
                 <span className="operations-stat-card__label">{card.label}</span>
+
+                <span className="operations-stat-card__action">
+                  {card.action}
+                  <ArrowUpRight size={15} aria-hidden="true" />
+                </span>
               </Link>
             );
           })}
@@ -316,21 +408,29 @@ export function OperationsOverview() {
               <span>
                 <ShieldCheck size={22} aria-hidden="true" />
               </span>
+
               <div>
                 <strong>No priority exceptions</strong>
-                <p>The current overview contains no urgent queue warnings.</p>
+                <p>There are no urgent queue warnings in this period.</p>
               </div>
             </div>
           ) : (
             <ul className="operations-attention-list">
               {attentionItems.map((item) => (
-                <li key={item.label}>
+                <li
+                  className={`operations-attention-item operations-attention-item--${item.tone}`}
+                  key={item.label}
+                >
                   <Link to={item.destination}>
                     <span>
                       <strong>{item.label}</strong>
                       <small>{item.detail}</small>
                     </span>
-                    <b>{item.value.toLocaleString()}</b>
+
+                    <span className="operations-attention-item__end">
+                      <b>{item.value.toLocaleString()}</b>
+                      <ArrowUpRight size={16} aria-hidden="true" />
+                    </span>
                   </Link>
                 </li>
               ))}
@@ -346,24 +446,36 @@ export function OperationsOverview() {
             </div>
           </div>
 
-          <dl className="operations-signal-list">
+          <ul className="operations-signal-list">
             {systemSignals.map((signal) => {
               const Icon = signal.icon;
 
               return (
-                <div key={signal.label}>
-                  <dt>
-                    <Icon size={17} aria-hidden="true" />
-                    {signal.label}
-                  </dt>
-                  <dd>
-                    {formatMetric(signal.value)}
-                    {'suffix' in signal ? signal.suffix : ''}
-                  </dd>
-                </div>
+                <li
+                  className={`operations-signal operations-signal--${signal.tone}`}
+                  key={signal.label}
+                >
+                  <Link to={signal.destination}>
+                    <span className="operations-signal__identity">
+                      <span className="operations-signal__icon">
+                        <Icon size={17} aria-hidden="true" />
+                      </span>
+
+                      <span>
+                        <strong>{signal.label}</strong>
+                        <small>{signal.detail}</small>
+                      </span>
+                    </span>
+
+                    <span className="operations-signal__value">
+                      {formatMetric(signal.value)}
+                      {signal.suffix}
+                    </span>
+                  </Link>
+                </li>
               );
             })}
-          </dl>
+          </ul>
         </section>
       </div>
 

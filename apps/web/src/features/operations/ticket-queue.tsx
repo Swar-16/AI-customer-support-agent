@@ -19,6 +19,7 @@ import { useSession } from '../../shared/auth/session-context';
 import type { TicketFilters } from './ticket-api';
 import {
   ticketCategorySchema,
+  ticketIdSchema,
   ticketPrioritySchema,
   ticketStatusSchema,
   type Ticket,
@@ -29,6 +30,8 @@ import {
 import { useTicketDetail, useTicketList } from './ticket-queries';
 import { TicketActions } from './ticket-actions';
 import { TicketCommentComposer } from './ticket-comment-composer';
+import { DashboardJellySwitch } from './dashboard-jelly-switch';
+import { useSearchParams } from 'react-router';
 
 type QueueView = 'active' | 'history';
 type AssignmentScope = 'all' | 'mine' | 'unassigned';
@@ -363,13 +366,35 @@ export function TicketQueue() {
       ? session.user.id
       : null;
 
-  const [view, setView] = useState<QueueView>('active');
-  const [assignmentScope, setAssignmentScope] = useState<AssignmentScope>('all');
-  const [priority, setPriority] = useState<TicketPriority | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [view, setView] = useState<QueueView>(() =>
+    searchParams.get('view') === 'history' ? 'history' : 'active',
+  );
+
+  const [assignmentScope, setAssignmentScope] = useState<AssignmentScope>(() => {
+    const requestedScope = searchParams.get('scope');
+
+    if (requestedScope === 'mine' || requestedScope === 'unassigned') {
+      return requestedScope;
+    }
+
+    return 'all';
+  });
+
+  const [priority, setPriority] = useState<TicketPriority | null>(() => {
+    const parsed = ticketPrioritySchema.safeParse(searchParams.get('priority'));
+
+    return parsed.success ? parsed.data : null;
+  });
+
   const [category, setCategory] = useState<TicketCategory | null>(null);
   const [status, setStatus] = useState<TicketStatus | null>(null);
+
   const [offset, setOffset] = useState(0);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const requestedTicketId = searchParams.get('ticket');
+  const parsedTicketId = ticketIdSchema.safeParse(requestedTicketId);
+  const selectedId = parsedTicketId.success ? parsedTicketId.data : null;
+  const invalidTicketLink = requestedTicketId !== null && !parsedTicketId.success;
 
   const filters = useMemo<TicketFilters>(
     () => ({
@@ -387,20 +412,23 @@ export function TicketQueue() {
 
   const queue = useTicketList(filters);
 
-  const visibleSelectedId =
-    selectedId !== null &&
-    (queue.data === undefined || queue.data.items.some((ticket) => ticket.ticket_id === selectedId))
-      ? selectedId
-      : null;
-
   useEffect(() => {
     function handleEscape(event: KeyboardEvent) {
-      if (event.key !== 'Escape' || event.defaultPrevented || visibleSelectedId === null) {
+      if (event.key !== 'Escape' || event.defaultPrevented || selectedId === null) {
         return;
       }
 
       event.preventDefault();
-      setSelectedId(null);
+
+      setSearchParams(
+        (current) => {
+          const next = new URLSearchParams(current);
+
+          next.delete('ticket');
+          return next;
+        },
+        { replace: true },
+      );
     }
 
     document.addEventListener('keydown', handleEscape);
@@ -408,11 +436,28 @@ export function TicketQueue() {
     return () => {
       document.removeEventListener('keydown', handleEscape);
     };
-  }, [visibleSelectedId]);
+  }, [selectedId, setSearchParams]);
+
+  function setSelectedTicket(ticketId: string | null, replace = true) {
+    setSearchParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+
+        if (ticketId === null) {
+          next.delete('ticket');
+        } else {
+          next.set('ticket', ticketId);
+        }
+
+        return next;
+      },
+      { replace },
+    );
+  }
 
   function resetPageAndSelection() {
     setOffset(0);
-    setSelectedId(null);
+    setSelectedTicket(null);
   }
 
   function changeView(nextView: QueueView) {
@@ -430,30 +475,25 @@ export function TicketQueue() {
   }
 
   return (
-    <div className={`ticket-workspace${visibleSelectedId ? ' has-detail' : ''}`}>
+    <div className={`ticket-workspace${selectedId ? ' has-detail' : ''}`}>
       <section className="ticket-queue-panel">
         <div className="ticket-queue-toolbar">
-          <div className="ticket-view-switcher">
-            <button
-              type="button"
-              aria-pressed={view === 'active'}
-              onClick={() => {
-                changeView('active');
-              }}
-            >
-              Active queue
-            </button>
-
-            <button
-              type="button"
-              aria-pressed={view === 'history'}
-              onClick={() => {
-                changeView('history');
-              }}
-            >
-              History
-            </button>
-          </div>
+          <DashboardJellySwitch
+            label="Ticket queue view"
+            value={view}
+            tone="accent"
+            options={[
+              {
+                value: 'active',
+                label: 'Active queue',
+              },
+              {
+                value: 'history',
+                label: 'History',
+              },
+            ]}
+            onChange={changeView}
+          />
 
           <button
             type="button"
@@ -476,27 +516,29 @@ export function TicketQueue() {
         <div className="ticket-scope-picker">
           <span>Assignment</span>
 
-          <div>
-            {(
-              [
-                ['all', 'All'],
-                ['mine', 'Mine'],
-                ['unassigned', 'Unassigned'],
-              ] as const
-            ).map(([value, label]) => (
-              <button
-                type="button"
-                aria-pressed={assignmentScope === value}
-                key={value}
-                onClick={() => {
-                  setAssignmentScope(value);
-                  resetPageAndSelection();
-                }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          <DashboardJellySwitch
+            label="Ticket assignment"
+            value={assignmentScope}
+            tone="accent"
+            options={[
+              {
+                value: 'all',
+                label: 'All',
+              },
+              {
+                value: 'mine',
+                label: 'Mine',
+              },
+              {
+                value: 'unassigned',
+                label: 'Unassigned',
+              },
+            ]}
+            onChange={(nextScope) => {
+              setAssignmentScope(nextScope);
+              resetPageAndSelection();
+            }}
+          />
         </div>
 
         <div className="ticket-filter-bar">
@@ -567,6 +609,30 @@ export function TicketQueue() {
           ) : null}
         </div>
 
+        {invalidTicketLink ? (
+          <div className="ticket-link-warning" role="alert">
+            <CircleAlert size={19} aria-hidden="true" />
+
+            <div>
+              <strong>Invalid ticket link</strong>
+              <p>
+                The requested ticket identifier is not valid. You can continue browsing the ticket
+                queue.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              aria-label="Dismiss invalid ticket link"
+              onClick={() => {
+                setSelectedTicket(null);
+              }}
+            >
+              <X size={17} aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
+
         {queue.isPending && queue.data === undefined ? <TicketListSkeleton /> : null}
 
         {queue.isError && queue.data === undefined ? (
@@ -621,10 +687,12 @@ export function TicketQueue() {
               {queue.data.items.map((ticket) => (
                 <TicketCard
                   ticket={ticket}
-                  selected={visibleSelectedId === ticket.ticket_id}
+                  selected={selectedId === ticket.ticket_id}
                   key={ticket.ticket_id}
                   onSelect={() => {
-                    setSelectedId(ticket.ticket_id);
+                    if (selectedId !== ticket.ticket_id) {
+                      setSelectedTicket(ticket.ticket_id, false);
+                    }
                   }}
                 />
               ))}
@@ -638,7 +706,7 @@ export function TicketQueue() {
                     className="operations-button operations-button--secondary"
                     onClick={() => {
                       setOffset(Math.max(0, queue.data.offset - queue.data.limit));
-                      setSelectedId(null);
+                      setSelectedTicket(null);
                     }}
                   >
                     <ArrowLeft size={17} aria-hidden="true" />
@@ -656,7 +724,7 @@ export function TicketQueue() {
                     className="operations-button operations-button--secondary"
                     onClick={() => {
                       setOffset(queue.data.offset + queue.data.limit);
-                      setSelectedId(null);
+                      setSelectedTicket(null);
                     }}
                   >
                     Next
@@ -669,12 +737,13 @@ export function TicketQueue() {
         ) : null}
       </section>
 
-      {visibleSelectedId ? (
+      {selectedId ? (
         <TicketDetailDrawer
-          ticketId={visibleSelectedId}
+          key={selectedId}
+          ticketId={selectedId}
           currentOperatorId={currentOperatorId}
           onClose={() => {
-            setSelectedId(null);
+            setSelectedTicket(null);
           }}
         />
       ) : (

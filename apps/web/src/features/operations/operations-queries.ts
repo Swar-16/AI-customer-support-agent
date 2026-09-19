@@ -1,6 +1,6 @@
 // apps/web/src/features/operations/operations-queries.ts
 import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 
 import { SafeApiError } from '../../shared/api/safe-error';
 import type { TransportResult } from '../../shared/api/transport';
@@ -42,6 +42,7 @@ export function useDashboardOverview(window: OverviewWindow) {
 
   return useQuery({
     queryKey: operationsKeys.overview(adminId, window),
+    placeholderData: keepPreviousData,
     enabled: adminId !== null,
     retry: false,
     staleTime: 30_000,

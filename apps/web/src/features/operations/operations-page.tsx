@@ -17,9 +17,13 @@ import type { LucideIcon } from 'lucide-react';
 import { identity } from '../../shared/branding/identity';
 import { useSession } from '../../shared/auth/session-context';
 import { useLogoutDialog } from '../auth/logout-dialog-context';
+import { AIActivityPage } from './ai-activity-page';
 import { OperationsOverview } from './operations-overview';
+import { OperationsConversationQueue } from './operations-conversation-queue';
 import { EscalationQueue } from './escalation-queue';
 import { TicketQueue } from './ticket-queue';
+import { FeedbackQueue } from './feedback-queue';
+import { KnowledgeHealthPage } from './knowledge-health-page';
 
 import './operations-page.css';
 
@@ -218,10 +222,18 @@ export default function OperationsPage() {
 
         {activeItem.key === 'overview' ? (
           <OperationsOverview />
+        ) : activeItem.key === 'conversations' ? (
+          <OperationsConversationQueue />
         ) : activeItem.key === 'escalations' ? (
           <EscalationQueue />
         ) : activeItem.key === 'tickets' ? (
           <TicketQueue />
+        ) : activeItem.key === 'feedback' ? (
+          <FeedbackQueue />
+        ) : activeItem.key === 'ai-activity' ? (
+          <AIActivityPage />
+        ) : activeItem.key === 'knowledge-health' ? (
+          <KnowledgeHealthPage />
         ) : (
           <PlannedSection item={activeItem} />
         )}

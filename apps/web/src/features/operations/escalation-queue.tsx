@@ -11,6 +11,8 @@ import {
   RefreshCw,
   ShieldAlert,
   X,
+  ExternalLink,
+  TicketPlus,
 } from 'lucide-react';
 
 import { SafeApiError } from '../../shared/api/safe-error';
@@ -23,10 +25,14 @@ import {
   type EscalationStatus,
 } from './escalation-contract';
 import {
+  useCreateEscalationTicket,
   useEscalationDetail,
   useEscalationList,
   useUpdateEscalationStatus,
 } from './escalation-queries';
+import { useNavigate, useSearchParams } from 'react-router';
+import { CreateEscalationTicketDialog } from './create-escalation-ticket-dialog';
+import { DashboardJellySwitch } from './dashboard-jelly-switch';
 
 type QueueView = 'active' | 'history';
 type ButtonTone = 'primary' | 'secondary' | 'danger';
@@ -203,15 +209,26 @@ function DetailField({
 function EscalationDrawer({
   escalationId,
   onClose,
+  onOpenTicket,
+  onTicketCreated,
   onRequestTransition,
   transitionPending,
 }: {
   readonly escalationId: string;
   readonly onClose: () => void;
+  readonly onOpenTicket: (ticketId: string) => void;
+  readonly onTicketCreated: (message: string) => void;
   readonly onRequestTransition: (action: TransitionAction, escalation: Escalation) => void;
   readonly transitionPending: boolean;
 }) {
+  const [ticketDialogOpen, setTicketDialogOpen] = useState(false);
+
   const detail = useEscalationDetail(escalationId);
+  const createTicket = useCreateEscalationTicket();
+
+  const operationPending = transitionPending || createTicket.isPending;
+
+  const linkedTicket = detail.data?.linked_ticket ?? null;
 
   return (
     <aside className="escalation-drawer" aria-label="Escalation details">
@@ -226,6 +243,7 @@ function EscalationDrawer({
           className="escalation-drawer__close"
           aria-label="Close escalation details"
           title="Close details"
+          disabled={operationPending}
           onClick={onClose}
         >
           <X size={20} aria-hidden="true" />
@@ -287,6 +305,73 @@ function EscalationDrawer({
             </section>
           ) : null}
 
+          <section className="escalation-ticket-action">
+            <div className="escalation-ticket-action__heading">
+              <span className="escalation-ticket-action__icon">
+                <TicketPlus size={20} aria-hidden="true" />
+              </span>
+
+              <div>
+                <p className="operations-kicker">Durable support case</p>
+
+                <h3>{linkedTicket ? 'Ticket linked' : 'Create a ticket'}</h3>
+              </div>
+            </div>
+
+            {linkedTicket ? (
+              <>
+                <p>
+                  This escalation is tracked as <strong>{linkedTicket.ticket_reference}</strong>.
+                </p>
+
+                <div className="escalation-ticket-action__meta">
+                  <span>{formatCode(linkedTicket.status)}</span>
+                </div>
+
+                <button
+                  type="button"
+                  className="operations-button operations-button--primary escalation-ticket-action__button"
+                  disabled={operationPending}
+                  onClick={() => {
+                    onOpenTicket(linkedTicket.ticket_id);
+                  }}
+                >
+                  Open {linkedTicket.ticket_reference}
+                  <ExternalLink size={17} aria-hidden="true" />
+                </button>
+              </>
+            ) : detail.data.status === 'open' || detail.data.status === 'in_review' ? (
+              <>
+                <p>
+                  Convert this human-review request into a durable case with ownership, comments,
+                  priority, and resolution tracking.
+                </p>
+
+                <button
+                  type="button"
+                  className="operations-button operations-button--primary escalation-ticket-action__button"
+                  disabled={operationPending}
+                  onClick={() => {
+                    createTicket.reset();
+                    setTicketDialogOpen(true);
+                  }}
+                >
+                  <TicketPlus size={17} aria-hidden="true" />
+                  Create ticket
+                </button>
+              </>
+            ) : (
+              <div className="escalation-ticket-action__unavailable">
+                <CircleAlert size={18} aria-hidden="true" />
+
+                <span>
+                  No ticket was created before this escalation became{' '}
+                  {statusLabels[detail.data.status].toLowerCase()}.
+                </span>
+              </div>
+            )}
+          </section>
+
           <section className="escalation-drawer__section">
             <p className="operations-kicker">Case information</p>
 
@@ -326,7 +411,7 @@ function EscalationDrawer({
               <button
                 type="button"
                 className={`operations-button operations-button--${action.tone}`}
-                disabled={transitionPending}
+                disabled={operationPending}
                 key={action.status}
                 onClick={() => {
                   onRequestTransition(action, detail.data);
@@ -344,6 +429,37 @@ function EscalationDrawer({
             ) : null}
           </div>
         </>
+      ) : null}
+      {ticketDialogOpen && detail.data ? (
+        <CreateEscalationTicketDialog
+          escalation={detail.data}
+          pending={createTicket.isPending}
+          error={createTicket.error}
+          onCancel={() => {
+            if (createTicket.isPending) return;
+
+            setTicketDialogOpen(false);
+            createTicket.reset();
+          }}
+          onSubmit={async (draft) => {
+            const escalation = detail.data;
+
+            if (!escalation) return;
+
+            const result = await createTicket.mutateAsync({
+              escalationId: escalation.escalation_id,
+              draft,
+            });
+
+            setTicketDialogOpen(false);
+
+            onTicketCreated(
+              result.created
+                ? `${result.ticket_reference} was created and linked to this escalation.`
+                : `${result.ticket_reference} was already linked to this escalation.`,
+            );
+          }}
+        />
       ) : null}
     </aside>
   );
@@ -435,8 +551,16 @@ function TransitionDialog({
 }
 
 export function EscalationQueue() {
-  const [view, setView] = useState<QueueView>('active');
-  const [priority, setPriority] = useState<EscalationPriority | null>(null);
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const [view, setView] = useState<QueueView>(() =>
+    searchParams.get('view') === 'history' ? 'history' : 'active',
+  );
+  const [priority, setPriority] = useState<EscalationPriority | null>(() => {
+    const parsed = escalationPrioritySchema.safeParse(searchParams.get('priority'));
+
+    return parsed.success ? parsed.data : null;
+  });
   const [status, setStatus] = useState<EscalationStatus | null>(null);
   const [reasonDraft, setReasonDraft] = useState('');
   const [reasonCode, setReasonCode] = useState<string | null>(null);
@@ -553,27 +677,22 @@ export function EscalationQueue() {
     <div className={`escalation-workspace${visibleSelectedId ? ' has-detail' : ''}`}>
       <section className="escalation-queue-panel">
         <div className="escalation-queue-toolbar">
-          <div className="escalation-view-switcher">
-            <button
-              type="button"
-              aria-pressed={view === 'active'}
-              onClick={() => {
-                changeView('active');
-              }}
-            >
-              Active queue
-            </button>
-
-            <button
-              type="button"
-              aria-pressed={view === 'history'}
-              onClick={() => {
-                changeView('history');
-              }}
-            >
-              History
-            </button>
-          </div>
+          <DashboardJellySwitch
+            label="Escalation queue view"
+            value={view}
+            tone="accent"
+            options={[
+              {
+                value: 'active',
+                label: 'Active queue',
+              },
+              {
+                value: 'history',
+                label: 'History',
+              },
+            ]}
+            onChange={changeView}
+          />
 
           <button
             type="button"
@@ -790,10 +909,17 @@ export function EscalationQueue() {
 
       {visibleSelectedId ? (
         <EscalationDrawer
+          key={visibleSelectedId}
           escalationId={visibleSelectedId}
           transitionPending={updateStatus.isPending}
           onClose={() => {
             setSelectedId(null);
+          }}
+          onOpenTicket={(ticketId) => {
+            navigate(`/operations/tickets?ticket=${encodeURIComponent(ticketId)}`);
+          }}
+          onTicketCreated={(message) => {
+            setNotice(message);
           }}
           onRequestTransition={(action, escalation) => {
             updateStatus.reset();

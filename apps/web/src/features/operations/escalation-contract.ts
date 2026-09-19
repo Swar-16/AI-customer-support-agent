@@ -1,11 +1,32 @@
 // apps/web/src/features/operations/escalation-contract.ts
 import { z } from 'zod';
 
+import type { components } from '../../shared/api/generated/schema';
+import { SafeApiError } from '../../shared/api/safe-error';
+
 export const escalationStatusSchema = z.enum(['open', 'in_review', 'resolved', 'dismissed']);
-
 export const escalationPrioritySchema = z.enum(['low', 'normal', 'high', 'urgent']);
-
 export const escalationSourceSchema = z.enum(['decision', 'guardrail', 'system', 'manual']);
+
+export const ticketStatusSchema = z.enum([
+  'open',
+  'in_progress',
+  'waiting_for_customer',
+  'resolved',
+  'closed',
+  'reopened',
+]);
+export const ticketCategorySchema = z.enum([
+  'billing',
+  'refund',
+  'order',
+  'account',
+  'technical',
+  'security',
+  'product',
+  'general',
+  'other',
+]);
 
 export const escalationIdSchema = z.uuid();
 export const escalationConversationIdSchema = z.uuid();
@@ -77,12 +98,49 @@ export const escalationUpdateSchema = z
   })
   .strict();
 
+export const linkedEscalationTicketSchema = z.object({
+  ticket_id: z.uuid(),
+  ticket_number: z.number().int().positive(),
+  ticket_reference: z.string().trim().min(1).max(32),
+  status: ticketStatusSchema,
+}) satisfies z.ZodType<LinkedEscalationTicket>;
+
+export const escalationDetailSchema = escalationSchema.extend({
+  linked_ticket: linkedEscalationTicketSchema.nullable().default(null),
+}) satisfies z.ZodType<EscalationDetail>;
+
+export const escalationTicketDraftSchema = z.object({
+  subject: z.string().trim().min(1).max(300),
+  description: z.string().trim().min(1).max(20_000),
+  category: ticketCategorySchema,
+  priority: escalationPrioritySchema,
+}) satisfies z.ZodType<EscalationTicketDraft>;
+
+export const createdEscalationTicketSchema = z.object({
+  ticket_id: z.uuid(),
+  ticket_number: z.number().int().positive(),
+  ticket_reference: z.string().trim().min(1).max(32),
+  conversation_id: z.uuid(),
+  customer_id: z.uuid(),
+  escalation_id: z.uuid().nullable().default(null),
+  status: ticketStatusSchema,
+  priority: escalationPrioritySchema,
+  category: ticketCategorySchema,
+  created: z.boolean(),
+}) satisfies z.ZodType<CreatedEscalationTicket>;
+
 export type EscalationStatus = z.infer<typeof escalationStatusSchema>;
 export type EscalationPriority = z.infer<typeof escalationPrioritySchema>;
 export type EscalationSource = z.infer<typeof escalationSourceSchema>;
 export type Escalation = z.infer<typeof escalationSchema>;
 export type EscalationPage = z.infer<typeof escalationPageSchema>;
 export type EscalationUpdate = z.infer<typeof escalationUpdateSchema>;
+export type EscalationDetail = Escalation & {
+  readonly linked_ticket: LinkedEscalationTicket | null;
+};
+export type LinkedEscalationTicket = components['schemas']['LinkedEscalationTicketResponse'];
+export type EscalationTicketDraft = components['schemas']['CreateEscalationTicketRequest'];
+export type CreatedEscalationTicket = components['schemas']['CreateTicketResponse'];
 
 export function decodeEscalation(value: unknown): Escalation {
   return escalationSchema.parse(value);
@@ -94,4 +152,33 @@ export function decodeEscalationPage(value: unknown): EscalationPage {
 
 export function decodeEscalationUpdate(value: unknown): EscalationUpdate {
   return escalationUpdateSchema.parse(value);
+}
+
+export function decodeEscalationDetail(value: unknown): EscalationDetail {
+  const parsed = escalationDetailSchema.safeParse(value);
+
+  if (!parsed.success) {
+    throw SafeApiError.fromLocal('invalid-response');
+  }
+
+  const ticket = parsed.data.linked_ticket;
+
+  if (
+    ticket !== null &&
+    (!ticket.ticket_reference.startsWith('TKT-') || ticket.ticket_number <= 0)
+  ) {
+    throw SafeApiError.fromLocal('invalid-response');
+  }
+
+  return parsed.data;
+}
+
+export function decodeCreatedEscalationTicket(value: unknown): CreatedEscalationTicket {
+  const parsed = createdEscalationTicketSchema.safeParse(value);
+
+  if (!parsed.success) {
+    throw SafeApiError.fromLocal('invalid-response');
+  }
+
+  return parsed.data;
 }

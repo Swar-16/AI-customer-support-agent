@@ -7,7 +7,8 @@ import type { TransportResult } from '../../shared/api/transport';
 import { useApiTransport } from '../../shared/api/transport-context';
 import { useSession } from '../../shared/auth/session-context';
 import { createEscalationApi, type EscalationFilters } from './escalation-api';
-import type { EscalationStatus } from './escalation-contract';
+import { createEscalationTicketApi } from './escalation-ticket-api';
+import type { EscalationStatus, EscalationTicketDraft } from './escalation-contract';
 
 export const escalationKeys = {
   all: (operatorId: string | null) => ['operations', operatorId, 'escalations'] as const,
@@ -54,6 +55,12 @@ export function useEscalationApi() {
   const transport = useApiTransport();
 
   return useMemo(() => createEscalationApi(transport), [transport]);
+}
+
+export function useEscalationTicketApi() {
+  const transport = useApiTransport();
+
+  return useMemo(() => createEscalationTicketApi(transport), [transport]);
 }
 
 export function useEscalationList(filters: EscalationFilters) {
@@ -123,6 +130,44 @@ export function useUpdateEscalationStatus() {
         }),
         queryClient.invalidateQueries({
           queryKey: escalationKeys.detail(operatorId, variables.escalationId),
+        }),
+      ]);
+    },
+  });
+}
+
+interface CreateEscalationTicketVariables {
+  readonly escalationId: string;
+  readonly draft: EscalationTicketDraft;
+}
+
+export function useCreateEscalationTicket() {
+  const api = useEscalationTicketApi();
+  const operatorId = useOperatorId();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationKey: ['operations', operatorId, 'escalations', 'create-ticket'],
+    retry: false,
+
+    mutationFn: async ({ escalationId, draft }: CreateEscalationTicketVariables) => {
+      if (operatorId === null) {
+        throw SafeApiError.fromHttp(403, null);
+      }
+
+      return unwrap(await api.create(escalationId, draft));
+    },
+
+    onSuccess: async (_result, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: escalationKeys.detail(operatorId, variables.escalationId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: escalationKeys.lists(operatorId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['operations', operatorId, 'tickets'],
         }),
       ]);
     },

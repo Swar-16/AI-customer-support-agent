@@ -4,13 +4,13 @@ import { z } from 'zod';
 import { SafeApiError } from '../../shared/api/safe-error';
 import type { TransportResult, createTransport } from '../../shared/api/transport';
 import {
-  decodeEscalation,
+  decodeEscalationDetail,
   decodeEscalationPage,
   decodeEscalationUpdate,
   escalationIdSchema,
   escalationPrioritySchema,
   escalationStatusSchema,
-  type Escalation,
+  type EscalationDetail,
   type EscalationPage,
   type EscalationPriority,
   type EscalationStatus,
@@ -100,18 +100,26 @@ export function createEscalationApi(request: Transport) {
       });
     },
 
-    get(escalationId: string, signal?: AbortSignal): Promise<TransportResult<Escalation>> {
+    get(escalationId: string, signal?: AbortSignal): Promise<TransportResult<EscalationDetail>> {
       const parsedId = escalationIdSchema.safeParse(escalationId);
 
       if (!parsedId.success) {
-        return invalidRequest<Escalation>();
+        return invalidRequest<EscalationDetail>();
       }
 
       return request({
         path: `/v1/escalations/${parsedId.data}`,
         method: 'GET',
         authentication: 'bearer',
-        decode: decodeEscalation,
+        decode(value) {
+          const escalation = decodeEscalationDetail(value);
+
+          if (escalation.escalation_id !== parsedId.data) {
+            throw SafeApiError.fromLocal('invalid-response');
+          }
+
+          return escalation;
+        },
         ...requestSignal(signal),
       });
     },
