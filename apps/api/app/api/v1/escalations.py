@@ -4,8 +4,9 @@ import uuid
 from typing import Annotated
 from fastapi import APIRouter, HTTPException, Path, Query, status, Depends
 
-from apps.api.app.api.v1.schemas.escalations import EscalationListResponse, EscalationPriority, EscalationResponse, CustomerEscalationStatusResponse
+from apps.api.app.api.v1.schemas.escalations import EscalationListResponse, EscalationPriority, EscalationResponse
 from apps.api.app.api.v1.schemas.escalations import EscalationStatus, UpdateEscalationRequest, UpdateEscalationResponse
+from apps.api.app.api.v1.schemas.escalations import EscalationDetailResponse, LinkedEscalationTicketResponse, CustomerEscalationStatusResponse
 # from packages.application.escalations.query_escalations import EscalationDoesNotExistError as QueryEscalationDoesNotExistError
 from packages.application.escalations.query_escalations import EscalationView, GetEscalationQuery, ListConversationEscalationsQuery, ListEscalationsQuery
 # from packages.application.escalations.update_escalation import EscalationDoesNotExistError as UpdateEscalationDoesNotExistError
@@ -88,13 +89,13 @@ def list_escalations(
 
 @router.get(
     "/{escalation_id}",
-    response_model=EscalationResponse,
+    response_model=EscalationDetailResponse,
     status_code=status.HTTP_200_OK,
     summary="Get a support escalation")
-def get_escalation(escalation_id: EscalationIdPath, services: ApplicationServicesDependency) -> EscalationResponse:
-    """Return one escalation with its AI and conversation provenance."""
+def get_escalation(escalation_id: EscalationIdPath, services: ApplicationServicesDependency) -> EscalationDetailResponse:
+    """Return one escalation with AI, conversation, and ticket provenance."""
     escalation = services.get_escalation.execute(GetEscalationQuery(escalation_id=escalation_id))
-    return _to_escalation_response(escalation)
+    return _to_escalation_detail_response(escalation)
 
 
 @router.patch(
@@ -145,6 +146,18 @@ def _to_escalation_response(escalation: EscalationView) -> EscalationResponse:
         updated_at=escalation.updated_at,
         resolved_at=escalation.resolved_at,
     )
+
+def _to_escalation_detail_response(escalation: EscalationView) -> EscalationDetailResponse:
+    base = _to_escalation_response(escalation)
+    linked_ticket = escalation.linked_ticket
+    linked_ticket_response = None if linked_ticket is None else LinkedEscalationTicketResponse(
+        ticket_id=linked_ticket.ticket_id,
+        ticket_number=linked_ticket.ticket_number,
+        ticket_reference=linked_ticket.ticket_reference,
+        status=linked_ticket.status,
+    )
+
+    return EscalationDetailResponse(**base.model_dump(), linked_ticket=linked_ticket_response)
 
 conversation_escalations_router = APIRouter(
     prefix="/conversations",

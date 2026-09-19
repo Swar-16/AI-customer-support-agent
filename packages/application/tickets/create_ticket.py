@@ -171,12 +171,17 @@ class CreateTicketCommand:
             if self.customer_id is None:
                 raise ValueError("customer_id is required when staff create a ticket")
 
-            if self.source is not None:
-                supplied_source = self._normalize_choice(self.source, field_name="source", valid_values=VALID_TICKET_SOURCES)
-                if supplied_source != "agent":
-                    raise TicketCreationAccessDeniedError("Authenticated staff may create only agent-source tickets")
+            if self.source is None:
+                return self.customer_id, "agent"
 
-            return self.customer_id, "agent"
+            supplied_source = self._normalize_choice(self.source, field_name="source", valid_values=VALID_TICKET_SOURCES)
+            if supplied_source not in {"agent", "escalation"}:
+                raise TicketCreationAccessDeniedError("Authenticated staff may create only agent or escalation-source tickets")
+
+            if supplied_source == "escalation" and self.escalation_id is None:
+                raise ValueError("escalation_id is required for an escalation-source ticket")
+
+            return self.customer_id, supplied_source
 
         raise TicketCreationAccessDeniedError("Authenticated role cannot create support tickets")
 

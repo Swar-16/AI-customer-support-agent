@@ -548,7 +548,7 @@ export interface paths {
         };
         /**
          * Get a support escalation
-         * @description Return one escalation with its AI and conversation provenance.
+         * @description Return one escalation with AI, conversation, and ticket provenance.
          */
         get: operations["get_escalation_v1_escalations__escalation_id__get"];
         put?: never;
@@ -561,6 +561,26 @@ export interface paths {
          * @description Move an escalation through its controlled human-review lifecycle.
          */
         patch: operations["update_escalation_v1_escalations__escalation_id__patch"];
+        trace?: never;
+    };
+    "/v1/escalations/{escalation_id}/ticket": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a ticket from an escalation
+         * @description Convert an active escalation into an idempotently linked support ticket after agent review.
+         */
+        post: operations["create_ticket_from_escalation_v1_escalations__escalation_id__ticket_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v1/feedback": {
@@ -1547,6 +1567,31 @@ export interface components {
              */
             updated_at: string;
         };
+        /**
+         * CreateEscalationTicketRequest
+         * @description Agent-reviewed fields used when converting an escalation into a ticket.
+         *
+         *     Conversation, customer, triggering-message, and escalation identifiers
+         *     are derived by the application service and are not trusted from the client.
+         */
+        CreateEscalationTicketRequest: {
+            /**
+             * Category
+             * @default general
+             * @enum {string}
+             */
+            category: "billing" | "refund" | "order" | "account" | "technical" | "security" | "product" | "general" | "other";
+            /** Description */
+            description: string;
+            /**
+             * Priority
+             * @default normal
+             * @enum {string}
+             */
+            priority: "low" | "normal" | "high" | "urgent";
+            /** Subject */
+            subject: string;
+        };
         /** CreateKnowledgeDocumentRequest */
         CreateKnowledgeDocumentRequest: {
             content_type: components["schemas"]["KnowledgeContentType"];
@@ -2217,6 +2262,66 @@ export interface components {
             version_id: string;
         };
         /**
+         * EscalationDetailResponse
+         * @description Detailed escalation representation including its linked ticket.
+         *
+         *     Queue responses deliberately omit this relationship to avoid an additional ticket lookup for every queue item.
+         */
+        EscalationDetailResponse: {
+            /** Ai Run Id */
+            ai_run_id?: string | null;
+            /**
+             * Conversation Id
+             * Format: uuid
+             */
+            conversation_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Escalation Id
+             * Format: uuid
+             */
+            escalation_id: string;
+            /** Handoff Summary */
+            handoff_summary?: string | null;
+            linked_ticket?: components["schemas"]["LinkedEscalationTicketResponse"] | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Priority
+             * @enum {string}
+             */
+            priority: "low" | "normal" | "high" | "urgent";
+            /** Reason Code */
+            reason_code: string;
+            /** Reason Summary */
+            reason_summary?: string | null;
+            /** Resolved At */
+            resolved_at?: string | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "decision" | "guardrail" | "system" | "manual";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "in_review" | "resolved" | "dismissed";
+            /** Trigger Message Id */
+            trigger_message_id?: string | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
          * EscalationListResponse
          * @description Paginated escalation queue response.
          */
@@ -2698,6 +2803,26 @@ export interface components {
          * @enum {string}
          */
         KnowledgeVisibility: "customer" | "internal" | "both";
+        /**
+         * LinkedEscalationTicketResponse
+         * @description Ticket currently linked to an escalation.
+         */
+        LinkedEscalationTicketResponse: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "in_progress" | "waiting_for_customer" | "resolved" | "closed" | "reopened";
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /** Ticket Number */
+            ticket_number: number;
+            /** Ticket Reference */
+            ticket_reference: string;
+        };
         /** LoginRequest */
         LoginRequest: {
             /**
@@ -6365,7 +6490,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["EscalationResponse"];
+                    "application/json": components["schemas"]["EscalationDetailResponse"];
                 };
             };
             /** @description Invalid request, including an invalid trace ID. */
@@ -6477,6 +6602,125 @@ export interface operations {
                 };
             };
             /** @description Unexpected internal failure. */
+            500: {
+                headers: {
+                    /** @description Application request correlation identifier. */
+                    "X-Trace-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIErrorResponse"];
+                };
+            };
+        };
+    };
+    create_ticket_from_escalation_v1_escalations__escalation_id__ticket_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Trace-ID"?: string | null;
+            };
+            path: {
+                /** @description Escalation being converted into a ticket. */
+                escalation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateEscalationTicketRequest"];
+            };
+        };
+        responses: {
+            /** @description The escalation already had a linked ticket */
+            200: {
+                headers: {
+                    /** @description Application request correlation identifier. */
+                    "X-Trace-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateTicketResponse"];
+                };
+            };
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    /** @description Application request correlation identifier. */
+                    "X-Trace-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateTicketResponse"];
+                };
+            };
+            /** @description Invalid ticket operation */
+            400: {
+                headers: {
+                    /** @description Application request correlation identifier. */
+                    "X-Trace-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIErrorResponse"];
+                };
+            };
+            /** @description Authentication credentials are invalid or expired. */
+            401: {
+                headers: {
+                    /** @description Application request correlation identifier. */
+                    "X-Trace-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIErrorResponse"];
+                };
+            };
+            /** @description Ticket access denied */
+            403: {
+                headers: {
+                    /** @description Application request correlation identifier. */
+                    "X-Trace-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIErrorResponse"];
+                };
+            };
+            /** @description Ticket or related resource not found */
+            404: {
+                headers: {
+                    /** @description Application request correlation identifier. */
+                    "X-Trace-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIErrorResponse"];
+                };
+            };
+            /** @description Ticket lifecycle or concurrency conflict */
+            409: {
+                headers: {
+                    /** @description Application request correlation identifier. */
+                    "X-Trace-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIErrorResponse"];
+                };
+            };
+            /** @description Request validation failed */
+            422: {
+                headers: {
+                    /** @description Application request correlation identifier. */
+                    "X-Trace-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIErrorResponse"];
+                };
+            };
+            /** @description Unexpected internal failure */
             500: {
                 headers: {
                     /** @description Application request correlation identifier. */

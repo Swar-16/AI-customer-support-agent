@@ -35,6 +35,27 @@ class CreateTicketRequest(TicketAPIModel):
 
         return normalized
 
+class CreateEscalationTicketRequest(TicketAPIModel):
+    """
+    Agent-reviewed fields used when converting an escalation into a ticket.
+
+    Conversation, customer, triggering-message, and escalation identifiers
+    are derived by the application service and are not trusted from the client.
+    """
+    subject: str = Field(..., min_length=1, max_length=300)
+    description: str = Field(..., min_length=1, max_length=20_000)
+    category: TicketCategory = "general"
+    priority: TicketPriority = "normal"
+
+    @field_validator("subject", "description")
+    @classmethod
+    def validate_non_blank_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value cannot be blank")
+
+        return normalized
+
 class CreateTicketResponse(TicketAPIModel):
     ticket_id: uuid.UUID
     ticket_number: int
