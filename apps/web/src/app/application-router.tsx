@@ -17,6 +17,7 @@ import { canOpenWorkspace, homePath } from '../shared/auth/workspace-access';
 import type { Workspace } from '../shared/auth/workspace-access';
 import { LoginPage } from '../features/auth/login-page';
 import { LogoutPage } from '../features/auth/logout-page';
+import { RegisterPage } from '../features/auth/register-page';
 import { loginDestination } from '../features/auth/login-destination';
 import { RouteErrorBoundary } from './route-error-boundary';
 import { LogoutDialogProvider } from '../features/auth/logout-dialog';
@@ -74,6 +75,30 @@ function Home() {
   const destination = session.phase === 'authenticated' ? homePath(session.user) : null;
 
   return <Navigate to={destination ?? '/login'} replace />;
+}
+
+function RegisterEntry() {
+  const session = useSession();
+
+  if (session.phase === 'authenticated') {
+    const destination = homePath(session.user);
+
+    if (destination !== null) {
+      return <Navigate to={destination} replace />;
+    }
+
+    /*
+     * Defensive fallback. The session controller normally prevents unsupported or inactive accounts from becoming authenticated.
+     */
+    return (
+      <Notice title="No workspace is available">
+        <p role="alert">This account does not have access to an application workspace.</p>
+        <Link to="/logout">Sign out</Link>
+      </Notice>
+    );
+  }
+
+  return <RegisterPage />;
 }
 
 function LoginEntry() {
@@ -163,6 +188,7 @@ export function ApplicationRoutes({
             <Routes>
               <Route path="/" element={<Home />} />
               <Route path="/login" element={<LoginEntry />} />
+              <Route path="/register" element={<RegisterEntry />} />
               <Route path="/logout" element={<LogoutPage />} />
 
               <Route

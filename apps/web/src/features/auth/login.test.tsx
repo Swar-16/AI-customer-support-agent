@@ -2,6 +2,7 @@
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router';
 
 import type { AuthUser } from '../../shared/auth/auth-contract';
 import { SafeApiError } from '../../shared/api/safe-error';
@@ -32,6 +33,14 @@ function user(role: AuthUser['role']): AuthUser {
     status: 'active',
     created_at: '2026-09-15T10:00:00Z',
   };
+}
+
+function renderLoginPage() {
+  return render(
+    <MemoryRouter>
+      <LoginPage />
+    </MemoryRouter>,
+  );
 }
 
 function fillCredentials() {
@@ -120,7 +129,7 @@ describe('login destination', () => {
 
 describe('login form', () => {
   it('validates empty input without sending a request', async () => {
-    render(<LoginPage />);
+    renderLoginPage();
 
     fireEvent.submit(screen.getByRole('form', { name: 'Sign in' }));
 
@@ -136,7 +145,7 @@ describe('login form', () => {
       retryAfterMs: null,
     });
 
-    render(<LoginPage />);
+    renderLoginPage();
     fillCredentials();
     fireEvent.submit(screen.getByRole('form', { name: 'Sign in' }));
 
@@ -163,7 +172,7 @@ describe('login form', () => {
       }),
     );
 
-    render(<LoginPage />);
+    renderLoginPage();
     fillCredentials();
 
     const form = screen.getByRole('form', { name: 'Sign in' });
@@ -181,5 +190,14 @@ describe('login form', () => {
     });
 
     expect(login).toHaveBeenCalledTimes(1);
+  });
+
+  it('links customers to public registration', () => {
+    renderLoginPage();
+
+    expect(screen.getByRole('link', { name: 'Create an account' })).toHaveAttribute(
+      'href',
+      '/register',
+    );
   });
 });
