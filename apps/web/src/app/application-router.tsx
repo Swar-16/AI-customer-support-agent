@@ -27,6 +27,24 @@ const ChatPage = lazy(() => import('../features/chat/chat-page'));
 const OperationsPage = lazy(() => import('../features/operations/operations-page'));
 const KnowledgePage = lazy(() => import('../features/knowledge/knowledge-page'));
 
+const KnowledgeLibrary = lazy(() =>
+  import('../features/knowledge/knowledge-library').then((module) => ({
+    default: module.KnowledgeLibrary,
+  })),
+);
+
+const KnowledgeDocumentDetail = lazy(() =>
+  import('../features/knowledge/knowledge-document-detail').then((module) => ({
+    default: module.KnowledgeDocumentDetail,
+  })),
+);
+
+const KnowledgeVersionDetail = lazy(() =>
+  import('../features/knowledge/knowledge-version-detail').then((module) => ({
+    default: module.KnowledgeVersionDetail,
+  })),
+);
+
 function Notice({ title, children }: { readonly title: string; readonly children: ReactNode }) {
   return (
     <main className="foundation-screen" aria-labelledby="route-notice-title">
@@ -82,14 +100,24 @@ function RequireWorkspace({
   readonly children: ReactNode;
 }) {
   const session = useSession();
+  const location = useLocation();
 
   if (session.phase === 'uninitialized' || session.phase === 'pending') {
     return <SessionPending />;
   }
 
   if (session.phase === 'anonymous') {
-    // Only a known workspace root is retained. No arbitrary URL or query data.
-    return <Navigate to="/login" replace state={{ returnTo: `/${workspace}` }} />;
+    const workspaceRoot = `/${workspace}`;
+
+    /*
+     * Preserve only a path that belongs to the requested workspace. Query strings, hashes, and external URLs are deliberately excluded.
+     */
+    const returnTo =
+      location.pathname === workspaceRoot || location.pathname.startsWith(`${workspaceRoot}/`)
+        ? location.pathname
+        : workspaceRoot;
+
+    return <Navigate to="/login" replace state={{ returnTo }} />;
   }
 
   if (session.phase !== 'authenticated' || session.user === null) {
@@ -170,7 +198,16 @@ export function ApplicationRoutes({
                     <KnowledgePage />
                   </RequireWorkspace>
                 }
-              />
+              >
+                <Route index element={<KnowledgeLibrary />} />
+
+                <Route path="documents/:documentId" element={<KnowledgeDocumentDetail />} />
+
+                <Route
+                  path="documents/:documentId/versions/:versionId"
+                  element={<KnowledgeVersionDetail />}
+                />
+              </Route>
 
               <Route
                 path="*"

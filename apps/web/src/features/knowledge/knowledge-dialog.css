@@ -1,0 +1,477 @@
+/* apps/web/src/features/knowledge/knowledge-dialog.css */
+
+.knowledge-confirmation-dialog {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  margin: 0;
+  padding: clamp(1rem, 4vw, 2rem);
+  overflow-y: auto;
+  color: var(--knowledge-ink, #201b22);
+  background: transparent;
+  border: 0;
+}
+
+.knowledge-confirmation-dialog[open] {
+  display: grid;
+  place-items: center;
+}
+
+.knowledge-confirmation-dialog::backdrop {
+  background: rgb(25 18 24 / 52%);
+  backdrop-filter: blur(12px);
+  animation: knowledge-dialog-backdrop-in 180ms ease-out;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                Dialog card                                 */
+/* -------------------------------------------------------------------------- */
+
+.knowledge-confirmation-dialog__card {
+  width: min(100%, 33rem);
+  padding: clamp(1.25rem, 4vw, 1.8rem);
+  background:
+    radial-gradient(circle at 100% 0%, rgb(194 24 120 / 8%), transparent 15rem),
+    rgb(255 255 255 / 96%);
+  border: 1px solid var(--knowledge-border, #eadfe7);
+  border-radius: 1.25rem;
+  box-shadow:
+    0 2rem 6rem rgb(25 14 22 / 26%),
+    0 0 0 1px rgb(255 255 255 / 35%);
+  backdrop-filter: blur(20px);
+  animation: knowledge-dialog-card-in 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.knowledge-confirmation-dialog--danger .knowledge-confirmation-dialog__card {
+  background:
+    radial-gradient(circle at 100% 0%, rgb(162 38 57 / 10%), transparent 15rem),
+    rgb(255 255 255 / 96%);
+  border-color: rgb(162 38 57 / 24%);
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                  Topline                                   */
+/* -------------------------------------------------------------------------- */
+
+.knowledge-confirmation-dialog__topline {
+  display: flex;
+  min-height: 2.8rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.knowledge-confirmation-dialog__icon {
+  display: grid;
+  width: 2.8rem;
+  height: 2.8rem;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--knowledge-magenta-dark, #99105d);
+  background: var(--knowledge-magenta-soft, #fcebf5);
+  border: 1px solid rgb(194 24 120 / 12%);
+  border-radius: 0.9rem;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 68%),
+    0 0.5rem 1.5rem rgb(194 24 120 / 8%);
+}
+
+.knowledge-confirmation-dialog--danger .knowledge-confirmation-dialog__icon {
+  color: var(--knowledge-danger, #a22639);
+  background: var(--knowledge-danger-soft, #ffe9ed);
+  border-color: rgb(162 38 57 / 15%);
+}
+
+.knowledge-confirmation-dialog__dismiss {
+  display: grid;
+  width: 2.45rem;
+  height: 2.45rem;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0;
+  color: #70666e;
+  cursor: pointer;
+  background: white;
+  border: 1px solid var(--knowledge-border, #eadfe7);
+  border-radius: 0.75rem;
+  transition:
+    color 150ms ease,
+    background-color 150ms ease,
+    border-color 150ms ease,
+    transform 150ms ease;
+}
+
+.knowledge-confirmation-dialog__dismiss:hover:not(:disabled) {
+  color: white;
+  background: var(--knowledge-magenta, #c21878);
+  border-color: var(--knowledge-magenta, #c21878);
+  transform: translateY(-1px);
+}
+
+.knowledge-confirmation-dialog__dismiss:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                Dialog copy                                 */
+/* -------------------------------------------------------------------------- */
+
+.knowledge-confirmation-dialog__copy {
+  margin-top: 1rem;
+}
+
+.knowledge-confirmation-dialog__copy h2 {
+  margin: 0;
+  font-family: 'Newsreader Variable', Georgia, serif;
+  font-size: clamp(1.65rem, 5vw, 2.15rem);
+  font-weight: 500;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+  text-wrap: balance;
+}
+
+.knowledge-confirmation-dialog__copy p {
+  margin: 0.75rem 0 0;
+  color: var(--knowledge-muted, #746a74);
+  line-height: 1.65;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                              Custom content                                */
+/* -------------------------------------------------------------------------- */
+
+.knowledge-confirmation-dialog__content {
+  margin-top: 1.15rem;
+  padding: 0.9rem 1rem;
+  color: #554b53;
+  background: #fbf8fa;
+  border: 1px solid var(--knowledge-border, #eadfe7);
+  border-radius: 0.9rem;
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
+
+.knowledge-confirmation-dialog__content > :first-child {
+  margin-top: 0;
+}
+
+.knowledge-confirmation-dialog__content > :last-child {
+  margin-bottom: 0;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                  Actions                                   */
+/* -------------------------------------------------------------------------- */
+
+.knowledge-confirmation-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.7rem;
+  margin-top: 1.4rem;
+}
+
+.knowledge-confirmation-dialog__action {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.65rem 1rem;
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 750;
+  cursor: pointer;
+  border-radius: 0.78rem;
+  transition:
+    color 150ms ease,
+    background-color 150ms ease,
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    transform 150ms ease;
+}
+
+.knowledge-confirmation-dialog__action--outline {
+  color: var(--knowledge-magenta-dark, #99105d);
+  background: white;
+  border: 1px solid var(--knowledge-magenta, #c21878);
+}
+
+.knowledge-confirmation-dialog__action--outline:hover:not(:disabled) {
+  color: white;
+  background: var(--knowledge-magenta, #c21878);
+}
+
+.knowledge-confirmation-dialog__action--solid {
+  color: white;
+  background: linear-gradient(135deg, #cf2180, #aa1268);
+  border: 1px solid var(--knowledge-magenta, #c21878);
+  box-shadow: 0 0.55rem 1.2rem rgb(194 24 120 / 18%);
+}
+
+.knowledge-confirmation-dialog__action--solid:hover:not(:disabled) {
+  box-shadow: 0 0.75rem 1.6rem rgb(194 24 120 / 26%);
+  transform: translateY(-1px);
+}
+
+.knowledge-confirmation-dialog__action--danger {
+  background: #a9263b;
+  border-color: #a9263b;
+  box-shadow: 0 0.55rem 1.2rem rgb(162 38 57 / 18%);
+}
+
+.knowledge-confirmation-dialog__action--danger:hover:not(:disabled) {
+  background: #8f1f32;
+  border-color: #8f1f32;
+  box-shadow: 0 0.75rem 1.6rem rgb(162 38 57 / 24%);
+}
+
+.knowledge-confirmation-dialog__action:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
+}
+
+.knowledge-confirmation-dialog__action:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                              Status message                                */
+/* -------------------------------------------------------------------------- */
+
+.knowledge-confirmation-dialog__status {
+  min-height: 1.25rem;
+  margin: 0.7rem 0 0;
+  color: var(--knowledge-muted, #746a74);
+  font-size: 0.74rem;
+  line-height: 1.45;
+  text-align: right;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                      Shared create/upload form fields                      */
+/* -------------------------------------------------------------------------- */
+
+.knowledge-dialog-fields {
+  display: grid;
+  gap: 1rem;
+}
+
+.knowledge-dialog-field {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.knowledge-dialog-field__label {
+  color: #51464e;
+  font-size: 0.75rem;
+  font-weight: 750;
+}
+
+.knowledge-dialog-field__label small {
+  margin-left: 0.35rem;
+  color: var(--knowledge-muted, #746a74);
+  font-size: 0.68rem;
+  font-weight: 550;
+}
+
+.knowledge-dialog-field input,
+.knowledge-dialog-field textarea,
+.knowledge-dialog-field select {
+  width: 100%;
+  min-width: 0;
+  padding: 0.7rem 0.78rem;
+  color: var(--knowledge-ink, #201b22);
+  font: inherit;
+  font-size: 0.85rem;
+  background: white;
+  border: 1px solid #d9ccd4;
+  border-radius: 0.72rem;
+  outline: none;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    background-color 150ms ease;
+}
+
+.knowledge-dialog-field input,
+.knowledge-dialog-field select {
+  min-height: 2.75rem;
+}
+
+.knowledge-dialog-field textarea {
+  min-height: 7rem;
+  resize: vertical;
+  line-height: 1.55;
+}
+
+.knowledge-dialog-field input:hover:not(:disabled),
+.knowledge-dialog-field textarea:hover:not(:disabled),
+.knowledge-dialog-field select:hover:not(:disabled) {
+  border-color: #c9b8c3;
+}
+
+.knowledge-dialog-field input:focus,
+.knowledge-dialog-field textarea:focus,
+.knowledge-dialog-field select:focus {
+  border-color: var(--knowledge-magenta, #c21878);
+  box-shadow: 0 0 0 3px rgb(194 24 120 / 11%);
+}
+
+.knowledge-dialog-field input:disabled,
+.knowledge-dialog-field textarea:disabled,
+.knowledge-dialog-field select:disabled {
+  color: #817881;
+  cursor: not-allowed;
+  background: #f5f2f4;
+}
+
+.knowledge-dialog-field[data-invalid='true'] input,
+.knowledge-dialog-field[data-invalid='true'] textarea,
+.knowledge-dialog-field[data-invalid='true'] select {
+  border-color: var(--knowledge-danger, #a22639);
+  box-shadow: 0 0 0 3px rgb(162 38 57 / 8%);
+}
+
+.knowledge-dialog-field__hint,
+.knowledge-dialog-field__error {
+  margin: 0;
+  font-size: 0.7rem;
+  line-height: 1.45;
+}
+
+.knowledge-dialog-field__hint {
+  color: var(--knowledge-muted, #746a74);
+}
+
+.knowledge-dialog-field__error {
+  color: var(--knowledge-danger, #a22639);
+  font-weight: 650;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                         Shared notices and errors                          */
+/* -------------------------------------------------------------------------- */
+
+.knowledge-dialog-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  margin: 1rem 0 0;
+  padding: 0.8rem 0.9rem;
+  color: #5c4d57;
+  background: var(--knowledge-magenta-soft, #fcebf5);
+  border: 1px solid rgb(194 24 120 / 13%);
+  border-radius: 0.82rem;
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.knowledge-dialog-notice--error {
+  color: #7f2030;
+  background: var(--knowledge-danger-soft, #ffe9ed);
+  border-color: rgb(162 38 57 / 15%);
+}
+
+.knowledge-dialog-notice > svg {
+  flex: 0 0 auto;
+  margin-top: 0.08rem;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                  Spinner                                   */
+/* -------------------------------------------------------------------------- */
+
+.knowledge-confirmation-dialog .is-spinning {
+  animation: knowledge-dialog-spin 750ms linear infinite;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                Animations                                  */
+/* -------------------------------------------------------------------------- */
+
+@keyframes knowledge-dialog-backdrop-in {
+  from {
+    background: rgb(25 18 24 / 0%);
+    backdrop-filter: blur(0);
+  }
+
+  to {
+    background: rgb(25 18 24 / 52%);
+    backdrop-filter: blur(12px);
+  }
+}
+
+@keyframes knowledge-dialog-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.8rem) scale(0.975);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes knowledge-dialog-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*                              Small screens                                 */
+/* -------------------------------------------------------------------------- */
+
+@media (max-width: 520px) {
+  .knowledge-confirmation-dialog {
+    align-items: end;
+    padding: 0.75rem;
+  }
+
+  .knowledge-confirmation-dialog__card {
+    padding: 1.2rem;
+    border-radius: 1.1rem;
+  }
+
+  .knowledge-confirmation-dialog__actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .knowledge-confirmation-dialog__action {
+    width: 100%;
+  }
+
+  .knowledge-confirmation-dialog__status {
+    text-align: left;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*                            Reduced-motion mode                             */
+/* -------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .knowledge-confirmation-dialog::backdrop,
+  .knowledge-confirmation-dialog__card,
+  .knowledge-confirmation-dialog .is-spinning {
+    animation: none;
+  }
+
+  .knowledge-confirmation-dialog__dismiss,
+  .knowledge-confirmation-dialog__action,
+  .knowledge-dialog-field input,
+  .knowledge-dialog-field textarea,
+  .knowledge-dialog-field select {
+    transition: none;
+  }
+
+  .knowledge-confirmation-dialog__dismiss:hover,
+  .knowledge-confirmation-dialog__action:hover,
+  .knowledge-confirmation-dialog__action:active {
+    transform: none;
+  }
+}
