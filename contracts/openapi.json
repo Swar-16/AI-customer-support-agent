@@ -4678,6 +4678,12 @@
             "title": "Document Title",
             "type": "string"
           },
+          "embedded_chunk_count": {
+            "description": "Chunks having an embedding compatible with the currently active embedding provider and input configuration.",
+            "minimum": 0.0,
+            "title": "Embedded Chunk Count",
+            "type": "integer"
+          },
           "failure_code": {
             "anyOf": [
               {
@@ -4695,6 +4701,11 @@
           },
           "is_current_published_version": {
             "title": "Is Current Published Version",
+            "type": "boolean"
+          },
+          "is_fully_embedded": {
+            "description": "True only when the version has at least one chunk and every chunk has a compatible persisted embedding.",
+            "title": "Is Fully Embedded",
             "type": "boolean"
           },
           "processing_completed_at": {
@@ -4779,6 +4790,12 @@
             ],
             "title": "Superseded At"
           },
+          "total_chunk_count": {
+            "description": "Total persisted chunks belonging to this version.",
+            "minimum": 0.0,
+            "title": "Total Chunk Count",
+            "type": "integer"
+          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
@@ -4807,7 +4824,10 @@
           "updated_at",
           "document_title",
           "is_current_published_version",
-          "source_content_length"
+          "source_content_length",
+          "total_chunk_count",
+          "embedded_chunk_count",
+          "is_fully_embedded"
         ],
         "title": "KnowledgeVersionDetailResponse",
         "type": "object"

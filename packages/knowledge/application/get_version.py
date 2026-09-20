@@ -9,6 +9,8 @@ from packages.knowledge.application.exceptions import QueriedKnowledgeDocumentDo
 from packages.knowledge.domain.document import KnowledgeDocument
 from packages.knowledge.domain.version import KnowledgeDocumentVersion
 from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
+from packages.knowledge.embeddings.models import EmbeddingInputDescriptor, EmbeddingProviderDescriptor
+from packages.knowledge.repositories.embedding_repository import KnowledgeVersionEmbeddingCoverage
 
 @dataclass(frozen=True, slots=True)
 class GetKnowledgeVersionQuery:
@@ -30,10 +32,25 @@ class GetKnowledgeVersionResult:
     document: KnowledgeDocument
     version: KnowledgeDocumentVersion
     current_published_version_id: UUID | None
+    embedding_coverage: KnowledgeVersionEmbeddingCoverage
 
     @property
     def is_current_published_version(self) -> bool:
         return self.current_published_version_id == self.version.id
+    
+    @property
+    def total_chunk_count(self) -> int:
+        return self.embedding_coverage.total_chunk_count
+
+
+    @property
+    def embedded_chunk_count(self) -> int:
+        return self.embedding_coverage.embedded_chunk_count
+
+
+    @property
+    def is_fully_embedded(self) -> bool:
+        return self.embedding_coverage.is_fully_embedded
 
 class GetKnowledgeVersion:
     """
@@ -42,11 +59,16 @@ class GetKnowledgeVersion:
     This administrative query requires an authenticated administrator.
     Transport schemas remain responsible for selecting safe response fields.
     """
-    def __init__(self, *, uow_factory: KnowledgeUnitOfWorkFactory) -> None:
-        if not callable(uow_factory):
-            raise TypeError("uow_factory must be callable.")
+    def __init__(self, *, uow_factory: KnowledgeUnitOfWorkFactory, embedding_provider: EmbeddingProviderDescriptor, embedding_input_descriptor: EmbeddingInputDescriptor) -> None:
+        if not isinstance(embedding_provider, EmbeddingProviderDescriptor):
+            raise TypeError("embedding_provider must be an EmbeddingProviderDescriptor")
+
+        if not isinstance(embedding_input_descriptor, EmbeddingInputDescriptor):
+            raise TypeError("embedding_input_descriptor must be an EmbeddingInputDescriptor")
 
         self._uow_factory = uow_factory
+        self._embedding_provider = embedding_provider
+        self._embedding_input_descriptor = embedding_input_descriptor
 
     def execute(self, query: GetKnowledgeVersionQuery) -> GetKnowledgeVersionResult:
         if not isinstance(query, GetKnowledgeVersionQuery):
@@ -66,9 +88,13 @@ class GetKnowledgeVersion:
                 raise QueriedKnowledgeDocumentDoesNotExistError(version.document_id)
 
             published = uow.versions.get_published_for_document(version.document_id)
+            embedding_coverage = uow.embeddings.get_coverage_for_version(
+                version.id, provider=self._embedding_provider, input_descriptor=self._embedding_input_descriptor
+            )
 
         return GetKnowledgeVersionResult(
             document=document,
             version=version,
             current_published_version_id=published.id if published is not None else None,
+            embedding_coverage=embedding_coverage,
         )

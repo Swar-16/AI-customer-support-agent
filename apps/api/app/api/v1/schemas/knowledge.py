@@ -150,6 +150,14 @@ class KnowledgeVersionDetailResponse(KnowledgeVersionSummaryResponse):
     document_title: str
     is_current_published_version: bool
     source_content_length: int = Field(ge=1)
+    total_chunk_count: int = Field(ge=0, description="Total persisted chunks belonging to this version.")
+    embedded_chunk_count: int = Field(
+        ge=0,
+        description="Chunks having an embedding compatible with the currently active embedding provider and input configuration.",
+    )
+    is_fully_embedded: bool = Field(
+        description="True only when the version has at least one chunk and every chunk has a compatible persisted embedding.",
+    )
 
     @classmethod
     def from_application(cls, result: GetKnowledgeVersionResult) -> "KnowledgeVersionDetailResponse":
@@ -157,6 +165,7 @@ class KnowledgeVersionDetailResponse(KnowledgeVersionSummaryResponse):
             raise TypeError("result must be a GetKnowledgeVersionResult.")
 
         version = result.version
+
         return cls(
             version_id=version.id,
             document_id=version.document_id,
@@ -178,6 +187,9 @@ class KnowledgeVersionDetailResponse(KnowledgeVersionSummaryResponse):
             document_title=result.document.title,
             is_current_published_version=result.is_current_published_version,
             source_content_length=len(version.source_content),
+            total_chunk_count=result.total_chunk_count,
+            embedded_chunk_count=result.embedded_chunk_count,
+            is_fully_embedded=result.is_fully_embedded,
         )
 
 class KnowledgeVersionListResponse(KnowledgeAPIModel):

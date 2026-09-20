@@ -68,7 +68,7 @@ from packages.knowledge.application.exceptions import KnowledgeVersionNotProcess
 from packages.knowledge.application.exceptions import PublishKnowledgeVersionDoesNotExistError, QueriedKnowledgeDocumentDoesNotExistError, QueriedKnowledgeVersionDoesNotExistError
 from packages.knowledge.application.exceptions import EmptyKnowledgeUploadError, InvalidKnowledgeUploadEncodingError, InvalidKnowledgeUploadFilenameError
 from packages.knowledge.application.exceptions import KnowledgeUploadConfigurationError, KnowledgeUploadTooLargeError, UnsafeKnowledgeUploadContentError
-from packages.knowledge.application.exceptions import UnsupportedKnowledgeUploadMediaTypeError, UnsupportedKnowledgeUploadTypeError
+from packages.knowledge.application.exceptions import UnsupportedKnowledgeUploadMediaTypeError, UnsupportedKnowledgeUploadTypeError, KnowledgeVersionEmbeddingsIncompleteError
 from packages.knowledge.domain.errors import InvalidKnowledgeDocumentError, InvalidKnowledgeVersionError, InvalidKnowledgeVersionNumberError,KnowledgeDocumentAlreadyArchivedError
 from packages.knowledge.domain.errors import KnowledgeDocumentDeletedError, KnowledgeDocumentNotFoundError, KnowledgeDocumentTitleError, KnowledgeStateTransitionError
 from packages.knowledge.domain.errors import KnowledgeVersionAlreadyPublishedError, KnowledgeVersionConflictError, KnowledgeVersionContentError, KnowledgeVersionHasNoChunksError
@@ -309,7 +309,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         KnowledgeVersionNotReadyError, KnowledgeVersionAlreadyPublishedError, PublishedVersionConflictError, KnowledgeVersionHasNoChunksError,
         KnowledgeVersionProcessingFailedError, KnowledgeArchiveConflictError, KnowledgeDocumentNotPublishableError, KnowledgePublicationConflictError,
         KnowledgeProcessingDocumentNotActiveError, KnowledgeVersionNotProcessableError, KnowledgeVersionProcessingConflictError,
-        EmbeddingVersionNotReadyError, EmbeddingVersionHasNoChunksError
+        EmbeddingVersionNotReadyError, EmbeddingVersionHasNoChunksError, KnowledgeVersionEmbeddingsIncompleteError,
     ):
         app.add_exception_handler(exception_type, knowledge_conflict_handler)
 
