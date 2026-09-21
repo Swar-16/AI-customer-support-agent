@@ -103,6 +103,7 @@ class TestCustomerEscalationStatus:
             "created_at": body["created_at"],
             "updated_at": body["updated_at"],
             "resolved_at": None,
+            "linked_ticket": None,
         }
 
         forbidden_fields = {

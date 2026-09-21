@@ -87,6 +87,7 @@ from packages.application.conversations.start_conversation_errors import Convers
 from packages.application.conversations.start_conversation_errors import ConversationStartLeaseLostError, ConversationStartPersistenceContractError
 from packages.application.conversations.start_conversation_errors import ConversationStartReplayUnavailableError, ConversationStartRequestExpiredError
 from packages.application.conversations.start_conversation_errors import StartConversationAccessDeniedError, StartConversationValidationError
+from packages.application.conversations.conversation_notification import ConversationNotificationContractError, NotificationConversationDoesNotExistError
 from apps.api.app.api.browser_auth import clear_refresh_cookie
 from packages.config.settings import Settings
 
@@ -209,7 +210,9 @@ def register_exception_handlers(app: FastAPI) -> None:
     for exception_type in (CreateEscalationError, EscalationQueryError, UpdateEscalationError):
         app.add_exception_handler(exception_type, invalid_escalation_operation_handler)
 
-    for exception_type in (CreateEscalationContractError, EscalationQueryContractError, EscalationPersistenceContractError):
+    for exception_type in (CreateEscalationContractError, EscalationQueryContractError, EscalationPersistenceContractError,
+                           ConversationNotificationContractError, NotificationConversationDoesNotExistError,
+    ):
         app.add_exception_handler(exception_type, escalation_internal_contract_handler)
         
     for exception_type in (CustomerConversationNotAccessibleError, CustomerEscalationDoesNotExistError):

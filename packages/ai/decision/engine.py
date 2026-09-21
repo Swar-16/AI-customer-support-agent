@@ -57,10 +57,13 @@ class DecisionEngine:
             4. unknown intent
             5. insufficient classification confidence
             6. deterministically required workflow information
-            7. classifier-detected clarification requirement
-            8. canonical intent decision policy
+            7. canonical intent decision policy
+            8. classifier-detected clarification requirement for workflows that cannot safely proceed without additional information
 
         Explicit human handoff and safety-sensitive escalation therefore take precedence over clarification and ordinary intent routing.
+
+        Sufficiently confident knowledge-backed requests are allowed to retrieve published guidance even when the classifier marks the
+        customer-specific case as incomplete. Retrieval does not authorize an operational lookup or business action.
         """
         if not isinstance(intent_result, IntentResult):
             raise TypeError("intent_result must be an IntentResult instance")
@@ -106,7 +109,19 @@ class DecisionEngine:
                 required_information=mandatory_missing_information,
             )
 
-        # 7. The classifier identified another clarification requirement.
+        # 7. Resolve the declarative workflow policy before interpreting the classifier's generic clarification flag.
+        policy = get_intent_decision_policy(intent_result.intent)
+
+        # Published knowledge can provide useful policy, procedural, and troubleshooting guidance without accessing a customer-specific
+        # business record or performing an action.
+
+        # Therefore, a sufficiently confident knowledge-backed intent may proceed to retrieval even when the classifier believes
+        # that more information would be useful for resolving the customer's exact case. The generated answer must still remain
+        # grounded and clearly avoid claiming access to operational state.
+        if self._can_proceed_with_knowledge_guidance(policy):
+            return self._decision_from_policy(intent_result=intent_result, policy=policy)
+
+        # 8. Other workflows may genuinely require additional information before they can proceed.
         if intent_result.needs_clarification:
             missing_information = self._infer_missing_information(intent_result)
             return DecisionResult(
@@ -116,9 +131,6 @@ class DecisionEngine:
                 confidence=intent_result.confidence,
                 required_information=missing_information,
             )
-
-        # 8. Resolve the normal declarative routing policy.
-        policy = get_intent_decision_policy(intent_result.intent)
 
         return self._decision_from_policy(intent_result=intent_result, policy=policy)
     
@@ -160,6 +172,25 @@ class DecisionEngine:
             )
 
         return None
+
+    @staticmethod
+    def _can_proceed_with_knowledge_guidance(policy: IntentDecisionPolicy) -> bool:
+        """
+        Return whether the workflow can safely retrieve published guidance.
+
+        This does not authorize:
+
+        - access to private operational records;
+        - customer-specific status claims;
+        - business actions;
+        - bypassing grounding or response guardrails.
+
+        It only permits the retrieval pipeline to look for verified informational guidance.
+        """
+        if not isinstance(policy, IntentDecisionPolicy):
+            raise TypeError("policy must be an IntentDecisionPolicy instance")
+
+        return policy.default_decision is DecisionType.RETRIEVE_INFORMATION and policy.retrieval_kind is RetrievalKind.KNOWLEDGE
 
     @staticmethod
     def _decision_from_policy(*, intent_result: IntentResult, policy: IntentDecisionPolicy) -> DecisionResult:
@@ -247,27 +278,17 @@ class DecisionEngine:
     @staticmethod
     def _infer_missing_information(intent_result: IntentResult) -> tuple[str, ...]:
         """
-        Infer missing information from the currently supported semantic contracts.
+        Resolve additional information for workflows that cannot safely proceed through published-knowledge retrieval.
 
-        This remains intentionally conservative.
+        Universally mandatory inputs belong in `_resolve_mandatory_missing_information`.
 
-        Unlike default routing, missing-information requirements can be contextual.
-        They should therefore NOT be encoded as simple static fields in IntentDecisionPolicy.
-
-        This method will later be replaced by a dedicated requirement/rule resolver when operational workflows are implemented.
+        Knowledge-backed workflows are handled before this method is reached, because they may provide 
+        useful general guidance without customer-specific identifiers.
         """
-        entities = intent_result.entities
+        if not isinstance(intent_result, IntentResult):
+            raise TypeError("intent_result must be an IntentResult instance")
 
-        if intent_result.intent is IntentType.PAYMENT_ISSUE:
-            if entities.order_id is None and entities.transaction_id is None:
-                return ("order_id_or_transaction_id",)
-
-        if intent_result.intent is IntentType.SUBSCRIPTION_ISSUE:
-            if entities.subscription_id is None:
-                return ("subscription_id",)
-
-        if intent_result.intent is IntentType.ACCOUNT_ISSUE:
-            # Authenticated identity may provide account context later. Therefore we deliberately do not require account_id here.
-            return ("clarification",)
+        if intent_result.intent is IntentType.ORDER_STATUS:
+            return ("order_id",)
 
         return ("clarification",)

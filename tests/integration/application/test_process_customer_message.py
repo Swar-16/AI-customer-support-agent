@@ -547,7 +547,7 @@ def _customer_principal(
 # ---------------------------------------------------------------------------
 
 
-def test_insufficient_knowledge_persists_escalation_without_assistant_response(
+def test_insufficient_knowledge_persists_escalation_with_customer_notice(
     service,
     test_session_factory,
     seeded_conversation,
@@ -585,8 +585,9 @@ def test_insufficient_knowledge_persists_escalation_without_assistant_response(
     assert result.decision == "retrieve_information"
 
     assert result.customer_message_id is not None
-    assert result.assistant_message_id is None
-    assert result.response is None
+    assert result.assistant_message_id is not None
+    assert result.response is not None
+    assert result.response.strip()
     assert result.escalation_id is not None
 
     assert result.failure_code is None
@@ -614,9 +615,21 @@ def test_insufficient_knowledge_persists_escalation_without_assistant_response(
         # Conversation message ordering
         # --------------------------------------------------------------
 
-        assert len(messages) == 1
+        assert len(messages) == 2
 
         customer_message = messages[0]
+        assistant_message = messages[1]
+
+        assert assistant_message.id == result.assistant_message_id
+        assert assistant_message.role == "assistant"
+        assert assistant_message.content == result.response
+        assert assistant_message.sequence_number == 2
+
+        assert assistant_message.metadata_["feedback_eligible"] is False
+        assert assistant_message.metadata_["message_kind"] in {
+            "escalation_notice",
+            "lifecycle_notice",
+        }
 
         assert customer_message.id == result.customer_message_id
         assert customer_message.role == "customer"
@@ -639,7 +652,10 @@ def test_insufficient_knowledge_persists_escalation_without_assistant_response(
             ai_run.trigger_message_id
             == customer_message.id
         )
-        assert ai_run.response_message_id is None
+        assert (
+            ai_run.response_message_id
+            == result.assistant_message_id
+        )
 
         assert (
             ai_run.conversation_id
@@ -1085,7 +1101,17 @@ def test_clarification_decision_persists_safe_assistant_message(
     assert result.pipeline_stage is PipelineStage.GUARDRAILS_COMPLETED
     assert result.decision == "ask_clarification"
     assert result.assistant_message_id is not None
-    assert result.response == "Could you tell me what you need help with?"
+    assert result.response is not None
+    assert result.response.strip()
+
+    normalized_response = result.response.casefold()
+
+    assert (
+        "detail" in normalized_response
+        or "help with" in normalized_response
+        or "order" in normalized_response
+        or "account" in normalized_response
+    )
 
     with test_session_factory() as session:
         messages = tuple(
@@ -1199,8 +1225,9 @@ def test_unavailable_operational_lookup_persists_honest_escalation(
     assert result.failure_code is None
     assert result.failure_retryable is None
 
-    assert result.assistant_message_id is None
-    assert result.response is None
+    assert result.assistant_message_id is not None
+    assert result.response is not None
+    assert result.response.strip()
     assert result.escalation_id is not None
 
     with test_session_factory() as session:
@@ -1227,13 +1254,25 @@ def test_unavailable_operational_lookup_persists_honest_escalation(
 
         # The accepted customer message remains persisted, but no
         # unsupported operational result is fabricated.
-        assert len(messages) == 1
+        assert len(messages) == 2
+
         assert messages[0].role == "customer"
+
+        assistant_message = messages[1]
+
+        assert assistant_message.id == result.assistant_message_id
+        assert assistant_message.role == "assistant"
+        assert assistant_message.content == result.response
+        assert assistant_message.sequence_number == 2
+        assert assistant_message.metadata_["feedback_eligible"] is False
 
         assert ai_run is not None
         assert ai_run.status == "completed"
         assert ai_run.error_code is None
-        assert ai_run.response_message_id is None
+        assert (
+            ai_run.response_message_id
+            == result.assistant_message_id
+        )
 
         assert escalation is not None
         assert escalation.conversation_id == conversation_id

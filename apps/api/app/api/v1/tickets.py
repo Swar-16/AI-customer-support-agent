@@ -165,6 +165,7 @@ def update_ticket(
         assigned_agent_id=payload.assigned_agent_id,
         unassign=payload.unassign,
         resolution_summary=payload.resolution_summary,
+        customer_message=payload.customer_message,
     )
 
     result = services.update_ticket.execute(command)
@@ -227,6 +228,7 @@ def _update_ticket_response(result: UpdateTicketResult) -> UpdateTicketResponse:
         closed_at=result.closed_at,
         updated_at=result.updated_at,
         changed=result.changed,
+        notification_message_id=result.notification_message_id,
     )
 
 def _add_ticket_comment_response(result: AddTicketCommentResult) -> AddTicketCommentResponse:

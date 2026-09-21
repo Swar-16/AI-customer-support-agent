@@ -310,12 +310,13 @@ class TestDashboardTraceQueries:
 
         assert len(recorded_started_at) == 2
 
+        query_started_at = min(recorded_started_at)
         query_ended_at = max(recorded_started_at)
 
+        # Restrict the window to the two requests created by this test.
+        # A broader lookback can include authentication/setup telemetry.
         query_range = {
-            "started_at": (
-                query_ended_at - timedelta(minutes=5)
-            ).isoformat(),
+            "started_at": query_started_at.isoformat(),
             "ended_at": query_ended_at.isoformat(),
         }
 

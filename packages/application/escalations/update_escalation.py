@@ -13,11 +13,20 @@ from packages.application.audit.models import AuditActor, AuditActorType, Record
 from packages.application.audit.recorder import AuditRecorder
 from packages.database.repositories.audit.audit_event_repository import AuditEventRepository
 from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
+from packages.application.conversations.conversation_notification import AppendConversationNotificationCommand, ConversationNotificationWriter
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork,]
 Clock = Callable[[], datetime]
 VALID_ESCALATION_STATUSES: Final[frozenset[str]] = frozenset({"open", "in_review", "resolved", "dismissed",})
 TERMINAL_ESCALATION_STATUSES: Final[frozenset[str]] = frozenset({"resolved", "dismissed",})
+MAX_CUSTOMER_MESSAGE_LENGTH: Final[int] = 2_000
+_ESCALATION_IN_REVIEW_NOTICE: Final[str] = (
+    "A support specialist is now reviewing your request. "
+    "You can continue adding relevant details while the review "
+    "is in progress."
+)
+_ESCALATION_RESOLVED_PREFIX: Final[str] = "Your support escalation has been resolved."
+_ESCALATION_DISMISSED_PREFIX: Final[str] = "Your support escalation has been closed without further action."
 ALLOWED_ESCALATION_TRANSITIONS: Final[dict[str, frozenset[str]]] = {
     "open": frozenset({"in_review", "resolved", "dismissed",}),
     "in_review": frozenset({"resolved", "dismissed",}),
@@ -47,11 +56,19 @@ class EscalationPersistenceContractError(UpdateEscalationError):
 
 @dataclass(frozen=True, slots=True)
 class UpdateEscalationCommand:
-    """Request an authenticated staff member to move an escalation through its controlled lifecycle."""
+    """
+    Move an escalation through its controlled lifecycle.
+
+    `customer_message` is customer-visible text written by a trusted support agent or administrator.
+    It is required for terminal transitions so customers are not left without an explanation.
+
+    The field must never contain internal notes, provider errors, hidden prompts, unrestricted metadata, or handoff-only details.
+    """
     escalation_id: uuid.UUID
     target_status: str
     principal: AuthenticatedPrincipal
     trace_id: uuid.UUID | None = None
+    customer_message: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.escalation_id, uuid.UUID):
@@ -70,6 +87,7 @@ class UpdateEscalationCommand:
             raise TypeError("trace_id must be a UUID or None")
 
         normalized_target = self.target_status.strip().lower()
+
         if not normalized_target:
             raise ValueError("target_status cannot be blank")
 
@@ -77,11 +95,37 @@ class UpdateEscalationCommand:
             expected = ", ".join(sorted(VALID_ESCALATION_STATUSES))
             raise ValueError(f"target_status must be one of: {expected}")
 
+        normalized_customer_message = self._normalize_customer_message(self.customer_message)
+        if normalized_target in TERMINAL_ESCALATION_STATUSES and normalized_customer_message is None:
+            raise ValueError("customer_message is required when resolving or dismissing an escalation")
+
+        if normalized_target not in TERMINAL_ESCALATION_STATUSES and normalized_customer_message is not None:
+            raise ValueError("customer_message may only be supplied when resolving or dismissing an escalation")
+
         object.__setattr__(self, "target_status", normalized_target)
+        object.__setattr__(self, "customer_message", normalized_customer_message)
+
+    @staticmethod
+    def _normalize_customer_message(value: str | None) -> str | None:
+        if value is None:
+            return None
+
+        if not isinstance(value, str):
+            raise TypeError("customer_message must be a string or None")
+
+        normalized = " ".join(value.split())
+        if not normalized:
+            return None
+
+        if len(normalized) > MAX_CUSTOMER_MESSAGE_LENGTH:
+            raise ValueError(f"customer_message exceeds {MAX_CUSTOMER_MESSAGE_LENGTH} characters")
+
+        return normalized
 
 @dataclass(frozen=True, slots=True)
 class UpdateEscalationResult:
     """Detached result returned after transaction commit."""
+
     escalation_id: uuid.UUID
     conversation_id: uuid.UUID
     ai_run_id: uuid.UUID | None
@@ -90,6 +134,7 @@ class UpdateEscalationResult:
     resolved_at: datetime | None
     updated_at: datetime
     changed: bool
+    notification_message_id: uuid.UUID | None
 
 class UpdateEscalation:
     """
@@ -98,17 +143,21 @@ class UpdateEscalation:
     Unlike CreateEscalation, this service owns its Unit of Work because it represents a standalone agent/admin
     action initiated after the original customer-message transaction has completed.
     """
-    def __init__(self, *, uow_factory: UnitOfWorkFactory, clock: Clock | None = None) -> None:
+    def __init__(self, *, uow_factory: UnitOfWorkFactory, notification_writer: ConversationNotificationWriter, clock: Clock | None = None) -> None:
         if uow_factory is None:
             raise TypeError("uow_factory cannot be None")
 
         if not callable(uow_factory):
             raise TypeError("uow_factory must be callable")
 
+        if not isinstance(notification_writer, ConversationNotificationWriter):
+            raise TypeError("notification_writer must be a ConversationNotificationWriter")
+
         if clock is not None and not callable(clock):
             raise TypeError("clock must be callable or None")
 
         self._uow_factory = uow_factory
+        self._notification_writer = notification_writer
         self._clock = clock if clock is not None else self._utc_now
 
     def execute(self, command: UpdateEscalationCommand) -> UpdateEscalationResult:
@@ -123,9 +172,9 @@ class UpdateEscalation:
 
             previous_status = escalation.status
             if previous_status == command.target_status:
-                result = self._to_result(escalation=escalation, previous_status=previous_status, changed=False)
+                result = self._to_result(escalation=escalation, previous_status=previous_status, changed=False, notification_message_id=None)
 
-                # Explicit commit keeps Unit of Work semantics consistent. No SQL UPDATE is emitted when nothing changed.
+                # An idempotent replay does not append another notice.
                 uow.commit()
                 return result
 
@@ -134,8 +183,22 @@ class UpdateEscalation:
             occurred_at = self._clock()
             self._validate_clock_value(occurred_at)
             self._apply_transition(escalation=escalation, target_status=command.target_status, occurred_at=occurred_at)
-            # SQLAlchemy tracks this loaded ORM object automatically. No repository.save() method is necessary.
+
             uow.flush()
+
+            notification = self._notification_writer.execute_in_uow(
+                command=AppendConversationNotificationCommand(
+                    conversation_id=escalation.conversation_id,
+                    notification_kind=self._notification_kind(command.target_status),
+                    content=self._notification_content(target_status=command.target_status, customer_message=command.customer_message),
+                    metadata={
+                        "escalation_id": str(escalation.id),
+                        "escalation_status": command.target_status,
+                    },
+                ),
+                uow=uow,
+            )
+
             AuditRecorder(repository=audit_repository).record(
                 RecordAuditEventCommand(
                     event_type="escalation.updated",
@@ -151,14 +214,56 @@ class UpdateEscalation:
                     metadata={
                         "previous_status": previous_status,
                         "target_status": command.target_status,
+                        "customer_message_supplied": command.customer_message is not None,
+                        "customer_message_length": len(command.customer_message) if command.customer_message is not None else 0,
+                        "notification_message_id": str(notification.message_id),
                     },
                     occurred_at=occurred_at,
                 )
             )
 
-            result = self._to_result(escalation=escalation, previous_status=previous_status, changed=True)
+            result = self._to_result(
+                escalation=escalation,
+                previous_status=previous_status,
+                changed=True,
+                notification_message_id=notification.message_id,
+            )
+
             uow.commit()
             return result
+
+    @staticmethod
+    def _notification_kind(target_status: str) -> str:
+        mapping = {
+            "in_review": "escalation_in_review",
+            "resolved": "escalation_resolved",
+            "dismissed": "escalation_dismissed",
+        }
+
+        notification_kind = mapping.get(target_status)
+        if notification_kind is None:
+            raise EscalationPersistenceContractError("Escalation target status has no customer notification mapping")
+
+        return notification_kind
+
+    @staticmethod
+    def _notification_content(*, target_status: str, customer_message: str | None) -> str:
+        if target_status == "in_review":
+            return _ESCALATION_IN_REVIEW_NOTICE
+
+        if target_status == "resolved":
+            if customer_message is None:
+                raise EscalationPersistenceContractError("Resolved escalation has no customer-facing explanation")
+
+            return f"{_ESCALATION_RESOLVED_PREFIX} {customer_message}"
+
+        if target_status == "dismissed":
+            if customer_message is None:
+                raise EscalationPersistenceContractError("Dismissed escalation has no customer-facing explanation")
+
+            return f"{_ESCALATION_DISMISSED_PREFIX} {customer_message}"
+
+        raise EscalationPersistenceContractError("Escalation target status has no customer notification content")
 
     @staticmethod
     def _require_repositories(uow: SqlAlchemyUnitOfWork) -> tuple[EscalationRepository, AuditEventRepository,]:
@@ -211,7 +316,7 @@ class UpdateEscalation:
             escalation.resolved_at = None
 
     @staticmethod
-    def _to_result(*, escalation: EscalationModel, previous_status: str, changed: bool) -> UpdateEscalationResult:
+    def _to_result(*, escalation: EscalationModel, previous_status: str, changed: bool, notification_message_id: uuid.UUID | None) -> UpdateEscalationResult:
         if escalation.id is None:
             raise EscalationPersistenceContractError("Persisted escalation has no ID")
 
@@ -224,6 +329,7 @@ class UpdateEscalation:
             resolved_at=escalation.resolved_at,
             updated_at=escalation.updated_at,
             changed=changed,
+            notification_message_id=notification_message_id,
         )
 
     @staticmethod

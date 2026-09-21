@@ -1985,6 +1985,17 @@
             "title": "Escalation Id",
             "type": "string"
           },
+          "linked_ticket": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CustomerLinkedTicketResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Customer-safe linked ticket summary when the escalation has been converted into a support ticket."
+          },
           "priority": {
             "enum": [
               "low",
@@ -2032,6 +2043,42 @@
           "updated_at"
         ],
         "title": "CustomerEscalationStatusResponse",
+        "type": "object"
+      },
+      "CustomerLinkedTicketResponse": {
+        "additionalProperties": false,
+        "description": "Minimal ticket relationship exposed to the customer.\n\nThe customer can use `ticket_id` with the authorized ticket-detail endpoint to retrieve customer-visible comments.",
+        "properties": {
+          "status": {
+            "enum": [
+              "open",
+              "in_progress",
+              "waiting_for_customer",
+              "resolved",
+              "closed",
+              "reopened"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "ticket_id": {
+            "format": "uuid",
+            "title": "Ticket Id",
+            "type": "string"
+          },
+          "ticket_reference": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Ticket Reference",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket_id",
+          "ticket_reference",
+          "status"
+        ],
+        "title": "CustomerLinkedTicketResponse",
         "type": "object"
       },
       "DashboardAPIRequestListResponse": {
@@ -6635,8 +6682,22 @@
       },
       "UpdateEscalationRequest": {
         "additionalProperties": false,
-        "description": "Request to transition an escalation to another state.",
+        "description": "Request to transition an escalation.\n\nTerminal transitions require a customer-visible explanation so the customer is never left with an unexplained resolution or dismissal.\nThis field must not contain internal notes, diagnostic information, provider errors, or unrestricted metadata.",
         "properties": {
+          "customer_message": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Customer-visible explanation required when status is 'resolved' or 'dismissed'. It must be omitted for non-terminal transitions.",
+            "title": "Customer Message"
+          },
           "status": {
             "enum": [
               "open",
@@ -6656,7 +6717,7 @@
       },
       "UpdateEscalationResponse": {
         "additionalProperties": false,
-        "description": "Result of an escalation lifecycle update.",
+        "description": "Result of an escalation lifecycle update.\n\n`notification_message_id` identifies the deterministic customer-visible conversation notice created by a successful state\ntransition. It is null for an idempotent replay that made no change.",
         "properties": {
           "ai_run_id": {
             "anyOf": [
@@ -6693,6 +6754,19 @@
             "format": "uuid",
             "title": "Escalation Id",
             "type": "string"
+          },
+          "notification_message_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Customer-visible lifecycle notification created for this transition. Null when no state change occurred.",
+            "title": "Notification Message Id"
           },
           "previous_status": {
             "enum": [
@@ -6769,6 +6843,20 @@
               }
             ],
             "title": "Category"
+          },
+          "customer_message": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Specific customer-visible information request. Required only when target_status is 'waiting_for_customer'.",
+            "title": "Customer Message"
           },
           "expected_row_version": {
             "minimum": 1.0,
@@ -6914,6 +7002,19 @@
             "format": "uuid",
             "title": "Customer Id",
             "type": "string"
+          },
+          "notification_message_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Customer-visible lifecycle notification created for a ticket-status transition. Null when the status did not change.",
+            "title": "Notification Message Id"
           },
           "previous_status": {
             "enum": [

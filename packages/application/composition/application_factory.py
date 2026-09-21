@@ -76,6 +76,7 @@ from packages.application.conversations.accept_conversation_start import AcceptC
 from packages.application.conversations.start_conversation import StartConversation
 from packages.application.conversations.assign_conversation_title import AssignConversationTitle
 from packages.application.tickets.create_ticket_from_escalation import CreateTicketFromEscalation
+from packages.application.conversations.conversation_notification import ConversationNotificationWriter
 
 SessionFactory = sessionmaker[Session]
 ProviderFactory = Callable[..., LLMProvider]
@@ -317,18 +318,23 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
     get_entity_audit_history = GetEntityAuditHistory(uow_factory=uow_factory)
     get_trace_audit_events = GetTraceAuditEvents(uow_factory=uow_factory)
     
+    conversation_notification_writer = ConversationNotificationWriter()
     get_escalation = GetEscalation(uow_factory=uow_factory)
     list_escalations = ListEscalations(uow_factory=uow_factory)
     list_conversation_escalations = ListConversationEscalations(uow_factory=uow_factory)
     get_customer_escalation_status = GetCustomerEscalationStatus(uow_factory=uow_factory)
-    update_escalation = UpdateEscalation(uow_factory=uow_factory)
+    update_escalation = UpdateEscalation(uow_factory=uow_factory, notification_writer=conversation_notification_writer)
     
     create_ticket = CreateTicket(uow_factory=uow_factory)
-    create_ticket_from_escalation = CreateTicketFromEscalation(uow_factory=uow_factory, create_ticket=create_ticket)
+    create_ticket_from_escalation = CreateTicketFromEscalation(
+        uow_factory=uow_factory,
+        create_ticket=create_ticket,
+        notification_writer=conversation_notification_writer,
+    )
     add_ticket_comment = AddTicketComment(uow_factory=uow_factory)
     get_ticket = GetTicket(uow_factory=uow_factory)
     list_tickets = ListTickets(uow_factory=uow_factory)
-    update_ticket = UpdateTicket(uow_factory=uow_factory)
+    update_ticket = UpdateTicket(uow_factory=uow_factory, notification_writer=conversation_notification_writer)
     
     submit_feedback = SubmitFeedback(uow_factory=uow_factory)
     get_feedback = GetFeedback(uow_factory=uow_factory)

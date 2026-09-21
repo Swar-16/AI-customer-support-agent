@@ -619,6 +619,41 @@ class TestFeedbackSubmission:
         assert response.json()["error"]["code"] == (
             "INVALID_REQUEST"
         )
+    
+    def test_escalation_notice_cannot_receive_feedback(
+        self,
+        client: TestClient,
+        feedback_context: FeedbackTestContext,
+        test_session_factory,
+    ) -> None:
+        with test_session_factory() as session:
+            message = session.get(
+                MessageModel,
+                feedback_context.assistant_message_id,
+            )
+
+            assert message is not None
+
+            message.metadata_ = {
+                "message_kind": "escalation_notice",
+                "feedback_eligible": False,
+            }
+
+            session.commit()
+
+        response = client.post(
+            (
+                f"/v1/conversations/"
+                f"{feedback_context.conversation_id}/feedback"
+            ),
+            headers=feedback_context.customer_headers,
+            json=_feedback_payload(feedback_context),
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == (
+            "INVALID_FEEDBACK_OPERATION"
+        )
 
 
 class TestFeedbackQueries:

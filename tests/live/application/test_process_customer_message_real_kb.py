@@ -389,6 +389,14 @@ def test_customer_message_uses_real_kb_jina_and_groq(
     }
 
     assert result.decision == "retrieve_information"
+    
+    assert result.assistant_message_id is not None
+    assert result.response is not None
+    assert result.response.strip()
+
+    assert result.escalation_id is None
+    assert result.failure_code is None
+    assert result.failure_retryable is None
 
     # -------------------------------------------------------------------
     # Persisted database state
@@ -398,6 +406,10 @@ def test_customer_message_uses_real_kb_jina_and_groq(
         ai_run = session.get(
             AIRunModel,
             result.ai_run_id,
+        )
+        assistant_message = session.get(
+            MessageModel,
+            result.assistant_message_id,
         )
 
         assert ai_run is not None
@@ -418,6 +430,10 @@ def test_customer_message_uses_real_kb_jina_and_groq(
         assert ai_run.error_message is None
         assert ai_run.total_latency_ms is not None
         assert ai_run.total_latency_ms >= 0
+        assert (
+            ai_run.response_message_id
+            == result.assistant_message_id
+        )
 
         # ---------------------------------------------------------------
         # Customer message
@@ -435,6 +451,24 @@ def test_customer_message_uses_real_kb_jina_and_groq(
             customer_message.content
             == LIVE_CUSTOMER_MESSAGE
         )
+        
+        # ---------------------------------------------------------------
+        # Persisted assistant response
+        # ---------------------------------------------------------------
+
+        assert assistant_message is not None
+        assert assistant_message.conversation_id == conversation_id
+        assert assistant_message.role == "assistant"
+        assert assistant_message.content == result.response
+        assert assistant_message.sequence_number == 2
+
+        metadata = assistant_message.metadata_ or {}
+
+        assert metadata.get("feedback_eligible", True) is True
+        assert metadata.get("message_kind") not in {
+            "escalation_notice",
+            "lifecycle_notice",
+        }
 
         # ---------------------------------------------------------------
         # Provider calls

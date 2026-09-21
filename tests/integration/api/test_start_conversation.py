@@ -133,7 +133,14 @@ class TestStartConversation:
         assert start_request.latest_ai_run_id == ai_run_id
 
         assert conversation is not None
-        assert conversation.next_message_sequence == 2
+        # Sequence 1 is the customer message and sequence 2 is the
+        # deterministic customer-visible escalation notice.
+        assert conversation.next_message_sequence == 3
+
+        assert body["assistant_message_id"] is not None
+        assert body["response"] is not None
+        assert body["response"].strip()
+        assert body["escalation_id"] is not None
         assert conversation.title == "Order status request"
 
         assert message is not None

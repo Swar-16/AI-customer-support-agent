@@ -177,8 +177,12 @@ class TestLiveGroqAPI:
         assert body["intent"] == IntentType.ORDER_STATUS.value
         assert body["decision"] == DecisionType.ESCALATE.value
 
-        assert body["assistant_message_id"] is None
-        assert body["response"] is None
+        assistant_message_id = uuid.UUID(
+            body["assistant_message_id"]
+        )
+
+        assert body["response"] is not None
+        assert body["response"].strip()
         assert uuid.UUID(body["escalation_id"])
         assert body.get("failure_code") is None
         assert body.get("failure_retryable") is None
@@ -188,6 +192,10 @@ class TestLiveGroqAPI:
                 EscalationModel,
                 escalation_id,
             )
+            assistant_message = session.get(
+                MessageModel,
+                assistant_message_id,
+            )
 
         assert escalation is not None
         assert escalation.ai_run_id == ai_run_id
@@ -195,6 +203,10 @@ class TestLiveGroqAPI:
         assert escalation.reason_code == (
             DecisionReasonCode.OPERATIONAL_LOOKUP_UNAVAILABLE.value
         )
+        
+        assert assistant_message is not None
+        assert assistant_message.role == "assistant"
+        assert assistant_message.content == body["response"]
 
         with test_session_factory() as session:
             message = session.scalar(select(MessageModel)
@@ -230,6 +242,11 @@ class TestLiveGroqAPI:
         assert len(llm_calls) >= 1
         assert len(predictions) == 1
         assert len(decisions) == 1
+        
+        assert (
+            ai_run.response_message_id
+            == assistant_message_id
+        )
 
         prediction = predictions[0]
         assert prediction.llm_call_id is not None
