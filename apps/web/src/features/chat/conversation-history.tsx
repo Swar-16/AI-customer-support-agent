@@ -259,37 +259,50 @@ export function ConversationHistory({
                       </p>
                     ) : (
                       <ol className="chat-history__messages" aria-label="Messages">
-                        {visibleHistory.items.map((message) => (
-                          <li
-                            key={message.message_id}
-                            className="chat-history__message"
-                            data-speaker={message.role}
-                            data-chat-message=""
-                            tabIndex={-1}
-                          >
-                            <article aria-label={`Message from ${speakerNames[message.role]}`}>
-                              <header>
-                                <strong>{speakerNames[message.role]}</strong>
-                                <time dateTime={message.created_at}>
-                                  {new Date(message.created_at).toLocaleString()}
-                                </time>
-                              </header>
+                        {visibleHistory.items.map((message) => {
+                          const isSupportUpdate =
+                            message.role === 'assistant' && message.feedback_eligible !== true;
 
-                              {message.role === 'assistant' ? (
-                                <>
-                                  <AssistantMessage content={message.content} />
-                                  <ResponseRating
-                                    conversationId={conversationId}
-                                    responseMessageId={message.message_id}
-                                    message={message}
-                                  />
-                                </>
-                              ) : (
-                                <p className="chat-history__content">{message.content}</p>
-                              )}
-                            </article>
-                          </li>
-                        ))}
+                          const speakerName = isSupportUpdate
+                            ? 'Support update'
+                            : speakerNames[message.role];
+
+                          return (
+                            <li
+                              key={message.message_id}
+                              className="chat-history__message"
+                              data-speaker={message.role}
+                              data-message-kind={isSupportUpdate ? 'support-update' : 'standard'}
+                              data-chat-message=""
+                              tabIndex={-1}
+                            >
+                              <article aria-label={`Message from ${speakerName}`}>
+                                <header>
+                                  <strong>{speakerName}</strong>
+                                  <time dateTime={message.created_at}>
+                                    {new Date(message.created_at).toLocaleString()}
+                                  </time>
+                                </header>
+
+                                {message.role === 'assistant' ? (
+                                  <>
+                                    <AssistantMessage content={message.content} />
+
+                                    {message.feedback_eligible === true && (
+                                      <ResponseRating
+                                        conversationId={conversationId}
+                                        responseMessageId={message.message_id}
+                                        message={message}
+                                      />
+                                    )}
+                                  </>
+                                ) : (
+                                  <p className="chat-history__content">{message.content}</p>
+                                )}
+                              </article>
+                            </li>
+                          );
+                        })}
                       </ol>
                     )}
 

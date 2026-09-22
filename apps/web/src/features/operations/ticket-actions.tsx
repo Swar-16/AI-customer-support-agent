@@ -18,6 +18,11 @@ interface StatusAction {
   readonly tone: 'primary' | 'secondary';
 }
 
+interface TicketTransitionDetails {
+  readonly resolutionSummary: string | null;
+  readonly customerMessage: string | null;
+}
+
 const statusLabels: Record<TicketStatus, string> = {
   open: 'Open',
   in_progress: 'In progress',
@@ -139,9 +144,11 @@ function TicketTransitionDialog({
   readonly pending: boolean;
   readonly error: unknown;
   readonly onCancel: () => void;
-  readonly onConfirm: (resolutionSummary: string | null) => void;
+  readonly onConfirm: (details: TicketTransitionDetails) => void;
 }) {
   const [resolutionSummary, setResolutionSummary] = useState('');
+
+  const [customerMessage, setCustomerMessage] = useState('');
 
   useEffect(() => {
     function handleEscape(event: KeyboardEvent) {
@@ -161,15 +168,34 @@ function TicketTransitionDialog({
   }, [onCancel, pending]);
 
   const resolving = targetStatus === 'resolved';
+
+  const waitingForCustomer = targetStatus === 'waiting_for_customer';
+
   const normalizedSummary = resolutionSummary.trim();
-  const confirmationDisabled = pending || (resolving && normalizedSummary.length === 0);
+
+  const normalizedCustomerMessage = customerMessage.trim();
+
+  const resolutionValid =
+    !resolving || (normalizedSummary.length > 0 && normalizedSummary.length <= 5_000);
+
+  const customerMessageValid =
+    !waitingForCustomer ||
+    (normalizedCustomerMessage.length > 0 && normalizedCustomerMessage.length <= 2_000);
+
+  const confirmationDisabled = pending || !resolutionValid || !customerMessageValid;
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (confirmationDisabled) return;
+    if (confirmationDisabled) {
+      return;
+    }
 
-    onConfirm(resolving ? normalizedSummary : null);
+    onConfirm({
+      resolutionSummary: resolving ? normalizedSummary : null,
+
+      customerMessage: waitingForCustomer ? normalizedCustomerMessage : null,
+    });
   }
 
   return (
@@ -187,6 +213,7 @@ function TicketTransitionDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="ticket-transition-title"
+        aria-describedby="ticket-transition-description"
         onSubmit={submit}
       >
         <span className="operations-confirmation-card__icon">
@@ -201,18 +228,48 @@ function TicketTransitionDialog({
 
         <h2 id="ticket-transition-title">Mark as {statusLabels[targetStatus].toLowerCase()}?</h2>
 
-        <p>
+        <p id="ticket-transition-description">
           The latest ticket version will be used. If another operator changed it first, this update
           will be rejected and refreshed safely.
         </p>
 
-        {resolving ? (
+        {waitingForCustomer && (
+          <label className="ticket-resolution-field">
+            <span>Information needed from the customer</span>
+
+            <textarea
+              autoFocus
+              required
+              disabled={pending}
+              maxLength={2_000}
+              rows={5}
+              value={customerMessage}
+              placeholder="Clearly describe the exact information, documents, or action required from the customer."
+              onChange={(event) => {
+                setCustomerMessage(event.target.value);
+              }}
+            />
+
+            <small>
+              This text will be shown to the customer in their conversation. Do not include internal
+              notes, diagnostics, provider errors, or sensitive metadata.
+            </small>
+
+            <small>
+              Required · {customerMessage.length.toLocaleString()}
+              /2,000
+            </small>
+          </label>
+        )}
+
+        {resolving && (
           <label className="ticket-resolution-field">
             <span>Resolution summary</span>
 
             <textarea
               autoFocus
               required
+              disabled={pending}
               maxLength={5_000}
               rows={4}
               value={resolutionSummary}
@@ -227,7 +284,7 @@ function TicketTransitionDialog({
               /5,000
             </small>
           </label>
-        ) : null}
+        )}
 
         {error ? (
           <p className="operations-dialog-error" role="alert">
@@ -338,15 +395,30 @@ export function TicketActions({
     await submitUpdate(update, 'Ticket classification updated.');
   }
 
-  async function confirmTransition(resolutionSummary: string | null) {
-    if (targetStatus === null) return;
+  async function confirmTransition(details: TicketTransitionDetails) {
+    if (targetStatus === null) {
+      return;
+    }
 
     const succeeded = await submitUpdate(
       {
         expectedRowVersion: ticket.row_version,
+
         targetStatus,
-        ...(resolutionSummary === null ? {} : { resolutionSummary }),
+
+        ...(details.resolutionSummary === null
+          ? {}
+          : {
+              resolutionSummary: details.resolutionSummary,
+            }),
+
+        ...(details.customerMessage === null
+          ? {}
+          : {
+              customerMessage: details.customerMessage,
+            }),
       },
+
       `Ticket moved to ${statusLabels[targetStatus].toLowerCase()}.`,
     );
 
@@ -513,8 +585,8 @@ export function TicketActions({
             setTargetStatus(null);
             updateTicket.reset();
           }}
-          onConfirm={(resolutionSummary) => {
-            void confirmTransition(resolutionSummary);
+          onConfirm={(details) => {
+            void confirmTransition(details);
           }}
         />
       ) : null}

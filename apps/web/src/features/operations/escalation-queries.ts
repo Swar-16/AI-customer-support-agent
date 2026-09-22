@@ -104,6 +104,7 @@ export function useEscalationDetail(escalationId: string | null) {
 interface UpdateEscalationVariables {
   readonly escalationId: string;
   readonly status: EscalationStatus;
+  readonly customerMessage: string | null;
 }
 
 export function useUpdateEscalationStatus() {
@@ -115,12 +116,26 @@ export function useUpdateEscalationStatus() {
     mutationKey: ['operations', operatorId, 'escalations', 'update-status'],
     retry: false,
 
-    mutationFn: async ({ escalationId, status }: UpdateEscalationVariables) => {
+    mutationFn: async ({ escalationId, status, customerMessage }: UpdateEscalationVariables) => {
       if (operatorId === null) {
         throw SafeApiError.fromHttp(403, null);
       }
 
-      return unwrap(await api.updateStatus(escalationId, status));
+      const terminal = status === 'resolved' || status === 'dismissed';
+
+      return unwrap(
+        await api.updateStatus(
+          escalationId,
+          terminal
+            ? {
+                status,
+                customer_message: customerMessage,
+              }
+            : {
+                status,
+              },
+        ),
+      );
     },
 
     onSuccess: async (_result, variables) => {
@@ -128,8 +143,25 @@ export function useUpdateEscalationStatus() {
         queryClient.invalidateQueries({
           queryKey: escalationKeys.lists(operatorId),
         }),
+
         queryClient.invalidateQueries({
           queryKey: escalationKeys.detail(operatorId, variables.escalationId),
+        }),
+
+        /*
+         * Refresh Operations analytics and any ticket/escalation views that
+         * derive from the changed conversation.
+         */
+        queryClient.invalidateQueries({
+          queryKey: ['operations', operatorId],
+        }),
+
+        /*
+         * Lifecycle notices are persisted into conversation history by the
+         * backend. Never insert them manually.
+         */
+        queryClient.invalidateQueries({
+          queryKey: ['chat'],
         }),
       ]);
     },
@@ -158,16 +190,23 @@ export function useCreateEscalationTicket() {
       return unwrap(await api.create(escalationId, draft));
     },
 
-    onSuccess: async (_result, variables) => {
+    onSuccess: async () => {
       await Promise.all([
+        /*
+         * Covers escalation detail/list, ticket detail/list, and Operations
+         * analytics. The backend may return an existing linked ticket during an
+         * idempotent retry.
+         */
         queryClient.invalidateQueries({
-          queryKey: escalationKeys.detail(operatorId, variables.escalationId),
+          queryKey: ['operations', operatorId],
         }),
+
+        /*
+         * Refresh the customer-visible ticket-created notice and linked-ticket
+         * escalation status.
+         */
         queryClient.invalidateQueries({
-          queryKey: escalationKeys.lists(operatorId),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: ['operations', operatorId, 'tickets'],
+          queryKey: ['chat'],
         }),
       ]);
     },

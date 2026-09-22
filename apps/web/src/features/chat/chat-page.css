@@ -1717,3 +1717,180 @@
   color: #51464e;
   line-height: 1.55;
 }
+
+/* Calm treatment for backend-provided support lifecycle notices. */
+
+.chat-history__message[data-message-kind='support-update'] {
+  position: relative;
+  border-color: #e7cadb;
+  background: linear-gradient(145deg, rgb(252 235 245 / 78%), rgb(255 255 255 / 96%));
+  box-shadow:
+    0 8px 24px rgb(94 42 73 / 6%),
+    0 1px 3px rgb(94 42 73 / 5%);
+}
+
+.chat-history__message[data-message-kind='support-update']::before {
+  position: absolute;
+  top: 18px;
+  left: 0;
+  width: 3px;
+  height: 30px;
+  border-radius: 0 999px 999px 0;
+  background: #b81777;
+  content: '';
+}
+
+.chat-history__message[data-message-kind='support-update'] > article > header strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #8b1759;
+}
+
+.chat-history__message[data-message-kind='support-update'] > article > header strong::before {
+  width: 8px;
+  height: 8px;
+  border: 2px solid #b81777;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgb(184 23 119 / 9%);
+  content: '';
+}
+
+.chat-history__message[data-message-kind='support-update'] .chat-markdown {
+  color: #40363d;
+}
+
+/* Customer-safe linked-ticket summary. */
+
+.chat-support__ticket {
+  margin-top: 20px;
+  padding: 16px;
+  overflow: hidden;
+  border: 1px solid #ebcada;
+  border-radius: 16px;
+  background: linear-gradient(145deg, rgb(252 235 245 / 72%), rgb(255 255 255 / 96%));
+  box-shadow: 0 8px 24px rgb(86 36 66 / 6%);
+}
+
+.chat-support__ticket-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  color: #84205d;
+}
+
+.chat-support__ticket-heading svg {
+  flex: 0 0 auto;
+}
+
+.chat-support__ticket-heading h4 {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.chat-support__ticket-details {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+
+.chat-support__ticket-details > div {
+  min-width: 0;
+}
+
+.chat-support__ticket-details dt {
+  margin-bottom: 4px;
+  color: var(--chat-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.chat-support__ticket-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--chat-text);
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.chat-support__ticket-reference {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.chat-support__ticket-status {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 1.65rem;
+  padding: 0.2rem 0.58rem;
+  border: 1px solid #e8bfd7;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #84205d;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.chat-support__ticket-status[data-status='in_progress'],
+.chat-support__ticket-status[data-status='reopened'] {
+  border-color: #e7c171;
+  background: #fff8e7;
+  color: #775000;
+}
+
+.chat-support__ticket-status[data-status='waiting_for_customer'] {
+  border-color: #d8b8e6;
+  background: #f8effc;
+  color: #69347e;
+}
+
+.chat-support__ticket-status[data-status='resolved'] {
+  border-color: #b6d5c6;
+  background: #edf7f1;
+  color: #24583c;
+}
+
+.chat-support__ticket-status[data-status='closed'] {
+  border-color: #d9d4da;
+  background: #f3f1f3;
+  color: #625b63;
+}
+
+@media (max-width: 600px) {
+  .chat-history__message[data-message-kind='support-update'] {
+    max-width: 96%;
+  }
+
+  .chat-support__ticket {
+    padding: 14px;
+    border-radius: 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-history__message[data-message-kind='support-update'],
+  .chat-support__ticket {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .chat-history__message[data-message-kind='support-update'],
+  .chat-support__ticket,
+  .chat-support__ticket-status {
+    border-color: CanvasText;
+    background: Canvas;
+    color: CanvasText;
+  }
+
+  .chat-history__message[data-message-kind='support-update']::before {
+    background: Highlight;
+  }
+}

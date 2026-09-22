@@ -476,9 +476,29 @@ function TransitionDialog({
   readonly pending: boolean;
   readonly error: unknown;
   readonly onCancel: () => void;
-  readonly onConfirm: () => void;
+  readonly onConfirm: (customerMessage: string | null) => void;
 }) {
+  const [customerMessage, setCustomerMessage] = useState('');
+
   const destructive = transition.toStatus === 'dismissed';
+
+  const terminal = transition.toStatus === 'resolved' || transition.toStatus === 'dismissed';
+
+  const normalizedCustomerMessage = customerMessage.trim();
+
+  const customerMessageValid =
+    !terminal ||
+    (normalizedCustomerMessage.length > 0 && normalizedCustomerMessage.length <= 2_000);
+
+  function submitTransition(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (pending || !customerMessageValid) {
+      return;
+    }
+
+    onConfirm(terminal ? normalizedCustomerMessage : null);
+  }
 
   return (
     <div
@@ -490,14 +510,17 @@ function TransitionDialog({
         }
       }}
     >
-      <section
+      <form
         className="operations-confirmation-card"
         role="dialog"
         aria-modal="true"
         aria-labelledby="escalation-confirmation-title"
         aria-describedby="escalation-confirmation-description"
+        onSubmit={submitTransition}
       >
-        <span className={`operations-confirmation-card__icon${destructive ? ' is-danger' : ''}`}>
+        <span
+          className={`operations-confirmation-card__icon` + `${destructive ? ' is-danger' : ''}`}
+        >
           {destructive ? (
             <ShieldAlert size={27} aria-hidden="true" />
           ) : (
@@ -517,6 +540,37 @@ function TransitionDialog({
           <strong>{statusLabels[transition.toStatus].toLowerCase()}</strong>.
         </p>
 
+        {terminal && (
+          <label className="operations-customer-message">
+            <span>Customer-facing explanation</span>
+
+            <textarea
+              required
+              rows={5}
+              maxLength={2_000}
+              value={customerMessage}
+              disabled={pending}
+              placeholder={
+                transition.toStatus === 'resolved'
+                  ? 'Explain the resolution clearly and safely to the customer.'
+                  : 'Explain why this support request is being closed.'
+              }
+              onChange={(event) => {
+                setCustomerMessage(event.target.value);
+              }}
+            />
+
+            <small>
+              This message will be added to the customer’s conversation. Do not include internal
+              notes, diagnostics, provider errors, or sensitive metadata.
+            </small>
+
+            <span className="operations-customer-message__count">
+              {customerMessage.length}/2,000
+            </span>
+          </label>
+        )}
+
         {error ? (
           <p className="operations-dialog-error" role="alert">
             {errorMessage(error, 'The escalation status could not be updated.')}
@@ -534,18 +588,18 @@ function TransitionDialog({
           </button>
 
           <button
-            type="button"
-            className={`operations-button ${
-              destructive ? 'operations-button--danger-solid' : 'operations-button--primary'
-            }`}
+            type="submit"
+            className={
+              `operations-button ` +
+              `${destructive ? 'operations-button--danger-solid' : 'operations-button--primary'}`
+            }
             aria-busy={pending}
-            disabled={pending}
-            onClick={onConfirm}
+            disabled={pending || !customerMessageValid}
           >
             {pending ? 'Updating…' : `Confirm ${statusLabels[transition.toStatus].toLowerCase()}`}
           </button>
         </div>
-      </section>
+      </form>
     </div>
   );
 }
@@ -641,13 +695,14 @@ export function EscalationQueue() {
     setSelectedId(null);
   }
 
-  async function confirmTransition() {
+  async function confirmTransition(customerMessage: string | null) {
     if (transition === null || updateStatus.isPending) return;
 
     try {
       const result = await updateStatus.mutateAsync({
         escalationId: transition.escalationId,
         status: transition.toStatus,
+        customerMessage,
       });
 
       setNotice(
@@ -952,8 +1007,8 @@ export function EscalationQueue() {
             setTransition(null);
             updateStatus.reset();
           }}
-          onConfirm={() => {
-            void confirmTransition();
+          onConfirm={(customerMessage) => {
+            void confirmTransition(customerMessage);
           }}
         />
       ) : null}

@@ -35,15 +35,27 @@ const processingSchema = z.object({
 
 const terminalSchema = sendMessageSchema.extend({
   start_request_id: conversationIdSchema,
+
   idempotency_status: z.enum(['completed', 'failed']),
+
   created: z.boolean(),
   replayed: z.boolean(),
+
   failure_code: z.string().min(1).max(100).nullable().default(null),
+
   failure_retryable: z.boolean().nullable().default(null),
 }) satisfies z.ZodType<StartConversationResponse>;
 
 function invalidResponse(): never {
   throw SafeApiError.fromLocal('invalid-response');
+}
+
+function hasCommittedAssistantResponse(data: StartConversationResponse): boolean {
+  return (
+    typeof data.assistant_message_id === 'string' &&
+    typeof data.response === 'string' &&
+    data.response.trim().length > 0
+  );
 }
 
 export function decodeStartConversation(
@@ -58,6 +70,7 @@ export function decodeStartConversation(
     }
 
     const bodyDelayMs = parsed.data.retry_after_seconds * 1_000;
+
     const headerDelayMs = context.retryAfterMs;
 
     if (headerDelayMs !== null && (!Number.isFinite(headerDelayMs) || headerDelayMs < 0)) {
@@ -67,8 +80,11 @@ export function decodeStartConversation(
     return {
       kind: 'processing',
       data: parsed.data,
-      // Wait at least as long as both server-provided delays.
-      // The coordinator will separately bound its number of attempts.
+
+      /*
+       * Respect both server-provided delays. The coordinator separately
+       * controls the maximum number of recovery attempts.
+       */
       retryAfterMs: Math.max(bodyDelayMs, headerDelayMs ?? 0),
     };
   }
@@ -85,10 +101,16 @@ export function decodeStartConversation(
 
   const data = parsed.data;
 
-  if (data.created !== (context.status === 201) || (data.created && data.replayed)) {
+  const expectedCreated = context.status === 201;
+
+  if (data.created !== expectedCreated || (data.created && data.replayed)) {
     return invalidResponse();
   }
 
+  /*
+   * A failed pipeline must not contain a fabricated assistant response or
+   * escalation identity.
+   */
   if (!data.succeeded) {
     if (
       data.idempotency_status !== 'failed' ||
@@ -109,6 +131,10 @@ export function decodeStartConversation(
     };
   }
 
+  /*
+   * All successful terminal outcomes must be completed and must not contain
+   * failure metadata.
+   */
   if (
     data.idempotency_status !== 'completed' ||
     data.failure_code !== null ||
@@ -117,11 +143,12 @@ export function decodeStartConversation(
     return invalidResponse();
   }
 
+  /*
+   * Normal completed assistant answer.
+   */
   if (
     data.pipeline_stage === 'guardrails_completed' &&
-    data.assistant_message_id !== null &&
-    data.response !== null &&
-    data.response.trim().length > 0 &&
+    hasCommittedAssistantResponse(data) &&
     data.escalation_id === null
   ) {
     return {
@@ -131,11 +158,16 @@ export function decodeStartConversation(
     };
   }
 
+  /*
+   * Escalation is a successful completed outcome.
+   *
+   * The backend now persists a safe customer-visible assistant notice and
+   * returns both its message ID and content.
+   */
   if (
     data.pipeline_stage === 'escalated' &&
     data.escalation_id !== null &&
-    data.assistant_message_id === null &&
-    data.response === null
+    hasCommittedAssistantResponse(data)
   ) {
     return {
       kind: 'terminal',
@@ -144,6 +176,8 @@ export function decodeStartConversation(
     };
   }
 
-  // Unknown or contradictory outcomes must never become fake success.
+  /*
+   * Unknown or contradictory combinations must not become fake success.
+   */
   return invalidResponse();
 }

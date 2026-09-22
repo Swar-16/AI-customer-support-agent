@@ -123,13 +123,26 @@ export function useUpdateTicket() {
     },
 
     onSuccess: async (_result, variables) => {
+      const refreshConversation =
+        variables.update.targetStatus !== null && variables.update.targetStatus !== undefined;
+
       await Promise.all([
+        /* Refreshes ticket detail/list, linked escalation state, and Operations analytics. */
         queryClient.invalidateQueries({
-          queryKey: ticketKeys.lists(operatorId),
+          queryKey: ['operations', operatorId],
         }),
-        queryClient.invalidateQueries({
-          queryKey: ticketKeys.detail(operatorId, variables.ticketId),
-        }),
+
+        /*
+         * Only status transitions create lifecycle conversation messages.
+         * Priority, category, and assignment-only changes should not cause unnecessary chat refreshes.
+         */
+        ...(refreshConversation
+          ? [
+              queryClient.invalidateQueries({
+                queryKey: ['chat'],
+              }),
+            ]
+          : []),
       ]);
     },
 
@@ -166,9 +179,19 @@ export function useAddTicketComment() {
     },
 
     onSuccess: async (_result, variables) => {
-      await queryClient.invalidateQueries({
-        queryKey: ticketKeys.detail(operatorId, variables.ticketId),
-      });
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ticketKeys.detail(operatorId, variables.ticketId),
+        }),
+
+        /*
+         * Comments can affect operational activity and analytics, but they are
+         * not fabricated as customer chat lifecycle messages.
+         */
+        queryClient.invalidateQueries({
+          queryKey: ['operations', operatorId],
+        }),
+      ]);
     },
   });
 }

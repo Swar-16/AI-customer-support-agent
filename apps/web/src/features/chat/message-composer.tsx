@@ -47,23 +47,9 @@ function successfulNotice(result: SendMessageResult): Notice {
     };
   }
 
-  if (result.escalation_id != null) {
-    return {
-      tone: 'status',
-      text: 'Your message was received and an escalation was created for human review.',
-    };
-  }
-
-  if (result.assistant_message_id != null) {
-    return {
-      tone: 'status',
-      text: 'Your message was received and an assistant response was saved.',
-    };
-  }
-
   return {
     tone: 'status',
-    text: 'Your message was received. No assistant response was returned.',
+    text: 'Your message was received successfully.',
   };
 }
 

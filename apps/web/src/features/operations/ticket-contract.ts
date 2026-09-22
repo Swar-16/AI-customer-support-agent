@@ -37,6 +37,12 @@ export const ticketCommentAuthorRoleSchema = z.enum([
 
 export const ticketIdSchema = z.uuid();
 
+export const ticketCustomerMessageSchema = z
+  .string()
+  .trim()
+  .min(1, 'Describe the information required from the customer.')
+  .max(2_000, 'Use 2,000 characters or fewer.');
+
 const timestampSchema = z.iso.datetime({ offset: true });
 
 export const ticketSchema = z

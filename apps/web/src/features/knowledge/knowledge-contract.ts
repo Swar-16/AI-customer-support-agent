@@ -133,28 +133,57 @@ export const knowledgeVersionSchema = z.object({
   archived_at: optionalNullableTimestampSchema,
 }) satisfies z.ZodType<ApiSchemas['KnowledgeVersionSummaryResponse']>;
 
-export const knowledgeVersionDetailSchema = z.object({
-  version_id: knowledgeIdSchema,
-  document_id: knowledgeIdSchema,
-  version_number: positiveIntegerSchema,
-  source_type: knowledgeSourceTypeSchema,
-  source_name: optionalNullableStringSchema,
-  content_hash: knowledgeContentHashSchema,
-  status: knowledgeVersionStatusSchema,
-  ingestion_status: knowledgeIngestionStatusSchema,
-  failure_code: z.string().max(200).nullable().default(null),
-  created_at: knowledgeTimestampSchema,
-  updated_at: knowledgeTimestampSchema,
-  processing_started_at: optionalNullableTimestampSchema,
-  processing_completed_at: optionalNullableTimestampSchema,
-  ready_at: optionalNullableTimestampSchema,
-  published_at: optionalNullableTimestampSchema,
-  superseded_at: optionalNullableTimestampSchema,
-  archived_at: optionalNullableTimestampSchema,
-  document_title: z.string().min(1),
-  is_current_published_version: z.boolean(),
-  source_content_length: positiveIntegerSchema,
-}) satisfies z.ZodType<ApiSchemas['KnowledgeVersionDetailResponse']>;
+export const knowledgeVersionDetailSchema = z
+  .object({
+    version_id: knowledgeIdSchema,
+    document_id: knowledgeIdSchema,
+    version_number: positiveIntegerSchema,
+    source_type: knowledgeSourceTypeSchema,
+    source_name: optionalNullableStringSchema,
+    content_hash: knowledgeContentHashSchema,
+    status: knowledgeVersionStatusSchema,
+    ingestion_status: knowledgeIngestionStatusSchema,
+    failure_code: z.string().max(200).nullable().default(null),
+    created_at: knowledgeTimestampSchema,
+    updated_at: knowledgeTimestampSchema,
+    processing_started_at: optionalNullableTimestampSchema,
+    processing_completed_at: optionalNullableTimestampSchema,
+    ready_at: optionalNullableTimestampSchema,
+    published_at: optionalNullableTimestampSchema,
+    superseded_at: optionalNullableTimestampSchema,
+    archived_at: optionalNullableTimestampSchema,
+    document_title: z.string().min(1),
+    is_current_published_version: z.boolean(),
+    source_content_length: positiveIntegerSchema,
+
+    /*
+     * Persisted embedding state reported by the backend.
+     * These values are authoritative for publish availability.
+     */
+    total_chunk_count: nonnegativeIntegerSchema,
+    embedded_chunk_count: nonnegativeIntegerSchema,
+    is_fully_embedded: z.boolean(),
+  })
+  .superRefine((version, context) => {
+    if (version.embedded_chunk_count > version.total_chunk_count) {
+      context.addIssue({
+        code: 'custom',
+        path: ['embedded_chunk_count'],
+        message: 'Embedded chunk count cannot exceed total chunk count.',
+      });
+    }
+
+    const expectedFullyEmbedded =
+      version.total_chunk_count > 0 && version.embedded_chunk_count === version.total_chunk_count;
+
+    if (version.is_fully_embedded !== expectedFullyEmbedded) {
+      context.addIssue({
+        code: 'custom',
+        path: ['is_fully_embedded'],
+        message: 'Embedding completion state is inconsistent with chunk counts.',
+      });
+    }
+  }) satisfies z.ZodType<ApiSchemas['KnowledgeVersionDetailResponse']>;
 
 /* -------------------------------------------------------------------------- */
 /*                              Pagination checks                             */
