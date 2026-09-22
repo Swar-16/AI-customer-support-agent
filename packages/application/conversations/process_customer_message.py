@@ -48,6 +48,7 @@ from packages.application.conversations.conversation_context import Conversation
 from packages.ai.telemetry.llm_call_recorder import LLMCallTelemetryRecorder
 from packages.ai.telemetry.stage_event_sink import DatabaseStageEventSink
 from packages.ai.telemetry.embedding_recorder import EmbeddingTelemetryRecorder
+from packages.knowledge.embeddings.provider.query_cache import QueryEmbeddingCache
 
 
 # Internal repository bundle
@@ -296,8 +297,9 @@ class ProcessCustomerMessage:
     TERMINAL_STAGES: Final[frozenset[PipelineStage]] = frozenset({*SUCCESSFUL_TERMINAL_STAGES, PipelineStage.FAILED,})
 
     def __init__(self, *, uow_factory: UnitOfWorkFactory, pipeline_factory: AIPipelineFactory, embedding_provider: EmbeddingProvider,
-                 embedding_input_descriptor: EmbeddingInputDescriptor, retrieval_profile: RetrievalProfile, grounding_context_budget: GroundingContextBudget,
-                 knowledge_application: KnowledgeApplicationComponents, conversation_context_builder: ConversationContextBuilder | None = None
+                 embedding_input_descriptor: EmbeddingInputDescriptor, retrieval_profile: RetrievalProfile,
+                 grounding_context_budget: GroundingContextBudget, knowledge_application: KnowledgeApplicationComponents, 
+                 conversation_context_builder: ConversationContextBuilder | None = None, query_embedding_cache: QueryEmbeddingCache | None = None
     ) -> None:
         if uow_factory is None:
             raise TypeError("uow_factory cannot be None")
@@ -340,6 +342,9 @@ class ProcessCustomerMessage:
         
         if conversation_context_builder is not None and not isinstance(conversation_context_builder, ConversationContextBuilder):
             raise TypeError("conversation_context_builder must be a ConversationContextBuilder instance or None")
+        
+        if query_embedding_cache is not None and not isinstance(query_embedding_cache, QueryEmbeddingCache):
+            raise TypeError("query_embedding_cache must be a QueryEmbeddingCache instance or None")
 
         self._uow_factory = uow_factory
         self._pipeline_factory = pipeline_factory
@@ -348,6 +353,7 @@ class ProcessCustomerMessage:
         self._retrieval_profile = retrieval_profile
         self._grounding_context_budget = grounding_context_budget
         self._knowledge_application = knowledge_application
+        self._query_embedding_cache = query_embedding_cache
         self._conversation_context_builder = conversation_context_builder if conversation_context_builder is not None else ConversationContextBuilder()
 
     # Public API
@@ -527,20 +533,19 @@ class ProcessCustomerMessage:
             },
         )
         embedding_recorder = EmbeddingTelemetryRecorder(uow_factory=self._uow_factory)
-        instrumented_embedding_provider = (
-            InstrumentedEmbeddingProvider(
-                provider=self._embedding_provider,
-                recorder=embedding_recorder,
-                context=EmbeddingCallContext(
-                    purpose="query",
-                    ai_run_id=work.ai_run_id,
-                    trace_id=work.trace_id,
-                    metadata={
-                        "workflow": "customer_support_retrieval",
-                        "conversation_id": str(work.conversation_id),
-                    },
-                ),
-            )
+        instrumented_embedding_provider = InstrumentedEmbeddingProvider(
+            provider=self._embedding_provider,
+            recorder=embedding_recorder,
+            context=EmbeddingCallContext(
+                purpose="query",
+                ai_run_id=work.ai_run_id,
+                trace_id=work.trace_id,
+                metadata={
+                    "workflow": "customer_support_retrieval",
+                    "conversation_id": str(work.conversation_id),
+                },
+            ),
+            query_cache=self._query_embedding_cache,
         )
 
         def build_answer_service(response_generator: GroundedResponseGenerator) -> AnswerService:

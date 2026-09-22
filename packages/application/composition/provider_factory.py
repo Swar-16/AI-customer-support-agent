@@ -5,6 +5,8 @@ from decimal import Decimal
 from packages.ai.providers.base import LLMProvider
 from packages.ai.providers.groq import GroqProvider, GroqProviderConfig
 from packages.ai.providers.mock import MockLLMProvider
+from packages.ai.providers.capacity_limited import CapacityLimitedLLMProvider, ProviderCapacityConfig
+from packages.ai.providers.resilient import ResilientLLMProvider, ProviderRetryConfig
 from packages.config.settings import Settings
 
 class ProviderConfigurationError(RuntimeError):
@@ -28,7 +30,26 @@ def create_llm_provider(*, settings: Settings) -> LLMProvider:
 
     provider_name = settings.llm_provider.strip().lower()
     if provider_name == "groq":
-        return _create_groq_provider(settings=settings)
+        groq_provider = _create_groq_provider(settings=settings)
+
+        capacity_limited_provider = CapacityLimitedLLMProvider(
+            provider=groq_provider,
+            config=ProviderCapacityConfig(
+                max_concurrency=settings.ai_provider_max_concurrency,
+                queue_timeout_seconds=settings.ai_provider_queue_timeout_seconds,
+                minimum_start_interval_seconds=settings.ai_provider_minimum_start_interval_seconds,
+            ),
+        )
+
+        return ResilientLLMProvider(
+            provider=capacity_limited_provider,
+            config=ProviderRetryConfig(
+                max_retries=settings.ai_provider_max_retries,
+                base_delay_seconds=settings.ai_provider_retry_base_delay_seconds,
+                maximum_delay_seconds=settings.ai_provider_retry_maximum_delay_seconds,
+                jitter_ratio=settings.ai_provider_retry_jitter_ratio,
+            ),
+        )
 
     if provider_name == "mock":
         return MockLLMProvider()

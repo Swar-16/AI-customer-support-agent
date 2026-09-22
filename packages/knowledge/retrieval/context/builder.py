@@ -76,7 +76,6 @@ class GroundingContextBuilder:
 
     Candidate text is included whole or excluded whole. This preserves a direct relationship between grounding content and its persisted chunk.
     """
-
     def __init__(self, *, token_estimator: TokenEstimator) -> None:
         if not isinstance(token_estimator, TokenEstimator):
             raise TypeError("token_estimator must be a TokenEstimator instance.")
@@ -104,7 +103,9 @@ class GroundingContextBuilder:
 
         selected: list[GroundingContextBlock] = []
         selected_candidates: list[RetrievalCandidate] = []
-        seen_chunk_ids = set()
+        seen_chunk_ids: set[object] = set()
+        selected_per_document: dict[object, int] = {}
+
         total_tokens = 0
         excluded_by_budget = False
 
@@ -114,6 +115,11 @@ class GroundingContextBuilder:
 
             seen_chunk_ids.add(candidate.chunk_id)
             if self._is_redundant(candidate=candidate, selected_candidates=selected_candidates):
+                continue
+            
+            document_block_count = selected_per_document.get(candidate.document_id, 0)
+            if document_block_count >= budget.max_blocks_per_document:
+                excluded_by_budget = True
                 continue
 
             if len(selected) >= budget.max_blocks:
@@ -132,7 +138,9 @@ class GroundingContextBuilder:
 
             selected.append(block)
             selected_candidates.append(candidate)
+            seen_chunk_ids.add(candidate.chunk_id)
             total_tokens += block_tokens
+            selected_per_document[candidate.document_id] = selected_per_document.get(candidate.document_id, 0) + 1
 
         return GroundingContext(
             query=retrieval_result.query,

@@ -19,6 +19,7 @@ from packages.guardrails.evaluator import GuardrailEvaluator
 from packages.guardrails.models import GuardrailContext, GuardrailOutcome
 from packages.ai.orchestration.direct_response import DirectResponseResolutionError, DirectResponseResolver
 from packages.ai.intent.taxonomy import IntentType
+from packages.ai.intent.deterministic_router import DeterministicIntentRouter
 
 _DEFAULT_CLARIFICATION_RESPONSE: Final[str] = (
     "I need a little more information to help with this request. "
@@ -305,14 +306,17 @@ class AIOrchestrator:
         - escalation.
     """
     def __init__(self, *, intent_classifier: IntentClassifier, decision_engine: DecisionEngine, answer_service: AnswerService | None = None,
-                 direct_response_resolver: DirectResponseResolver | None = None, guardrail_evaluator: GuardrailEvaluator | None = None,
-                 observer: OrchestrationObserver | None = None, config: AIOrchestratorConfig | None = None
+                 deterministic_intent_router: DeterministicIntentRouter | None = None, direct_response_resolver: DirectResponseResolver | None = None,
+                 guardrail_evaluator: GuardrailEvaluator | None = None, observer: OrchestrationObserver | None = None, config: AIOrchestratorConfig | None = None
     ) -> None:
         if intent_classifier is None:
             raise TypeError("intent_classifier cannot be None")
 
         if decision_engine is None:
             raise TypeError("decision_engine cannot be None")
+        
+        if deterministic_intent_router is not None and not isinstance(deterministic_intent_router, DeterministicIntentRouter):
+            raise TypeError("deterministic_intent_router must be a DeterministicIntentRouter instance or None")
 
         if answer_service is not None and not isinstance(answer_service, AnswerService):
             raise TypeError("answer_service must be an AnswerService instance or None")
@@ -329,6 +333,7 @@ class AIOrchestrator:
         if config is not None and not isinstance(config, AIOrchestratorConfig):
             raise TypeError("config must be an AIOrchestratorConfig instance or None")
 
+        self._deterministic_intent_router = deterministic_intent_router if deterministic_intent_router is not None else DeterministicIntentRouter()
         self._intent_classifier = intent_classifier
         self._decision_engine = decision_engine
         self._answer_service = answer_service
@@ -379,6 +384,13 @@ class AIOrchestrator:
     def _classify_intent(self, state: AIState) -> AIState:
         self._observer.stage_started(state=state, stage=PipelineStage.INTENT_CLASSIFIED)
         try:
+            deterministic_route = self._deterministic_intent_router.route(customer_message=state.customer_message)
+            if deterministic_route is not None:
+                next_state = state.with_intent(deterministic_route.intent_result)
+                self._observer.stage_completed(state=next_state, stage=PipelineStage.INTENT_CLASSIFIED)
+                
+                return next_state
+
             result = self._intent_classifier.classify(customer_message=state.customer_message, conversation_context=state.conversation_context)
             next_state = state.with_intent(result)
             self._observer.stage_completed(state=next_state, stage=PipelineStage.INTENT_CLASSIFIED)

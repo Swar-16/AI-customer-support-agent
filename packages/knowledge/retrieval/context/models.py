@@ -147,19 +147,17 @@ class GroundingContextBudget:
     """
     max_tokens: int
     max_blocks: int
+    max_blocks_per_document: int = 2
 
     def __post_init__(self) -> None:
-        if isinstance(self.max_tokens, bool) or not isinstance(self.max_tokens, int):
-            raise TypeError("max_tokens must be an integer.")
-
         if self.max_tokens <= 0:
-            raise ValueError("max_tokens must be greater than zero.")
-
-        if isinstance(self.max_blocks, bool) or not isinstance(self.max_blocks, int):
-            raise TypeError("max_blocks must be an integer.")
+            raise ValueError("max_tokens must be greater than zero")
 
         if self.max_blocks <= 0:
-            raise ValueError("max_blocks must be greater than zero.")
+            raise ValueError("max_blocks must be greater than zero")
+
+        if self.max_blocks_per_document <= 0:
+            raise ValueError("max_blocks_per_document must be greater than zero")
 
 def _select_retrieval_score(candidate: RetrievalCandidate) -> float | None:
     """
