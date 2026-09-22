@@ -377,6 +377,12 @@
 /* Lifecycle actions                                                          */
 /* -------------------------------------------------------------------------- */
 
+.knowledge-version-detail__lifecycle-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
 .knowledge-version-detail__lifecycle-grid article.is-complete {
   background: linear-gradient(145deg, #f3fbf7, #fbfefd);
   border-color: #bcdcca;
@@ -401,7 +407,7 @@
 .knowledge-version-detail__lifecycle-grid article {
   display: flex;
   min-width: 0;
-  min-height: 15rem;
+  min-height: 17rem;
   flex-direction: column;
   gap: 0.8rem;
   padding: 1rem;
@@ -469,6 +475,59 @@
   color: var(--version-detail-muted);
   font-size: 0.73rem;
   line-height: 1.55;
+}
+
+.knowledge-version-detail__lifecycle-grid .knowledge-version-detail__embedding-progress {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  margin-top: 0.55rem;
+  padding: 0.28rem 0.52rem;
+  color: #70445b;
+  font-size: 0.68rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  background: #fff5fa;
+  border: 1px solid #efd2e2;
+  border-radius: 999px;
+}
+
+.knowledge-version-detail__embedding-state {
+  display: block;
+  margin-top: 0.18rem;
+  color: #776c73;
+  font-size: 0.7rem;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.knowledge-version-detail__lifecycle-grid
+  article.is-available
+  .knowledge-version-detail__embedding-progress {
+  color: var(--version-detail-accent-dark);
+  background: #fff0f8;
+  border-color: #edc7dc;
+}
+
+.knowledge-version-detail__lifecycle-grid
+  article.is-available
+  .knowledge-version-detail__embedding-state {
+  color: var(--version-detail-accent-dark);
+}
+
+.knowledge-version-detail__lifecycle-grid
+  article.is-complete
+  .knowledge-version-detail__embedding-progress {
+  color: #176647;
+  background: #e7f7ef;
+  border-color: #c6e6d7;
+}
+
+.knowledge-version-detail__lifecycle-grid
+  article.is-complete
+  .knowledge-version-detail__embedding-state {
+  color: #176647;
 }
 
 .knowledge-version-detail__lifecycle-grid button {

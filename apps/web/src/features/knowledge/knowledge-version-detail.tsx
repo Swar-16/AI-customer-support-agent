@@ -70,8 +70,6 @@ export function KnowledgeVersionDetail() {
 
   const [publishConfirmationOpen, setPublishConfirmationOpen] = useState(false);
 
-  const [embeddedVersionId, setEmbeddedVersionId] = useState<string | null>(null);
-
   if (documentId === null || versionId === null) {
     return (
       <VersionPageState
@@ -136,11 +134,6 @@ export function KnowledgeVersionDetail() {
 
   const documentActive = document.status === 'active';
 
-  const embeddingConfirmed =
-    embeddedVersionId === version.version_id ||
-    version.status === 'published' ||
-    version.status === 'superseded';
-
   const canProcess =
     documentActive &&
     ((version.status === 'draft' && version.ingestion_status === 'pending') ||
@@ -150,13 +143,21 @@ export function KnowledgeVersionDetail() {
     documentActive &&
     version.status === 'ready' &&
     version.ingestion_status === 'completed' &&
-    !embeddingConfirmed;
+    version.total_chunk_count > 0 &&
+    !version.is_fully_embedded;
 
-  const canPublish =
-    documentActive &&
-    version.status === 'ready' &&
-    version.ingestion_status === 'completed' &&
-    embeddingConfirmed;
+  const canPublish = documentActive && version.status === 'ready' && version.is_fully_embedded;
+
+  const embeddingProgress = `${version.embedded_chunk_count} of ${version.total_chunk_count} chunks embedded`;
+
+  const embeddingStateLabel =
+    version.total_chunk_count === 0
+      ? 'Process this version before creating embeddings'
+      : version.is_fully_embedded
+        ? 'Ready to publish'
+        : version.embedded_chunk_count === 0
+          ? 'Embeddings not created'
+          : 'Embedding incomplete';
 
   const processing = processVersion.isPending;
 
@@ -167,6 +168,8 @@ export function KnowledgeVersionDetail() {
   const lifecyclePending = processing || embedding || publishing;
 
   const lifecycleError = processVersion.error ?? embedVersion.error ?? publishVersion.error;
+
+  const lifecycleConflict = lifecycleError instanceof SafeApiError && lifecycleError.status === 409;
 
   const lifecycleUnconfirmed =
     lifecycleError instanceof SafeApiError &&
@@ -189,7 +192,6 @@ export function KnowledgeVersionDetail() {
       return;
     }
 
-    setEmbeddedVersionId(null);
     resetLifecycleMutations();
 
     processVersion.mutate({
@@ -205,17 +207,10 @@ export function KnowledgeVersionDetail() {
 
     resetLifecycleMutations();
 
-    embedVersion.mutate(
-      {
-        documentId: resolvedDocumentId,
-        versionId: resolvedVersionId,
-      },
-      {
-        onSuccess: (response) => {
-          setEmbeddedVersionId(response.version_id);
-        },
-      },
-    );
+    embedVersion.mutate({
+      documentId: resolvedDocumentId,
+      versionId: resolvedVersionId,
+    });
   }
 
   function confirmPublication() {
@@ -324,7 +319,7 @@ export function KnowledgeVersionDetail() {
         <div
           className={[
             'knowledge-version-detail__notice',
-            lifecycleUnconfirmed
+            lifecycleConflict || lifecycleUnconfirmed
               ? 'knowledge-version-detail__notice--warning'
               : 'knowledge-version-detail__notice--error',
           ].join(' ')}
@@ -334,15 +329,19 @@ export function KnowledgeVersionDetail() {
 
           <div>
             <strong>
-              {lifecycleUnconfirmed
-                ? 'The action result could not be confirmed.'
-                : 'The lifecycle action failed.'}
+              {lifecycleConflict
+                ? 'The version lifecycle state changed.'
+                : lifecycleUnconfirmed
+                  ? 'The action result could not be confirmed.'
+                  : 'The lifecycle action failed.'}
             </strong>
 
             <span>
-              {lifecycleUnconfirmed
-                ? 'Refresh this version before attempting the action again.'
-                : lifecycleError.message}
+              {lifecycleConflict
+                ? 'The action is no longer valid for the current backend state. Refresh the version before trying again.'
+                : lifecycleUnconfirmed
+                  ? 'Refresh this version before attempting the action again.'
+                  : lifecycleError.message}
             </span>
 
             {getTraceId(lifecycleError) !== null && (
@@ -354,9 +353,11 @@ export function KnowledgeVersionDetail() {
 
           <button
             type="button"
-            onClick={lifecycleUnconfirmed ? refreshWorkspace : resetLifecycleMutations}
+            onClick={
+              lifecycleConflict || lifecycleUnconfirmed ? refreshWorkspace : resetLifecycleMutations
+            }
           >
-            {lifecycleUnconfirmed ? 'Refresh' : 'Dismiss'}
+            {lifecycleConflict || lifecycleUnconfirmed ? 'Refresh version' : 'Dismiss'}
           </button>
         </div>
       )}
@@ -437,16 +438,27 @@ export function KnowledgeVersionDetail() {
             </button>
           </article>
 
-          <article className={embeddingConfirmed ? 'is-complete' : canEmbed ? 'is-available' : ''}>
+          <article
+            className={version.is_fully_embedded ? 'is-complete' : canEmbed ? 'is-available' : ''}
+          >
             <span aria-hidden="true">
               <Database size={21} />
             </span>
 
             <div>
               <p>Step 2</p>
+
               <h4>Create embeddings</h4>
 
               <span>Generate or reconcile vector artifacts for the processed chunks.</span>
+
+              <span className="knowledge-version-detail__embedding-progress">
+                {embeddingProgress}
+              </span>
+
+              <strong className="knowledge-version-detail__embedding-state">
+                {embeddingStateLabel}
+              </strong>
             </div>
 
             <button
@@ -456,15 +468,15 @@ export function KnowledgeVersionDetail() {
             >
               {embedding ? (
                 <LoaderCircle size={16} className="is-spinning" aria-hidden="true" />
-              ) : embeddingConfirmed ? (
+              ) : version.is_fully_embedded ? (
                 <CheckCircle2 size={16} aria-hidden="true" />
               ) : null}
 
               <span>
                 {embedding
-                  ? 'Embedding…'
-                  : embeddingConfirmed
-                    ? 'Embeddings created'
+                  ? 'Creating embeddings…'
+                  : version.is_fully_embedded
+                    ? 'Embeddings complete'
                     : 'Create embeddings'}
               </span>
             </button>
@@ -486,7 +498,7 @@ export function KnowledgeVersionDetail() {
               type="button"
               disabled={!canPublish || lifecyclePending || lifecycleUnconfirmed}
               onClick={() => {
-                // resetLifecycleMutations();
+                resetLifecycleMutations();
                 setPublishConfirmationOpen(true);
               }}
             >

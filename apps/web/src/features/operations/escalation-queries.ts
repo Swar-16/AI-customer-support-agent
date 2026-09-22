@@ -138,28 +138,23 @@ export function useUpdateEscalationStatus() {
       );
     },
 
-    onSuccess: async (_result, variables) => {
+    onSettled: async (_result, _error, variables) => {
       await Promise.all([
         queryClient.invalidateQueries({
           queryKey: escalationKeys.lists(operatorId),
         }),
 
         queryClient.invalidateQueries({
-          queryKey: escalationKeys.detail(operatorId, variables.escalationId),
+          queryKey: escalationKeys.detail(
+            operatorId,
+            variables.escalationId,
+          ),
         }),
 
         /*
-         * Refresh Operations analytics and any ticket/escalation views that
-         * derive from the changed conversation.
-         */
-        queryClient.invalidateQueries({
-          queryKey: ['operations', operatorId],
-        }),
-
-        /*
-         * Lifecycle notices are persisted into conversation history by the
-         * backend. Never insert them manually.
-         */
+        * Escalation transitions can persist a customer-visible
+        * conversation notice.
+        */
         queryClient.invalidateQueries({
           queryKey: ['chat'],
         }),

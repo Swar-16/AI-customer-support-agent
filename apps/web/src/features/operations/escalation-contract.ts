@@ -120,16 +120,25 @@ export const escalationPageSchema = z
 
 export const escalationUpdateSchema = z
   .object({
-    escalation_id: z.uuid(),
-    conversation_id: z.uuid(),
+    escalation_id: escalationIdSchema,
+    conversation_id: escalationConversationIdSchema,
     ai_run_id: z.uuid().nullable().default(null),
     previous_status: escalationStatusSchema,
     current_status: escalationStatusSchema,
+
+    /*
+     * Backend-persisted customer-visible lifecycle notice.
+     * Null for an idempotent transition that made no change.
+     */
+    notification_message_id: z.uuid().nullable().default(null),
+
     resolved_at: timestampSchema.nullable().default(null),
     updated_at: timestampSchema,
     changed: z.boolean(),
   })
-  .strict();
+  .strict() satisfies z.ZodType<
+    components['schemas']['UpdateEscalationResponse']
+  >;
 
 export const linkedEscalationTicketSchema = z.object({
   ticket_id: z.uuid(),

@@ -2,7 +2,7 @@
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
-import { ArrowUp, LoaderCircle } from 'lucide-react';
+import { ArrowUp, LoaderCircle, Sparkles } from 'lucide-react';
 
 import { TransportContext } from '../../shared/api/transport-context';
 import { useSessionController } from '../../shared/auth/session-context';
@@ -26,6 +26,9 @@ import './conversation-draft.css';
 interface ConversationDraftProps {
   readonly onRequestLeave: () => void;
 }
+
+const FALLBACK_MESSAGE =
+  'I’m sorry, but I couldn’t prepare a reliable answer to that request. Please try rephrasing your question, or continue to the conversation and request human support.';
 
 export function ConversationDraft({ onRequestLeave }: ConversationDraftProps) {
   const request = useContext(TransportContext);
@@ -216,6 +219,10 @@ export function ConversationDraft({ onRequestLeave }: ConversationDraftProps) {
                     : submitted.phase,
         };
 
+  const terminalFailure = state.phase === 'terminal' && state.result.outcome === 'failed';
+
+  const showComposer = state.phase !== 'terminal' && state.phase !== 'disposed';
+
   return (
     <section
       className={`conversation-draft message-composer${outgoing ? ' conversation-draft--submitted' : ''}`}
@@ -233,66 +240,98 @@ export function ConversationDraft({ onRequestLeave }: ConversationDraftProps) {
         </div>
       )}
 
-      <form
-        noValidate
-        aria-label="Start a conversation"
-        aria-busy={state.phase === 'pending'}
-        onSubmit={(event) => {
-          event.preventDefault();
-          submit();
-        }}
-      >
-        <label className="conversation-draft__label" htmlFor="draft-message">
-          Your message
-        </label>
+      {terminalFailure && (
+        <article
+          className="conversation-draft__fallback"
+          role="status"
+          aria-label="Support assistant response"
+        >
+          <span aria-hidden="true">
+            <Sparkles size={19} />
+          </span>
 
-        <div className="conversation-draft__input">
-          <textarea
-            id="draft-message"
-            ref={textareaRef}
-            value={message}
-            rows={1}
-            disabled={!editable}
-            placeholder="How can we help?"
-            aria-describedby={validationError ? 'draft-help draft-validation' : 'draft-help'}
-            aria-invalid={validationError !== null}
-            onChange={(event) => {
-              setMessage(event.target.value);
-              setValidationError(null);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && event.ctrlKey && !event.nativeEvent.isComposing) {
-                event.preventDefault();
-                submit();
-              }
-            }}
-          />
+          <div>
+            <strong>Support assistant</strong>
 
-          <button
-            className="conversation-draft__send"
-            type="submit"
-            aria-label="Send first message"
-            title="Send first message"
-            disabled={!editable || message.trim().length === 0}
-          >
-            {state.phase === 'pending' ? (
-              <LoaderCircle className="conversation-draft__spinner" size={21} aria-hidden="true" />
-            ) : (
-              <ArrowUp size={21} aria-hidden="true" />
-            )}
-          </button>
-        </div>
+            <p>{FALLBACK_MESSAGE}</p>
 
-        <p id="draft-help" className="conversation-draft__hint">
-          Enter for a new line · Ctrl+Enter to send · Up to 20,000 characters
-        </p>
+            <button
+              type="button"
+              className="conversation-draft__action"
+              onClick={() => openConversation(state.result.data.conversation_id)}
+            >
+              Continue conversation
+            </button>
+          </div>
+        </article>
+      )}
 
-        {validationError && (
-          <p id="draft-validation" role="alert">
-            {validationError}
+      {showComposer && (
+        <form
+          noValidate
+          aria-label="Start a conversation"
+          aria-busy={state.phase === 'pending'}
+          onSubmit={(event) => {
+            event.preventDefault();
+            submit();
+          }}
+        >
+          <label className="conversation-draft__label" htmlFor="draft-message">
+            Your message
+          </label>
+
+          <div className="conversation-draft__input">
+            <textarea
+              id="draft-message"
+              ref={textareaRef}
+              value={message}
+              rows={1}
+              disabled={!editable}
+              placeholder="How can we help?"
+              aria-describedby={validationError ? 'draft-help draft-validation' : 'draft-help'}
+              aria-invalid={validationError !== null}
+              onChange={(event) => {
+                setMessage(event.target.value);
+                setValidationError(null);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && event.ctrlKey && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  submit();
+                }
+              }}
+            />
+
+            <button
+              className="conversation-draft__send"
+              type="submit"
+              aria-label="Send first message"
+              title="Send first message"
+              disabled={!editable || message.trim().length === 0}
+            >
+              {state.phase === 'pending' ? (
+                <LoaderCircle
+                  className="conversation-draft__spinner"
+                  size={21}
+                  aria-hidden="true"
+                />
+              ) : (
+                <ArrowUp size={21} aria-hidden="true" />
+              )}
+            </button>
+          </div>
+
+          <p id="draft-help" className="conversation-draft__hint">
+            Enter for a new line · Ctrl+Enter to send · Up to 20,000 characters
           </p>
-        )}
-      </form>
+
+          {validationError && (
+            <p id="draft-validation" role="alert">
+              {validationError}
+            </p>
+          )}
+        </form>
+      )}
 
       {state.phase === 'uncertain' && (
         <div>
@@ -340,22 +379,6 @@ export function ConversationDraft({ onRequestLeave }: ConversationDraftProps) {
         </div>
       )}
 
-      {state.phase === 'terminal' && state.result.outcome === 'failed' && (
-        <div className="conversation-draft__status">
-          <p role="alert">
-            Your conversation and message were saved, but a response could not be completed. Open
-            the saved conversation to review its history.
-          </p>
-          <button
-            type="button"
-            className="conversation-draft__action"
-            onClick={() => openConversation(state.result.data.conversation_id)}
-          >
-            Open saved conversation
-          </button>
-        </div>
-      )}
-
       {state.phase === 'blocked' && (
         <p role="alert">
           {state.error.message} Refresh the conversation list before attempting another start.
@@ -365,9 +388,15 @@ export function ConversationDraft({ onRequestLeave }: ConversationDraftProps) {
       {state.phase === 'disposed' && (
         <p role="status">Your session changed. Please sign in again.</p>
       )}
-      <button type="button" className="conversation-draft__action" onClick={onRequestLeave}>
-        Back to conversations
-      </button>
+      {state.phase === 'idle' && (
+        <button
+          type="button"
+          className="conversation-draft__action conversation-draft__action--secondary"
+          onClick={onRequestLeave}
+        >
+          Back to conversations
+        </button>
+      )}
     </section>
   );
 }

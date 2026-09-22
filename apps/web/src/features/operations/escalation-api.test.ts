@@ -161,7 +161,7 @@ describe('Escalation API', () => {
       }),
     );
 
-    const result = await api.updateStatus(ESCALATION_ID, 'in_review');
+    const result = await api.updateStatus(ESCALATION_ID, { status: 'in_review' });
 
     expect(result.ok).toBe(true);
 
@@ -178,7 +178,11 @@ describe('Escalation API', () => {
 
     fetchImpl.mockRejectedValue(new Error('Test connection failure'));
 
-    const result = await api.updateStatus(ESCALATION_ID, 'resolved');
+    const result = await api.updateStatus(ESCALATION_ID, {
+      status: 'resolved',
+      customer_message:
+        'Your support request has been resolved. Please contact us again if you need further assistance.',
+    });
 
     expect(result.ok).toBe(false);
     expect(fetchImpl).toHaveBeenCalledTimes(1);

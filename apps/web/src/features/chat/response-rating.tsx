@@ -78,11 +78,7 @@ export function ResponseRating({
    * visible without making another feedback request.
    */
   if (message.feedback != null) {
-    return (
-      <SavedResponseRating
-        rating={message.feedback.rating}
-      />
-    );
+    return <SavedResponseRating rating={message.feedback.rating} />;
   }
 
   /*
@@ -101,11 +97,7 @@ export function ResponseRating({
 
   return (
     <RatingForm
-      key={
-        `${target.conversationId}:` +
-        `${target.responseMessageId}:` +
-        target.aiRunId
-      }
+      key={`${target.conversationId}:` + `${target.responseMessageId}:` + target.aiRunId}
       target={target}
     />
   );

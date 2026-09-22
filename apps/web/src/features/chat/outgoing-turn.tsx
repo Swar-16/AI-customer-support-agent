@@ -9,8 +9,8 @@ const deliveryLabels: Record<OutgoingMessage['phase'], string> = {
   processing: 'Conversation created · response pending',
   syncing: 'Message saved',
   saved: 'Message saved',
-  uncertain: 'Delivery unconfirmed · review history before sending again',
-  rejected: 'Request not accepted · review the message field',
+  uncertain: 'Checking delivery status…',
+  rejected: 'Message not sent',
 };
 
 export function OutgoingTurn({
