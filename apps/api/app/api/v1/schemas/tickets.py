@@ -77,25 +77,33 @@ class UpdateTicketRequest(TicketAPIModel):
     assigned_agent_id: uuid.UUID | None = None
     unassign: bool = False
     resolution_summary: str | None = Field(default=None, max_length=5_000)
+    customer_message: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=2_000,
+        description="Specific customer-visible information request. Required only when target_status is 'waiting_for_customer'.",
+    )
 
-    @field_validator("resolution_summary")
+    @field_validator("resolution_summary", "customer_message",)
     @classmethod
-    def validate_resolution_summary(cls, value: str | None) -> str | None:
+    def validate_optional_customer_text(cls, value: str | None) -> str | None:
         if value is None:
             return None
 
         normalized = " ".join(value.split())
         if not normalized:
-            raise ValueError("resolution_summary cannot be blank")
+            raise ValueError("customer-visible text cannot be blank")
 
         return normalized
 
     @model_validator(mode="after")
-    def validate_mutation(self) -> UpdateTicketRequest:
+    def validate_mutation(self) -> "UpdateTicketRequest":
         if self.assigned_agent_id is not None and self.unassign:
             raise ValueError("assigned_agent_id and unassign cannot be supplied together")
 
-        has_mutation = any((self.target_status is not None, self.priority is not None, self.category is not None, self.assigned_agent_id is not None, self.unassign,))
+        has_mutation = any((
+            self.target_status is not None, self.priority is not None, self.category is not None, self.assigned_agent_id is not None, self.unassign,
+        ))
         if not has_mutation:
             raise ValueError("at least one ticket mutation must be supplied")
 
@@ -104,6 +112,12 @@ class UpdateTicketRequest(TicketAPIModel):
 
         if self.target_status != "resolved" and self.resolution_summary is not None:
             raise ValueError("resolution_summary may only be supplied when target_status='resolved'")
+
+        if self.target_status == "waiting_for_customer" and self.customer_message is None:
+            raise ValueError("customer_message is required when target_status='waiting_for_customer'")
+
+        if self.target_status != "waiting_for_customer" and self.customer_message is not None:
+            raise ValueError("customer_message may only be supplied when target_status='waiting_for_customer'")
 
         return self
 
@@ -125,6 +139,10 @@ class UpdateTicketResponse(TicketAPIModel):
     closed_at: datetime | None = None
     updated_at: datetime
     changed: bool
+    notification_message_id: uuid.UUID | None = Field(
+        default=None,
+        description="Customer-visible lifecycle notification created for a ticket-status transition. Null when the status did not change.",
+    )
 
 # Comments
 class AddTicketCommentRequest(TicketAPIModel):

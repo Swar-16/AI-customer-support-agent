@@ -1,6 +1,7 @@
+// apps/web/src/features/chat/message-composer.tsx
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
-import { ArrowUp } from 'lucide-react';
+import { ArrowUp, RefreshCcw, Sparkles } from 'lucide-react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 
@@ -20,7 +21,13 @@ type MessageForm = z.infer<typeof formSchema>;
 interface MessageComposerProps {
   readonly status: Conversation['status'];
   readonly disabled?: boolean;
+
+  /*
+   * Retained temporarily for compatibility with the parent component.
+   * The simplified recovery flow no longer requires explicit discarding.
+   */
   readonly onDiscardOutgoing?: () => void;
+
   readonly onSend: (message: string) => Promise<TransportResult<SendMessageResult>>;
 
   /**
@@ -31,41 +38,14 @@ interface MessageComposerProps {
   readonly onReconcile: () => Promise<boolean>;
 }
 
-type Notice = {
-  readonly tone: 'status' | 'alert';
+interface Notice {
+  readonly kind: 'fallback' | 'alert' | 'status';
   readonly text: string;
-};
-
-const UNCERTAIN_MESSAGE =
-  'The outcome could not be confirmed. Your message may already be saved or still processing. Review the latest history before writing another message.';
-
-function successfulNotice(result: SendMessageResult): Notice {
-  if (!result.succeeded) {
-    return {
-      tone: 'alert',
-      text: 'Your message was received, but processing did not complete. Review the conversation before continuing.',
-    };
-  }
-
-  if (result.escalation_id != null) {
-    return {
-      tone: 'status',
-      text: 'Your message was received and an escalation was created for human review.',
-    };
-  }
-
-  if (result.assistant_message_id != null) {
-    return {
-      tone: 'status',
-      text: 'Your message was received and an assistant response was saved.',
-    };
-  }
-
-  return {
-    tone: 'status',
-    text: 'Your message was received. No assistant response was returned.',
-  };
+  readonly allowRefresh?: boolean;
 }
+
+const FALLBACK_MESSAGE =
+  'I’m sorry, but I couldn’t prepare a reliable answer to that request. Please try rephrasing your question, or request human support if you would like help from a support agent.';
 
 function resizeMessageInput(element: HTMLTextAreaElement) {
   const maximum = Number.parseFloat(window.getComputedStyle(element).maxHeight);
@@ -75,6 +55,7 @@ function resizeMessageInput(element: HTMLTextAreaElement) {
   element.style.height = '0px';
 
   const needed = element.scrollHeight;
+
   element.style.height = `${Math.min(needed, limit)}px`;
   element.style.overflowY = needed > limit ? 'auto' : 'hidden';
 }
@@ -84,13 +65,39 @@ export function MessageComposer({
   disabled = false,
   onSend,
   onReconcile,
-  onDiscardOutgoing,
 }: MessageComposerProps) {
   const id = useId();
   const inFlight = useRef(false);
   const formRef = useRef<HTMLFormElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const focusAfterSubmitRef = useRef(false);
+
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<Notice | null>(null);
+
+  const {
+    register,
+    control,
+    handleSubmit,
+    reset,
+    formState: { errors },
+  } = useForm<MessageForm>({
+    resolver: zodResolver(formSchema),
+    defaultValues: {
+      message: '',
+    },
+  });
+
+  const message = useWatch({
+    control,
+    name: 'message',
+    defaultValue: '',
+  });
+
+  useNavigationProtection(message.length > 0 || busy);
+  useDraftUnloadWarning(message.length > 0 || busy);
+
+  const messageField = register('message');
 
   useEffect(() => {
     function trackFocus(event: FocusEvent) {
@@ -101,7 +108,6 @@ export function MessageComposer({
         target !== document.body &&
         !formRef.current?.contains(target)
       ) {
-        // Do not steal focus from support details or another control.
         focusAfterSubmitRef.current = false;
       }
     }
@@ -113,46 +119,29 @@ export function MessageComposer({
     };
   }, []);
 
-  const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<Notice | null>(null);
-  const [reviewRequired, setReviewRequired] = useState(false);
-  const [historyRefreshed, setHistoryRefreshed] = useState(false);
-  const [reviewed, setReviewed] = useState(false);
-
-  const {
-    register,
-    control,
-    handleSubmit,
-    reset,
-    formState: { errors },
-  } = useForm<MessageForm>({
-    resolver: zodResolver(formSchema),
-    defaultValues: { message: '' },
-  });
-
-  const message = useWatch({
-    control,
-    name: 'message',
-    defaultValue: '',
-  });
-
-  useNavigationProtection(message.length > 0 || busy || reviewRequired);
-
-  useDraftUnloadWarning(message.length > 0 || busy || reviewRequired);
-
-  const messageField = register('message');
-
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
-    if (textarea) resizeMessageInput(textarea);
+
+    if (textarea !== null) {
+      resizeMessageInput(textarea);
+    }
   }, [message]);
 
   useEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-
     function resize() {
-      if (textarea) resizeMessageInput(textarea);
+      const current = textareaRef.current;
+
+      if (current === null) {
+        return;
+      }
+
+      resizeMessageInput(current);
+    }
+
+    const initialElement = textareaRef.current;
+
+    if (initialElement === null) {
+      return;
     }
 
     window.addEventListener('resize', resize);
@@ -160,16 +149,22 @@ export function MessageComposer({
     let observer: ResizeObserver | undefined;
 
     if (typeof ResizeObserver === 'function') {
-      let previousWidth = textarea.clientWidth;
+      let previousWidth = initialElement.clientWidth;
 
       observer = new ResizeObserver(() => {
-        if (textarea.clientWidth !== previousWidth) {
-          previousWidth = textarea.clientWidth;
-          resize();
+        const current = textareaRef.current;
+
+        if (current === null) {
+          return;
+        }
+
+        if (current.clientWidth !== previousWidth) {
+          previousWidth = current.clientWidth;
+          resizeMessageInput(current);
         }
       });
 
-      observer.observe(textarea);
+      observer.observe(initialElement);
     }
 
     return () => {
@@ -185,36 +180,28 @@ export function MessageComposer({
     status === 'escalated';
 
   const unavailable = disabled || !canAcceptMessages;
-  const inputDisabled = unavailable || busy || reviewRequired;
+  const inputDisabled = unavailable || busy;
+
   useEffect(() => {
-    if (!busy && !inputDisabled && focusAfterSubmitRef.current) {
+    if (!inputDisabled && focusAfterSubmitRef.current) {
       focusAfterSubmitRef.current = false;
       textareaRef.current?.focus({ preventScroll: true });
     }
-  }, [busy, inputDisabled]);
-
-  function requireReview(text: string) {
-    setReviewRequired(true);
-    setHistoryRefreshed(false);
-    setReviewed(false);
-    setNotice({ tone: 'alert', text });
-  }
+  }, [inputDisabled]);
 
   async function reconcile(): Promise<boolean> {
     try {
       return await onReconcile();
     } catch {
-      // Never expose exceptions from networking or query callbacks.
       return false;
     }
   }
 
   async function submit(values: MessageForm) {
     setNotice(null);
-    setHistoryRefreshed(false);
-    setReviewed(false);
-    // The validated draft remains in this function's memory while sending.
-    // Clear the visible input immediately, without persisting it anywhere.
+
+    // The submitted value remains available inside this function if recovery
+    // is required. The visible composer is cleared immediately.
     reset({ message: '' });
 
     let result: TransportResult<SendMessageResult>;
@@ -223,72 +210,101 @@ export function MessageComposer({
       result = await onSend(values.message);
     } catch {
       reset({ message: values.message });
-      requireReview(UNCERTAIN_MESSAGE);
-      setHistoryRefreshed(await reconcile());
+
+      const refreshed = await reconcile();
+
+      setNotice({
+        kind: 'alert',
+        text: refreshed
+          ? 'We could not confirm whether that message was delivered. The latest conversation history has been refreshed; please check it before trying again.'
+          : 'We could not confirm whether that message was delivered. Please refresh the conversation history before trying again.',
+        allowRefresh: true,
+      });
+
       return;
     }
 
     if (result.ok) {
-      // A confirmed response identifies the persisted customer message.
-      // Clear the draft even if subsequent history refresh fails.
-      // reset({ message: '' });
-      setNotice(successfulNotice(result.data));
-
       const refreshed = await reconcile();
 
-      if (!refreshed) {
-        requireReview(
-          'Your message was received, but the latest history could not be loaded. Refresh the history before continuing.',
-        );
-      } else if (!result.data.succeeded) {
-        requireReview(
-          'Your message was received, but processing did not complete. Review the refreshed history before continuing.',
-        );
-        setHistoryRefreshed(true);
+      if (!result.data.succeeded) {
+        setNotice({
+          kind: 'fallback',
+          text: FALLBACK_MESSAGE,
+        });
+
+        return;
       }
 
+      if (!refreshed) {
+        setNotice({
+          kind: 'alert',
+          text: 'Your message was saved, but the latest response could not be loaded. Refresh the conversation history to see it.',
+          allowRefresh: true,
+        });
+
+        return;
+      }
+
+      // The refreshed history now displays the authoritative backend response.
+      setNotice(null);
       return;
     }
 
-    // The submission was not acknowledged. Restore the draft for recovery.
     reset({ message: values.message });
 
     const uncertain =
       result.error.kind !== 'http' || result.error.status === null || result.error.status >= 500;
 
     if (uncertain) {
-      requireReview(UNCERTAIN_MESSAGE);
-      setHistoryRefreshed(await reconcile());
+      const refreshed = await reconcile();
+
+      setNotice({
+        kind: 'alert',
+        text: refreshed
+          ? 'Delivery could not be confirmed. The latest conversation history has been refreshed; please check it before resending.'
+          : 'Delivery could not be confirmed. Refresh the conversation history before resending.',
+        allowRefresh: true,
+      });
+
       return;
     }
 
-    // SafeApiError owns this allowlisted message; never use raw API errors.
-    setNotice({ tone: 'alert', text: result.error.message });
-
-    // A conflict may mean another request changed the lifecycle.
     if (result.error.status === 409) {
-      requireReview(
-        'The conversation could not accept this message. Review its current status and history before continuing.',
-      );
-      setHistoryRefreshed(await reconcile());
+      await reconcile();
+
+      setNotice({
+        kind: 'status',
+        text: 'The conversation state changed before this message could be accepted. Its latest status has been loaded.',
+      });
+
+      return;
     }
+
+    setNotice({
+      kind: 'alert',
+      text: result.error.message,
+    });
   }
 
   async function refreshHistory() {
-    if (inFlight.current) return;
+    if (inFlight.current) {
+      return;
+    }
 
     inFlight.current = true;
     setBusy(true);
-    setReviewed(false);
 
     try {
       const refreshed = await reconcile();
-      setHistoryRefreshed(refreshed);
 
-      if (!refreshed) {
+      if (refreshed) {
+        setNotice((current) => (current?.kind === 'fallback' ? current : null));
+      } else {
         setNotice({
-          tone: 'alert',
-          text: 'The latest history could not be loaded. Sending remains paused.',
+          kind: 'alert',
+          text: 'The latest conversation history is still unavailable. You can continue writing, but avoid resending the same message until its delivery is confirmed.',
+          allowRefresh: true,
         });
       }
     } finally {
@@ -297,30 +313,53 @@ export function MessageComposer({
     }
   }
 
-  function beginNewMessage() {
-    if (inFlight.current || unavailable || !historyRefreshed || !reviewed) {
-      return;
-    }
-
-    focusAfterSubmitRef.current = true;
-    // Explicitly discard the old draft; this action never sends anything.
-    reset({ message: '' });
-    onDiscardOutgoing?.();
-    setReviewRequired(false);
-    setHistoryRefreshed(false);
-    setReviewed(false);
-    setNotice({
-      tone: 'status',
-      text: 'Write a new message. The previous message will not be resent automatically.',
-    });
-  }
-
   return (
     <section
       className="message-composer"
       aria-label="Message composer"
-      data-navigation-blocked={busy || reviewRequired || message.length > 0}
+      data-navigation-blocked={busy || message.length > 0}
     >
+      {notice !== null && (
+        <div
+          className={`message-composer__notice message-composer__notice--${notice.kind}`}
+          role={notice.kind === 'alert' ? 'alert' : 'status'}
+        >
+          <span className="message-composer__notice-icon" aria-hidden="true">
+            {notice.kind === 'fallback' ? <Sparkles size={18} /> : <RefreshCcw size={17} />}
+          </span>
+
+          <div>
+            <strong>
+              {notice.kind === 'fallback'
+                ? 'Support assistant'
+                : notice.kind === 'alert'
+                  ? 'Delivery update'
+                  : 'Conversation updated'}
+            </strong>
+
+            <p>{notice.text}</p>
+
+            {notice.allowRefresh === true && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  void refreshHistory();
+                }}
+              >
+                <RefreshCcw
+                  size={15}
+                  className={busy ? 'is-spinning' : undefined}
+                  aria-hidden="true"
+                />
+
+                <span>{busy ? 'Refreshing…' : 'Refresh history'}</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {!canAcceptMessages && (
         <p role="status">This conversation is {status}. New messages cannot be sent.</p>
       )}
@@ -333,20 +372,25 @@ export function MessageComposer({
         onSubmit={(event) => {
           event.preventDefault();
 
-          if (inFlight.current || inputDisabled) return;
+          if (inFlight.current || inputDisabled) {
+            return;
+          }
 
           const activeElement = document.activeElement;
+
           focusAfterSubmitRef.current =
             activeElement === document.body ||
             (activeElement !== null && event.currentTarget.contains(activeElement));
 
-          // Acquire the lock before asynchronous validation.
           inFlight.current = true;
           setBusy(true);
 
           void handleSubmit(submit)(event)
             .catch(() => {
-              requireReview(UNCERTAIN_MESSAGE);
+              setNotice({
+                kind: 'alert',
+                text: 'The message could not be submitted. Please try again.',
+              });
             })
             .finally(() => {
               inFlight.current = false;
@@ -386,7 +430,7 @@ export function MessageComposer({
           <button
             type="submit"
             className="message-composer__send"
-            disabled={inputDisabled}
+            disabled={inputDisabled || message.trim().length === 0}
             aria-label="Send message"
             title="Send message (Ctrl+Enter)"
           >
@@ -405,44 +449,15 @@ export function MessageComposer({
         )}
       </form>
 
-      {busy && reviewRequired && <p role="status">Refreshing message history…</p>}
+      {busy && (
+        <div className="message-composer__processing" role="status">
+          <span className="message-composer__dots" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
 
-      {notice && <p role={notice.tone}>{notice.text}</p>}
-
-      {reviewRequired && (
-        <div className="message-composer__review">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => {
-              void refreshHistory();
-            }}
-          >
-            Refresh message history
-          </button>
-
-          <label>
-            <input
-              type="checkbox"
-              checked={reviewed}
-              disabled={busy || !historyRefreshed || unavailable}
-              onChange={(event) => setReviewed(event.target.checked)}
-            />
-            I have reviewed the latest messages and conversation status.
-          </label>
-
-          <button
-            type="button"
-            disabled={busy || unavailable || !historyRefreshed || !reviewed}
-            onClick={beginNewMessage}
-          >
-            Discard draft and write a new message
-          </button>
-
-          <p className="message-composer__help">
-            Refreshing history does not prove that an earlier request stopped processing. Avoid
-            repeating the same request.
-          </p>
+          <span>Preparing the latest response…</span>
         </div>
       )}
     </section>

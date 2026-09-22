@@ -42,6 +42,13 @@ class GetCustomerEscalationStatusQuery:
             raise ValueError("Customer escalation status requires a customer principal.")
 
 @dataclass(frozen=True, slots=True)
+class CustomerLinkedTicketView:
+    """Minimal linked-ticket information safe for customers."""
+    ticket_id: uuid.UUID
+    ticket_reference: str
+    status: str
+
+@dataclass(frozen=True, slots=True)
 class CustomerEscalationStatusView:
     """
     Customer-safe escalation representation.
@@ -61,6 +68,7 @@ class CustomerEscalationStatusView:
     created_at: datetime
     updated_at: datetime
     resolved_at: datetime | None
+    linked_ticket: CustomerLinkedTicketView | None = None
 
 class GetCustomerEscalationStatus:
     """Return the newest escalation belonging to an authenticated customer's own conversation."""
@@ -80,6 +88,9 @@ class GetCustomerEscalationStatus:
 
             if uow.escalations is None:
                 raise CustomerEscalationStatusContractError("Escalation repository is unavailable.")
+            
+            if uow.tickets is None:
+                raise CustomerEscalationStatusContractError("Ticket repository is unavailable.")
 
             conversation = uow.conversations.get_by_id(query.conversation_id)
 
@@ -93,6 +104,27 @@ class GetCustomerEscalationStatus:
             escalation = escalations[0]
             if escalation.id is None:
                 raise CustomerEscalationStatusContractError("Persisted escalation has no identifier.")
+            
+            ticket = uow.tickets.get_by_escalation_id(escalation.id)
+            linked_ticket: CustomerLinkedTicketView | None = None
+            if ticket is not None:
+                if ticket.id is None:
+                    raise CustomerEscalationStatusContractError("Persisted linked ticket has no identifier.")
+
+                if ticket.ticket_number is None:
+                    raise CustomerEscalationStatusContractError("Persisted linked ticket has no ticket number.")
+
+                if ticket.conversation_id != escalation.conversation_id:
+                    raise CustomerEscalationStatusContractError("Linked ticket belongs to another conversation.")
+
+                if ticket.customer_id != conversation.user_id:
+                    raise CustomerEscalationStatusContractError("Linked ticket belongs to another customer.")
+
+                linked_ticket = CustomerLinkedTicketView(
+                    ticket_id=ticket.id,
+                    ticket_reference=f"TKT-{ticket.ticket_number:08d}",
+                    status=ticket.status,
+                )
 
             return CustomerEscalationStatusView(
                 escalation_id=escalation.id,
@@ -102,4 +134,5 @@ class GetCustomerEscalationStatus:
                 created_at=escalation.created_at,
                 updated_at=escalation.updated_at,
                 resolved_at=escalation.resolved_at,
+                linked_ticket=linked_ticket,
             )

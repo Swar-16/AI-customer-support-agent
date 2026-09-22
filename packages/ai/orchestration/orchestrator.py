@@ -18,21 +18,164 @@ from packages.application.ai.answer_service import UnsupportedAnswerDecisionErro
 from packages.guardrails.evaluator import GuardrailEvaluator
 from packages.guardrails.models import GuardrailContext, GuardrailOutcome
 from packages.ai.orchestration.direct_response import DirectResponseResolutionError, DirectResponseResolver
+from packages.ai.intent.taxonomy import IntentType
 
-_DEFAULT_CLARIFICATION_RESPONSE: Final[str] = "Could you provide a little more detail so I can help you correctly?"
+_DEFAULT_CLARIFICATION_RESPONSE: Final[str] = (
+    "I need a little more information to help with this request. "
+    "Please describe what happened, what outcome you expected, and "
+    "any error or status message you saw. Do not share passwords, "
+    "one-time codes, full payment-card numbers, or other credentials."
+)
+
+_UNKNOWN_INTENT_CLARIFICATION_RESPONSE: Final[str] = (
+    "I couldn’t determine what support you need from that message. "
+    "Please briefly describe the issue—for example, whether it concerns "
+    "a payment, refund, return, delivery, subscription, or account."
+)
 
 _CLARIFICATION_RESPONSES: Final[dict[str, str]] = {
-    "customer_intent": "Could you tell me what you need help with?",
+    "customer_intent": _UNKNOWN_INTENT_CLARIFICATION_RESPONSE,
     "clarification": _DEFAULT_CLARIFICATION_RESPONSE,
-    "order_id": "Could you provide the order ID so I can help with this request?",
-    "order_id_or_transaction_id": "Could you provide the order ID or transaction ID so I can help with this request?",
-    "subscription_id": "Could you provide the subscription ID so I can help with this request?",
+    "order_id": (
+        "Please provide the order ID whose current status you want to "
+        "check. Do not include passwords, one-time codes, or payment-card "
+        "details."
+    ),
+    "order_id_or_transaction_id": (
+        "Please provide the relevant order ID or transaction reference "
+        "and briefly describe what happened—for example, whether the "
+        "payment was declined, duplicated, or is still pending. Do not "
+        "share a full payment-card number, password, or one-time code."
+    ),
+    "subscription_id": (
+        "Please provide the subscription reference and describe the "
+        "problem—for example, an unexpected renewal, cancellation issue, "
+        "or unavailable service. Do not share passwords or payment-card "
+        "details."
+    ),
+}
+
+_INTENT_CLARIFICATION_RESPONSES: Final[dict[IntentType, str]] = {
+    IntentType.REFUND_REQUEST: (
+        "Please tell me when the refund was requested, what status or "
+        "message you currently see, and whether the original payment "
+        "method is still active. You may include a non-sensitive order "
+        "or transaction reference, but do not share full card details, "
+        "passwords, or one-time codes."
+    ),
+    IntentType.PAYMENT_ISSUE: (
+        "Please describe what happened with the payment—for example, "
+        "whether it was declined, duplicated, reversed, or remains "
+        "pending—and include a non-sensitive order or transaction "
+        "reference if available. Do not share full card details, "
+        "passwords, or one-time codes."
+    ),
+    IntentType.ORDER_STATUS: (
+        "Please provide the order ID whose status you want to check. "
+        "Do not include passwords, one-time codes, or payment-card "
+        "details."
+    ),
+    IntentType.SHIPPING_ISSUE: (
+        "Please describe the delivery problem, including the expected "
+        "delivery date and the latest tracking status you can see. You "
+        "may include the order ID, but do not share credentials or "
+        "payment-card details."
+    ),
+    IntentType.CANCELLATION: (
+        "Please tell me what you want to cancel—such as an order or "
+        "subscription—and whether you have already attempted the "
+        "cancellation. Include a non-sensitive reference if available, "
+        "but do not share credentials or payment-card details."
+    ),
+    IntentType.SUBSCRIPTION_ISSUE: (
+        "Please describe the subscription problem—for example, an "
+        "unexpected renewal, cancellation issue, billing concern, or "
+        "unavailable service—and include the subscription reference if "
+        "available. Do not share passwords or payment-card details."
+    ),
+    IntentType.ACCOUNT_ISSUE: (
+        "Please describe the account problem and any safe error message "
+        "you see—for example, whether you cannot sign in, the account is "
+        "locked, or a setting cannot be changed. Do not share your "
+        "password, recovery code, or one-time code."
+    ),
+    IntentType.RETURN_EXCHANGE: (
+        "Please tell me what item you are trying to return or exchange, "
+        "when it was delivered, and the rejection reason or status "
+        "message you were shown. You may include the order ID, but do "
+        "not share credentials or payment-card details."
+    ),
+    IntentType.GENERAL_QUESTION: (
+        "Please rephrase the company, product, service, or policy "
+        "information you want to know. You do not need to provide "
+        "private account or payment information."
+    ),
 }
 
 _DEFAULT_GUARDRAIL_REFUSAL_RESPONSE: Final[str] = (
     "I’m unable to help with that request. I can assist with supported customer-service questions about refunds, payments, cancellations, "
     "subscriptions, shipping, returns, exchanges, and accounts."
 )
+
+_DEFAULT_ESCALATION_NOTICE: Final[str] = (
+    "I couldn’t complete this request safely through automated support, "
+    "so I requested human review. Your message has been saved for the "
+    "support team. Please do not send passwords, one-time codes, full "
+    "payment-card numbers, or other credentials."
+)
+
+_KNOWLEDGE_GAP_ESCALATION_NOTICE: Final[str] = (
+    "I couldn’t find enough verified information to answer this request "
+    "reliably, so I requested human review. Your message has been saved "
+    "for the support team. Please do not send passwords, one-time codes, "
+    "full payment-card numbers, or other credentials."
+)
+
+_GUARDRAIL_ESCALATION_NOTICE: Final[str] = (
+    "I’m unable to provide the proposed automated response safely, so I "
+    "requested human review. Your message has been saved for the support "
+    "team. Please do not send passwords, one-time codes, full "
+    "payment-card numbers, or other credentials."
+)
+
+_ESCALATION_NOTICES: Final[dict[DecisionReasonCode, str]] = {
+    DecisionReasonCode.CUSTOMER_REQUESTED_HUMAN: (
+        "I requested human support for this conversation. Your message "
+        "has been saved, and a support agent can review the available "
+        "conversation history. Please do not send passwords, one-time "
+        "codes, full payment-card numbers, or other credentials."
+    ),
+    DecisionReasonCode.SEVERE_CUSTOMER_DISSATISFACTION: (
+        "I’m sorry this issue has remained unresolved. I requested human "
+        "review so a support agent can examine the conversation and the "
+        "problem you reported. Please do not send passwords, one-time "
+        "codes, full payment-card numbers, or other credentials."
+    ),
+    DecisionReasonCode.SECURITY_SENSITIVE_REQUEST: (
+        "I requested urgent human review because this may involve account "
+        "security. Until it is reviewed, do not share passwords or "
+        "one-time codes, change your password through the official "
+        "account-security or recovery page, and secure the email account "
+        "connected to your profile."
+    ),
+    DecisionReasonCode.OPERATIONAL_LOOKUP_UNAVAILABLE: (
+        "I can’t access the private operational record needed to confirm "
+        "the current status of this request, so I requested human review. "
+        "Your message and the available reference have been saved for the "
+        "support team."
+    ),
+    DecisionReasonCode.HUMAN_APPROVAL_REQUIRED: (
+        "This request requires authorization from a human support agent, "
+        "so I requested human review. No business action has been "
+        "completed yet."
+    ),
+    DecisionReasonCode.POLICY_CONFLICT: (
+        "The available support guidance does not provide a clear, "
+        "consistent answer for this case, so I requested human review. "
+        "No business action has been completed yet."
+    ),
+    DecisionReasonCode.KNOWLEDGE_UNAVAILABLE: _KNOWLEDGE_GAP_ESCALATION_NOTICE,
+}
 
 
 # Observer contract
@@ -398,6 +541,7 @@ class AIOrchestrator:
             raise RuntimeError("Clarification requires an ASK_CLARIFICATION decision")
 
         response = self._resolve_clarification_response(
+            intent=state.intent_result.intent if state.intent_result is not None else None,
             required_information=decision.required_information,
         )
         generated_state = self._complete_generation(
@@ -408,24 +552,64 @@ class AIOrchestrator:
         return self._evaluate_guardrails(generated_state)
 
     @staticmethod
-    def _resolve_clarification_response(*, required_information: tuple[str, ...]) -> str:
+    def _resolve_clarification_response(*, intent: IntentType | None, required_information: tuple[str, ...]) -> str:
         """
-        Resolve only application-controlled response text.
+        Resolve a safe, application-controlled clarification response.
 
-        Unknown requirement keys deliberately fall back to generic wording;
-        internal routing vocabulary is never interpolated into customer text.
+        Explicit requirement keys take precedence. When the decision layer only provides the generic ``clarification`` key,
+        the canonical intent is used to request useful, bounded information.
+
+        Customer-controlled text and model-generated reason summaries are never interpolated into the response.
         """
-        if len(required_information) != 1:
-            return _DEFAULT_CLARIFICATION_RESPONSE
+        if not isinstance(required_information, tuple):
+            raise TypeError("required_information must be a tuple")
 
-        return _CLARIFICATION_RESPONSES.get(required_information[0], _DEFAULT_CLARIFICATION_RESPONSE)
+        if intent is not None and not isinstance(intent, IntentType):
+            raise TypeError("intent must be an IntentType instance or None")
+
+        # UNKNOWN means the customer's support goal could not be established.
+        # Do not pretend that a specific identifier is sufficient.
+        if intent is IntentType.UNKNOWN:
+            return _UNKNOWN_INTENT_CLARIFICATION_RESPONSE
+
+        # A single specific deterministic requirement is authoritative.
+        if len(required_information) == 1:
+            requirement = required_information[0]
+
+            if requirement != "clarification":
+                response = _CLARIFICATION_RESPONSES.get(requirement)
+                if response is not None:
+                    return response
+
+        # The decision layer knows the workflow but could not express a more
+        # specific structured requirement. Use an allowlisted intent response.
+        if intent is not None:
+            response = _INTENT_CLARIFICATION_RESPONSES.get(intent)
+            if response is not None:
+                return response
+
+        # Unknown future requirement keys fail safely to bounded generic text.
+        return _DEFAULT_CLARIFICATION_RESPONSE
+
+    @staticmethod
+    def _resolve_escalation_notice(*, reason_code: DecisionReasonCode) -> str:
+        """
+        Resolve safe application-controlled escalation text.
+
+        The response is selected only from allowlisted structured reason codes. Customer text, model output,
+        provider errors, and internal reason summaries are never interpolated.
+        """
+        if not isinstance(reason_code, DecisionReasonCode):
+            raise TypeError("reason_code must be a DecisionReasonCode instance")
+
+        return _ESCALATION_NOTICES.get(reason_code, _DEFAULT_ESCALATION_NOTICE)
     
     def _escalate_from_knowledge_gap(self, state: AIState) -> AIState:
         """
         Escalate when published knowledge cannot support a reliable answer.
 
-        The generated insufficient-evidence message remains an internal candidate.
-        It must not be persisted or returned as an approved assistant response.
+        The provider-generated insufficient-evidence candidate remains internal.
+        A separate application-controlled customer notice is attached to the escalation and may be persisted safely.
 
         This is a normal human-review disposition, not an infrastructure failure.
         """
@@ -442,7 +626,11 @@ class AIOrchestrator:
             raise RuntimeError("Knowledge-gap escalation requires a RETRIEVE_INFORMATION decision")
 
         self._observer.stage_started(state=state, stage=PipelineStage.ESCALATED)
-        escalated_state = state.with_escalation(source=EscalationSource.SYSTEM, reason_code=DecisionReasonCode.KNOWLEDGE_UNAVAILABLE.value)
+        escalated_state = state.with_escalation(
+            source=EscalationSource.SYSTEM,
+            reason_code=DecisionReasonCode.KNOWLEDGE_UNAVAILABLE.value,
+            customer_notice=_KNOWLEDGE_GAP_ESCALATION_NOTICE,
+        )
         self._observer.stage_completed(state=escalated_state, stage=PipelineStage.ESCALATED)
 
         return escalated_state
@@ -451,13 +639,18 @@ class AIOrchestrator:
         """
         Transition a deterministic DecisionEngine escalation into human review.
 
-        This records the orchestration disposition only. Creating the persistent escalation record/ticket belongs to the application layer.
+        This records the orchestration disposition and attaches safe, application-controlled customer-facing text.
+        Creating the persistent escalation record belongs to the application layer.
+
+        This method does not claim that a ticket was created, an agent has already reviewed the request, or any business action was completed.
         """
         if state.decision_result is None:
             raise RuntimeError("Decision escalation reached without decision_result")
 
         self._observer.stage_started(state=state, stage=PipelineStage.ESCALATED)
-        next_state = state.with_escalation(source=EscalationSource.DECISION, reason_code=state.decision_result.reason_code.value)
+        reason_code = state.decision_result.reason_code
+        customer_notice = self._resolve_escalation_notice(reason_code=reason_code)
+        next_state = state.with_escalation(source=EscalationSource.DECISION, reason_code=reason_code.value, customer_notice=customer_notice)
         self._observer.stage_completed(state=next_state, stage=PipelineStage.ESCALATED)
 
         return next_state
@@ -490,6 +683,7 @@ class AIOrchestrator:
         escalated_state = state.with_guardrail_escalation(
             escalation_reason_code=reason_code,
             guardrail_reason_code=reason_code,
+            customer_notice=_GUARDRAIL_ESCALATION_NOTICE,
             policy_id=policy_id,
         )
         # The guardrail stage completed normally with an ESCALATE disposition.

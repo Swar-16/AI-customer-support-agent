@@ -45,10 +45,14 @@
   font-size: 0.75rem;
   line-height: 1.5;
 }
-.outgoing-turn[data-delivery='uncertain'] .outgoing-turn__bubble,
+.outgoing-turn[data-delivery='uncertain'] .outgoing-turn__delivery {
+  color: #766a72;
+}
+
 .outgoing-turn[data-delivery='rejected'] .outgoing-turn__bubble {
   border-style: dashed;
 }
+
 .agent-working {
   display: flex;
   align-items: center;

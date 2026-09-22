@@ -108,6 +108,41 @@ class KnowledgeDocumentNotPublishableError(PublishKnowledgeVersionError):
 class KnowledgePublicationConflictError(PublishKnowledgeVersionError):
     """Raised when persisted publication state is inconsistent."""
     
+class KnowledgeVersionEmbeddingsIncompleteError(PublishKnowledgeVersionError):
+    """
+    Raised when publication is attempted before every required knowledge chunk has a compatible persisted embedding.
+    """
+    def __init__(self, *, version_id: UUID, total_chunk_count: int, embedded_chunk_count: int, provider_identity: str, input_strategy_identity: str) -> None:
+        if not isinstance(version_id, UUID):
+            raise TypeError("version_id must be a UUID.")
+
+        if isinstance(total_chunk_count, bool) or not isinstance(total_chunk_count, int) or total_chunk_count < 0:
+            raise ValueError("total_chunk_count must be a non-negative integer.")
+
+        if isinstance(embedded_chunk_count, bool) or not isinstance(embedded_chunk_count, int) or embedded_chunk_count < 0:
+            raise ValueError("embedded_chunk_count must be a non-negative integer.")
+
+        if embedded_chunk_count > total_chunk_count:
+            raise ValueError("embedded_chunk_count cannot exceed total_chunk_count.")
+
+        provider_identity = provider_identity.strip()
+        input_strategy_identity = input_strategy_identity.strip()
+        if not provider_identity:
+            raise ValueError("provider_identity must not be blank.")
+
+        if not input_strategy_identity:
+            raise ValueError("input_strategy_identity must not be blank.")
+
+        self.version_id = version_id
+        self.total_chunk_count = total_chunk_count
+        self.embedded_chunk_count = embedded_chunk_count
+        self.provider_identity = provider_identity
+        self.input_strategy_identity = input_strategy_identity
+
+        super().__init__(
+            f"Knowledge version cannot be published because compatible embeddings are incomplete: version_id={version_id}, embedded_chunks={embedded_chunk_count}, total_chunks={total_chunk_count}."
+        )
+    
 # Process Version
 class ProcessKnowledgeVersionError(RuntimeError):
     """

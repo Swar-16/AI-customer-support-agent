@@ -8,7 +8,6 @@ import { useSession, useSessionController } from '../../shared/auth/session-cont
 import type { SendMessageResult } from './chat-contract';
 import { chatKeys, useChatApi } from './chat-queries';
 import { customerEscalationKey } from './customer-escalation-query';
-import { rememberResponseFeedbackTarget } from './response-feedback-target';
 import type { OutgoingMessage } from './outgoing-message';
 
 interface ChatSubmissionOptions {
@@ -84,17 +83,24 @@ export function useChatSubmission({ conversationId, onPageChange }: ChatSubmissi
     gcTime: 0,
 
     mutationFn: async (message: string): Promise<TransportResult<SendMessageResult>> => {
-      const customerId = requireCurrentSession();
+      requireCurrentSession();
 
       const result = await api.send(conversationId, message);
 
-      // A response from a previous session must never repopulate the cache.
+      /*
+       * A response from a previous authenticated session must never update the
+       * current customer interface.
+       */
       requireCurrentSession();
 
-      if (result.ok) {
-        rememberResponseFeedbackTarget(queryClient, customerId, conversationId, result.data);
-      }
-
+      /*
+       * Do not register the returned assistant message as feedback-eligible.
+       *
+       * Successful escalations now also return assistant_message_id and response,
+       * but their persisted history messages are intentionally not eligible for
+       * feedback. Conversation history will authoritatively provide
+       * feedback_eligible after reconciliation.
+       */
       return result;
     },
   });

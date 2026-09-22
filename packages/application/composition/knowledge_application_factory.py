@@ -92,7 +92,11 @@ def create_knowledge_application_components(*, uow_factory: KnowledgeUnitOfWorkF
         list_documents=ListKnowledgeDocuments(uow_factory=uow_factory),
         get_document=GetKnowledgeDocument(uow_factory=uow_factory),
         list_versions=ListKnowledgeVersions(uow_factory=uow_factory),
-        get_version=GetKnowledgeVersion(uow_factory=uow_factory),
+        get_version=GetKnowledgeVersion(
+            uow_factory=uow_factory,
+            embedding_provider=embedding_provider.descriptor,
+            embedding_input_descriptor=embedding_input_builder.descriptor,
+        ),
 
         create_document=CreateKnowledgeDocument(uow_factory=uow_factory),
         create_version=CreateKnowledgeVersion(uow_factory=uow_factory),
@@ -108,7 +112,11 @@ def create_knowledge_application_components(*, uow_factory: KnowledgeUnitOfWorkF
             input_builder=embedding_input_builder,
             batch_size=embedding_batch_size,
         ),
-        publish_version=PublishKnowledgeVersion(uow_factory=uow_factory),
+        publish_version=PublishKnowledgeVersion(
+            uow_factory=uow_factory,
+            embedding_provider=embedding_provider.descriptor,
+            embedding_input_descriptor=embedding_input_builder.descriptor,
+        ),
         archive_document=ArchiveKnowledgeDocument(uow_factory=uow_factory),
         
         upload_document=upload_document,

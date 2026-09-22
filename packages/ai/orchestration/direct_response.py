@@ -21,6 +21,7 @@ class DirectResponseKind(StrEnum):
     """
     GREETING = "greeting"
     CAPABILITIES = "capabilities"
+    SUPPORT_PROMPT = "support_prompt"
     THANKS = "thanks"
     GOODBYE = "goodbye"
     OUT_OF_SCOPE = "out_of_scope"
@@ -52,14 +53,19 @@ _RESPONSE_TEXT: Final[Mapping[DirectResponseKind, str]] = MappingProxyType(
     {
         DirectResponseKind.GREETING: "Hello! How can I help you today?",
         DirectResponseKind.CAPABILITIES: (
-            "I can help with questions about refunds, payments, cancellations, subscriptions, shipping, returns, exchanges, "
-            "and account support. If your request requires access to private business records or human approval, I can direct it "
-            "to the appropriate support team."
+            "I can help with refunds, payments, cancellations, subscriptions, shipping, returns, exchanges, account "
+            "support, and questions covered by the company’s published support information. If a request requires private "
+            "business records or human approval, I can request human review."
         ),
-        DirectResponseKind.THANKS: "You're welcome! Let me know if you need help with anything else.",
+        DirectResponseKind.SUPPORT_PROMPT: (
+            "I’m ready to help. Please briefly describe what happened and what outcome you need. Do not share passwords, "
+            "one-time codes, full payment-card numbers, or other credentials."
+        ),
+        DirectResponseKind.THANKS: "You’re welcome! Let me know if you need help with anything else.",
         DirectResponseKind.GOODBYE: "Goodbye! Feel free to return if you need further support.",
         DirectResponseKind.OUT_OF_SCOPE: (
-            "I’m here to help with customer-support questions about refunds, payments, cancellations, subscriptions, shipping, returns, exchanges, and accounts."
+            "I can’t help with that particular request, but I can assist with customer-support questions about refunds, "
+            "payments, cancellations, subscriptions, shipping, returns, exchanges, accounts, and the company’s published services and policies."
         ),
     }
 )
@@ -88,6 +94,15 @@ _CAPABILITY_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
         r"(?:your\s+)?(?:capabilities|features)\b"
     ),
     re.compile(r"\bwho\s+are\s+you\b"),
+)
+
+_SUPPORT_PROMPT_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
+    re.compile(r"\bi\s+need\s+(?:some\s+)?help\b"),
+    re.compile(r"\bcan\s+you\s+help\s+me\b"),
+    re.compile(r"\bcould\s+you\s+help\s+me\b"),
+    re.compile(r"\bplease\s+help\b"),
+    re.compile(r"\bi\s+have\s+(?:a\s+)?(?:problem|question|issue)\b"),
+    re.compile(r"\bi(?:'|’)m\s+having\s+(?:a\s+)?(?:problem|issue)\b"),
 )
 
 _THANKS_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
@@ -184,25 +199,38 @@ class DirectResponseResolver:
 
     @classmethod
     def _resolve_conversational_kind(cls, normalized_message: str) -> DirectResponseKind:
-        # Capability questions take precedence because messages such as
-        # "Hello, what can you help me with?" contain both a greeting and a capability request.
+        """
+        Select an allowlisted conversational response.
+
+        Precedence is intentional:
+
+        1. capability questions;
+        2. conversation closure;
+        3. gratitude;
+        4. explicit but underspecified support request;
+        5. greeting;
+        6. safe neutral support prompt.
+
+        No customer-controlled text is reflected into the response.
+        """
         if cls._matches_any(normalized_message, _CAPABILITY_PATTERNS):
             return DirectResponseKind.CAPABILITIES
 
-        # A closing message such as "Thanks, goodbye" is better represented
-        # as a goodbye because it concludes the interaction.
         if cls._matches_any(normalized_message, _GOODBYE_PATTERNS):
             return DirectResponseKind.GOODBYE
 
         if cls._matches_any(normalized_message, _THANKS_PATTERNS):
             return DirectResponseKind.THANKS
 
+        if cls._matches_any(normalized_message, _SUPPORT_PROMPT_PATTERNS):
+            return DirectResponseKind.SUPPORT_PROMPT
+
         if cls._matches_any(normalized_message, _GREETING_PATTERNS):
             return DirectResponseKind.GREETING
 
-        # Classification has already established that this is conversational.
-        # A generic greeting is safer than reflecting unknown model-produced subtypes or customer-controlled text.
-        return DirectResponseKind.GREETING
+        # Classification has already established that the message is conversational, but its precise subtype is not recognized.
+        # A neutral support prompt is more accurate than pretending every unrecognized conversational message is a greeting.
+        return DirectResponseKind.SUPPORT_PROMPT
 
     @staticmethod
     def _matches_any(value: str, patterns: tuple[re.Pattern[str], ...]) -> bool:

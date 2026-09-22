@@ -1735,6 +1735,8 @@ export interface components {
              * Format: uuid
              */
             escalation_id: string;
+            /** @description Customer-safe linked ticket summary when the escalation has been converted into a support ticket. */
+            linked_ticket?: components["schemas"]["CustomerLinkedTicketResponse"] | null;
             /**
              * Priority
              * @enum {string}
@@ -1752,6 +1754,26 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /**
+         * CustomerLinkedTicketResponse
+         * @description Minimal ticket relationship exposed to the customer.
+         *
+         *     The customer can use `ticket_id` with the authorized ticket-detail endpoint to retrieve customer-visible comments.
+         */
+        CustomerLinkedTicketResponse: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "in_progress" | "waiting_for_customer" | "resolved" | "closed" | "reopened";
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /** Ticket Reference */
+            ticket_reference: string;
         };
         /** DashboardAPIRequestListResponse */
         DashboardAPIRequestListResponse: {
@@ -2679,11 +2701,21 @@ export interface components {
             document_id: string;
             /** Document Title */
             document_title: string;
+            /**
+             * Embedded Chunk Count
+             * @description Chunks having an embedding compatible with the currently active embedding provider and input configuration.
+             */
+            embedded_chunk_count: number;
             /** Failure Code */
             failure_code?: string | null;
             ingestion_status: components["schemas"]["KnowledgeIngestionStatus"];
             /** Is Current Published Version */
             is_current_published_version: boolean;
+            /**
+             * Is Fully Embedded
+             * @description True only when the version has at least one chunk and every chunk has a compatible persisted embedding.
+             */
+            is_fully_embedded: boolean;
             /** Processing Completed At */
             processing_completed_at?: string | null;
             /** Processing Started At */
@@ -2700,6 +2732,11 @@ export interface components {
             status: components["schemas"]["KnowledgeVersionStatus"];
             /** Superseded At */
             superseded_at?: string | null;
+            /**
+             * Total Chunk Count
+             * @description Total persisted chunks belonging to this version.
+             */
+            total_chunk_count: number;
             /**
              * Updated At
              * Format: date-time
@@ -3522,9 +3559,17 @@ export interface components {
         };
         /**
          * UpdateEscalationRequest
-         * @description Request to transition an escalation to another state.
+         * @description Request to transition an escalation.
+         *
+         *     Terminal transitions require a customer-visible explanation so the customer is never left with an unexplained resolution or dismissal.
+         *     This field must not contain internal notes, diagnostic information, provider errors, or unrestricted metadata.
          */
         UpdateEscalationRequest: {
+            /**
+             * Customer Message
+             * @description Customer-visible explanation required when status is 'resolved' or 'dismissed'. It must be omitted for non-terminal transitions.
+             */
+            customer_message?: string | null;
             /**
              * Status
              * @enum {string}
@@ -3534,6 +3579,9 @@ export interface components {
         /**
          * UpdateEscalationResponse
          * @description Result of an escalation lifecycle update.
+         *
+         *     `notification_message_id` identifies the deterministic customer-visible conversation notice created by a successful state
+         *     transition. It is null for an idempotent replay that made no change.
          */
         UpdateEscalationResponse: {
             /** Ai Run Id */
@@ -3556,6 +3604,11 @@ export interface components {
              */
             escalation_id: string;
             /**
+             * Notification Message Id
+             * @description Customer-visible lifecycle notification created for this transition. Null when no state change occurred.
+             */
+            notification_message_id?: string | null;
+            /**
              * Previous Status
              * @enum {string}
              */
@@ -3574,6 +3627,11 @@ export interface components {
             assigned_agent_id?: string | null;
             /** Category */
             category?: ("billing" | "refund" | "order" | "account" | "technical" | "security" | "product" | "general" | "other") | null;
+            /**
+             * Customer Message
+             * @description Specific customer-visible information request. Required only when target_status is 'waiting_for_customer'.
+             */
+            customer_message?: string | null;
             /** Expected Row Version */
             expected_row_version: number;
             /** Priority */
@@ -3618,6 +3676,11 @@ export interface components {
              * Format: uuid
              */
             customer_id: string;
+            /**
+             * Notification Message Id
+             * @description Customer-visible lifecycle notification created for a ticket-status transition. Null when the status did not change.
+             */
+            notification_message_id?: string | null;
             /**
              * Previous Status
              * @enum {string}

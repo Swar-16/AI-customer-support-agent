@@ -30,6 +30,39 @@ export const ticketCategorySchema = z.enum([
 
 export const escalationIdSchema = z.uuid();
 export const escalationConversationIdSchema = z.uuid();
+export const escalationCustomerMessageSchema = z
+  .string()
+  .trim()
+  .min(1, 'Enter a customer-facing explanation.')
+  .max(2_000, 'Use 2,000 characters or fewer.');
+
+export const escalationTransitionRequestSchema = z
+  .object({
+    status: escalationStatusSchema,
+
+    customer_message: escalationCustomerMessageSchema.nullable().default(null),
+  })
+  .strict()
+  .superRefine((request, context) => {
+    const terminal = request.status === 'resolved' || request.status === 'dismissed';
+
+    if (terminal && typeof request.customer_message !== 'string') {
+      context.addIssue({
+        code: 'custom',
+        path: ['customer_message'],
+        message: 'A customer-facing explanation is required for this status.',
+      });
+    }
+
+    if (!terminal && request.customer_message != null) {
+      context.addIssue({
+        code: 'custom',
+        path: ['customer_message'],
+        message:
+          'A customer-facing explanation is only allowed for resolved or dismissed escalations.',
+      });
+    }
+  }) satisfies z.ZodType<components['schemas']['UpdateEscalationRequest']>;
 
 const timestampSchema = z.iso.datetime({ offset: true });
 
@@ -87,16 +120,25 @@ export const escalationPageSchema = z
 
 export const escalationUpdateSchema = z
   .object({
-    escalation_id: z.uuid(),
-    conversation_id: z.uuid(),
+    escalation_id: escalationIdSchema,
+    conversation_id: escalationConversationIdSchema,
     ai_run_id: z.uuid().nullable().default(null),
     previous_status: escalationStatusSchema,
     current_status: escalationStatusSchema,
+
+    /*
+     * Backend-persisted customer-visible lifecycle notice.
+     * Null for an idempotent transition that made no change.
+     */
+    notification_message_id: z.uuid().nullable().default(null),
+
     resolved_at: timestampSchema.nullable().default(null),
     updated_at: timestampSchema,
     changed: z.boolean(),
   })
-  .strict();
+  .strict() satisfies z.ZodType<
+    components['schemas']['UpdateEscalationResponse']
+  >;
 
 export const linkedEscalationTicketSchema = z.object({
   ticket_id: z.uuid(),
@@ -141,6 +183,7 @@ export type EscalationDetail = Escalation & {
 export type LinkedEscalationTicket = components['schemas']['LinkedEscalationTicketResponse'];
 export type EscalationTicketDraft = components['schemas']['CreateEscalationTicketRequest'];
 export type CreatedEscalationTicket = components['schemas']['CreateTicketResponse'];
+export type EscalationTransitionRequest = components['schemas']['UpdateEscalationRequest'];
 
 export function decodeEscalation(value: unknown): Escalation {
   return escalationSchema.parse(value);

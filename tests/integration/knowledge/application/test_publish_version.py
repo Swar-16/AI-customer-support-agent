@@ -41,10 +41,27 @@ from packages.knowledge.application.mutation_context import (
 from packages.database.models.knowledge.chunk import (
     KnowledgeChunkModel,
 )
-
+from packages.database.models.knowledge.chunk_embedding import (
+    KnowledgeChunkEmbeddingModel,
+)
+from packages.knowledge.embeddings.models import (
+    EmbeddingInputDescriptor,
+    EmbeddingProviderDescriptor,
+)
 
 UTC = timezone.utc
+TEST_EMBEDDING_PROVIDER = EmbeddingProviderDescriptor(
+    provider="integration-test",
+    model="publish-version",
+    revision="1",
+    dimensions=3,
+)
 
+TEST_EMBEDDING_INPUT = EmbeddingInputDescriptor(
+    strategy_id="publish-version-test",
+    version="1",
+    config_fingerprint="a" * 64,
+)
 
 # ===========================================================================
 # Helpers
@@ -153,7 +170,8 @@ def seed_ready_version(
 
         session.commit()
         
-    seed_chunk(session_factory, version_id=version_id)
+    chunk_id = seed_chunk(session_factory, version_id=version_id)
+    seed_embedding(session_factory, chunk_id=chunk_id)
 
     return version_id
 
@@ -248,14 +266,61 @@ def seed_chunk(
 
     return chunk_id
 
+def seed_embedding(
+    session_factory: sessionmaker[Session],
+    *,
+    chunk_id: UUID,
+) -> UUID:
+    embedding_id = uuid7()
+
+    with session_factory() as session:
+        session.add(
+            KnowledgeChunkEmbeddingModel(
+                id=embedding_id,
+                chunk_id=chunk_id,
+                provider=(
+                    TEST_EMBEDDING_PROVIDER.provider
+                ),
+                model=TEST_EMBEDDING_PROVIDER.model,
+                model_revision=(
+                    TEST_EMBEDDING_PROVIDER.revision
+                ),
+                dimensions=(
+                    TEST_EMBEDDING_PROVIDER.dimensions
+                ),
+                embedding=[0.1, 0.2, 0.3],
+                input_strategy_id=(
+                    TEST_EMBEDDING_INPUT.strategy_id
+                ),
+                input_strategy_version=(
+                    TEST_EMBEDDING_INPUT.version
+                ),
+                input_config_fingerprint=(
+                    TEST_EMBEDDING_INPUT
+                    .config_fingerprint
+                ),
+                input_fingerprint="b" * 64,
+            )
+        )
+        session.commit()
+
+    return embedding_id
 
 def build_service(
     session_factory: sessionmaker[Session],
 ) -> PublishKnowledgeVersion:
     return PublishKnowledgeVersion(
-        uow_factory=lambda: SQLAlchemyKnowledgeUnitOfWork(
-            session_factory
-        )
+        uow_factory=lambda: (
+            SQLAlchemyKnowledgeUnitOfWork(
+                session_factory
+            )
+        ),
+        embedding_provider=(
+            TEST_EMBEDDING_PROVIDER
+        ),
+        embedding_input_descriptor=(
+            TEST_EMBEDDING_INPUT
+        ),
     )
 
 

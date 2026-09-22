@@ -3,6 +3,7 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useEffect, useRef } from 'react';
 import { useForm } from 'react-hook-form';
+import { Link } from 'react-router';
 
 import type { LoginInput } from '../../shared/auth/auth-contract';
 import { useSession, useSessionController } from '../../shared/auth/session-context';
@@ -172,14 +173,14 @@ export function LoginPage() {
               )}
             </div>
 
-            <button type="submit" disabled={busy}>
-              {isSubmitting ? 'Signing in…' : 'Sign in'}
+            <button className="login-page__primary-action" type="submit" disabled={busy}>
+              <span>{isSubmitting ? 'Signing in…' : 'Sign in'}</span>
             </button>
           </fieldset>
 
           <div className="login-page__feedback">
             {errors.root?.server?.message && (
-              <p role="alert" className="login-page__error">
+              <p role="alert" className="login-page__error login-page__server-error">
                 {errors.root.server.message}
               </p>
             )}
@@ -189,6 +190,12 @@ export function LoginPage() {
             </p>
           </div>
         </form>
+
+        <div className="login-page__account-switch">
+          <span>New to {identity.productName}?</span>
+
+          <Link to="/register">Create an account</Link>
+        </div>
       </section>
     </main>
   );

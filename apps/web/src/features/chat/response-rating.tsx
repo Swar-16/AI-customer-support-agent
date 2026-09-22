@@ -6,7 +6,6 @@ import { Controller, useForm } from 'react-hook-form';
 import { useApiTransport } from '../../shared/api/transport-context';
 import { useSession, useSessionController } from '../../shared/auth/session-context';
 import { createResponseFeedbackApi, feedbackRatingSchema } from './response-feedback-api';
-import { useResponseFeedbackTarget, type ResponseFeedbackTarget } from './response-feedback-target';
 import { createResponseFeedbackReadback } from './response-feedback-readback';
 import { RatingStars } from './rating-stars';
 import type { components } from '../../shared/api/generated/schema';
@@ -20,10 +19,11 @@ interface ResponseRatingProps {
   readonly message?: components['schemas']['ConversationMessageResponse'];
 }
 
-type RatingTarget = Pick<
-  ResponseFeedbackTarget,
-  'conversationId' | 'responseMessageId' | 'aiRunId'
->;
+interface RatingTarget {
+  readonly conversationId: string;
+  readonly responseMessageId: string;
+  readonly aiRunId: string;
+}
 
 interface RatingFormValues {
   readonly rating: number | null;
@@ -46,7 +46,6 @@ export function ResponseRating({
   message,
 }: ResponseRatingProps) {
   const session = useSession();
-  const cachedTarget = useResponseFeedbackTarget(conversationId, responseMessageId);
 
   if (
     session.phase !== 'authenticated' ||
@@ -56,47 +55,53 @@ export function ResponseRating({
     return null;
   }
 
-  let target: RatingTarget;
-
-  if (message !== undefined) {
-    if (
-      message.role !== 'assistant' ||
-      message.conversation_id !== conversationId ||
-      message.message_id !== responseMessageId
-    ) {
-      return null;
-    }
-
-    // A stored rating remains visible even if new submissions are ineligible.
-    if (message.feedback != null) {
-      return <SavedResponseRating rating={message.feedback.rating} />;
-    }
-
-    // When history is supplied, it is authoritative.
-    // Do not fall back to cached eligibility.
-    if (!message.feedback_eligible || message.ai_run_id == null) {
-      return null;
-    }
-
-    target = {
-      conversationId,
-      responseMessageId,
-      aiRunId: message.ai_run_id,
-    };
-  } else {
-    // Compatibility for existing callers while history wiring is migrated.
-    if (!cachedTarget) return null;
-    target = cachedTarget;
+  /*
+   * Persisted conversation history is the only authority for feedback
+   * eligibility. Never fall back to an ID remembered after message
+   * submission.
+   */
+  if (message === undefined) {
+    return null;
   }
+
+  if (
+    message.role !== 'assistant' ||
+    message.conversation_id !== conversationId ||
+    message.message_id !== responseMessageId ||
+    message.feedback_eligible !== true
+  ) {
+    return null;
+  }
+
+  /*
+   * Existing customer-safe feedback returned by conversation history remains
+   * visible without making another feedback request.
+   */
+  if (message.feedback != null) {
+    return <SavedResponseRating rating={message.feedback.rating} />;
+  }
+
+  /*
+   * Eligible feedback requires the backend-provided completed AI-run
+   * association. Optional generated properties must be narrowed explicitly.
+   */
+  if (typeof message.ai_run_id !== 'string') {
+    return null;
+  }
+
+  const target: RatingTarget = {
+    conversationId,
+    responseMessageId,
+    aiRunId: message.ai_run_id,
+  };
 
   return (
     <RatingForm
-      key={`${target.conversationId}:${target.responseMessageId}:${target.aiRunId}`}
+      key={`${target.conversationId}:` + `${target.responseMessageId}:` + target.aiRunId}
       target={target}
     />
   );
 }
-
 function RatingForm({ target }: { readonly target: RatingTarget }) {
   const id = useId();
   const session = useSession();

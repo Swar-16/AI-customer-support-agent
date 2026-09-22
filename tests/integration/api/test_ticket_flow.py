@@ -25,6 +25,9 @@ from packages.database.models.support.ticket import TicketModel
 from packages.database.models.support.ticket_comment import (
     TicketCommentModel,
 )
+from packages.database.models.support.message import (
+    MessageModel,
+)
 # from packages.database.models.support.user import UserModel
 
 
@@ -211,6 +214,105 @@ class TestTicketCreation:
         assert second.created is False
         assert second.ticket_id == first.ticket_id
         assert second.ticket_number == first.ticket_number
+    
+    def test_escalation_conversion_notifies_customer_once(
+        self,
+        client: TestClient,
+        ticket_context: TicketTestContext,
+        test_session_factory,
+    ) -> None:
+        endpoint = (
+            f"/v1/escalations/"
+            f"{ticket_context.escalation_id}/ticket"
+        )
+
+        payload = {
+            "subject": "Human review required",
+            "description": (
+                "The escalated billing issue requires "
+                "support-team review."
+            ),
+            "category": "billing",
+            "priority": "high",
+        }
+
+        first = client.post(
+            endpoint,
+            headers=ticket_context.agent_headers,
+            json=payload,
+        )
+
+        assert first.status_code == 201, first.text
+        first_body = first.json()
+        assert first_body["created"] is True
+
+        second = client.post(
+            endpoint,
+            headers=ticket_context.agent_headers,
+            json=payload,
+        )
+
+        assert second.status_code == 200, second.text
+        second_body = second.json()
+
+        assert second_body["created"] is False
+        assert second_body["ticket_id"] == (
+            first_body["ticket_id"]
+        )
+
+        customer_status = client.get(
+            (
+                f"/v1/conversations/"
+                f"{ticket_context.conversation_id}/"
+                "escalation-status"
+            ),
+            headers=ticket_context.customer_headers,
+        )
+
+        assert customer_status.status_code == 200
+        linked_ticket = customer_status.json()[
+            "linked_ticket"
+        ]
+
+        assert linked_ticket is not None
+        assert linked_ticket["ticket_id"] == (
+            first_body["ticket_id"]
+        )
+        assert linked_ticket["ticket_reference"] == (
+            first_body["ticket_reference"]
+        )
+        assert linked_ticket["status"] == "open"
+
+        with test_session_factory() as session:
+            messages = tuple(
+                session.query(MessageModel)
+                .filter(
+                    MessageModel.conversation_id
+                    == ticket_context.conversation_id
+                )
+                .order_by(
+                    MessageModel.sequence_number.asc()
+                )
+                .all()
+            )
+
+        ticket_notices = tuple(
+            message
+            for message in messages
+            if message.metadata_.get(
+                "notification_kind"
+            ) == "ticket_created"
+        )
+
+        assert len(ticket_notices) == 1
+        assert ticket_notices[0].role == "assistant"
+        assert ticket_notices[0].metadata_[
+            "feedback_eligible"
+        ] is False
+        assert (
+            first_body["ticket_reference"]
+            in ticket_notices[0].content
+        )
 
 
 class TestTicketQueries:
@@ -472,6 +574,9 @@ class TestTicketLifecycle:
 
         assert assigned.status_code == 200, assigned.text
         assigned_body = assigned.json()
+        assert uuid.UUID(
+            assigned_body["notification_message_id"]
+        )
 
         assert assigned_body["current_status"] == "in_progress"
         assert assigned_body["assigned_agent_id"] == str(
@@ -494,6 +599,9 @@ class TestTicketLifecycle:
 
         assert resolved.status_code == 200, resolved.text
         resolved_body = resolved.json()
+        assert uuid.UUID(
+            resolved_body["notification_message_id"]
+        )
 
         assert resolved_body["current_status"] == "resolved"
         assert resolved_body["resolved_at"] is not None
@@ -513,6 +621,7 @@ class TestTicketLifecycle:
         assert closed.status_code == 200, closed.text
         closed_body = closed.json()
 
+        assert uuid.UUID(closed_body["notification_message_id"])
         assert closed_body["current_status"] == "closed"
         assert closed_body["closed_at"] is not None
         assert closed_body["resolution_summary"] == (
@@ -590,4 +699,62 @@ class TestTicketLifecycle:
         assert response.status_code == 403
         assert response.json()["error"]["code"] == (
             "TICKET_ACCESS_DENIED"
+        )
+    
+    def test_waiting_for_customer_requires_specific_message(
+        self,
+        client: TestClient,
+        ticket_context: TicketTestContext,
+    ) -> None:
+        created = _create_customer_ticket(
+            client,
+            ticket_context,
+        )
+
+        detail = client.get(
+            f"/v1/tickets/{created['ticket_id']}",
+            headers=ticket_context.agent_headers,
+        )
+
+        row_version = detail.json()["ticket"][
+            "row_version"
+        ]
+
+        missing_message = client.patch(
+            f"/v1/tickets/{created['ticket_id']}",
+            headers=ticket_context.agent_headers,
+            json={
+                "expected_row_version": row_version,
+                "target_status": "waiting_for_customer",
+            },
+        )
+
+        assert missing_message.status_code == 422
+        assert missing_message.json()["error"]["code"] == (
+            "INVALID_REQUEST"
+        )
+
+        accepted = client.patch(
+            f"/v1/tickets/{created['ticket_id']}",
+            headers=ticket_context.agent_headers,
+            json={
+                "expected_row_version": row_version,
+                "target_status": "waiting_for_customer",
+                "customer_message": (
+                    "Please provide the date of both charges "
+                    "and the final four digits shown for each "
+                    "payment method."
+                ),
+            },
+        )
+
+        assert accepted.status_code == 200, accepted.text
+
+        body = accepted.json()
+
+        assert body["current_status"] == (
+            "waiting_for_customer"
+        )
+        assert uuid.UUID(
+            body["notification_message_id"]
         )

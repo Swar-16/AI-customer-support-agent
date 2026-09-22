@@ -183,9 +183,14 @@ class ProcessCustomerMessageResult:
 
     IDs are returned instead of live ORM objects so callers do not receive entities bound to a Session that has already been closed.
 
-    ``assistant_message_id`` and ``response`` are populated only when the pipeline produced a customer-visible assistant response.
-    
-    ``escalation_id`` is populated when the pipeline requests human review.
+    ``assistant_message_id`` and ``response`` are populated whenever the pipeline produced safe customer-visible text.
+
+    For an approved answer, ``response`` contains the guardrail-approved generated response.
+
+    For an escalation, ``response`` contains only an application-controlled customer notice.
+    It never exposes the generated candidate that caused a guardrail or knowledge-gap escalation.
+
+    ``escalation_id`` is populated when human review was requested.
     """
     conversation_id: uuid.UUID
     customer_message_id: uuid.UUID
@@ -220,8 +225,14 @@ class ProcessCustomerMessageResult:
                 if self.escalation_id is None:
                     raise ValueError("Escalated results require escalation_id.")
 
-                if self.assistant_message_id is not None or self.response is not None:
-                    raise ValueError("Escalated results cannot expose an unapproved assistant response.")
+                if self.assistant_message_id is None:
+                    raise ValueError("Escalated results require a persisted customer notice.")
+
+                if self.response is None:
+                    raise ValueError("Escalated results require customer-visible text.")
+
+                if not self.response.strip():
+                    raise ValueError("Escalated customer-visible text cannot be blank.")
 
             else:
                 raise ValueError("Successful results require an approved response or escalation terminal stage.")
@@ -280,7 +291,7 @@ class ProcessCustomerMessage:
     PROCESSABLE_CONVERSATION_STATUSES: Final[frozenset[str]] = frozenset(
         {"open", "waiting_for_customer", "waiting_for_agent", "escalated"})
     
-    CUSTOMER_RESPONSE_STAGES: Final[frozenset[PipelineStage]] = frozenset({PipelineStage.GUARDRAILS_COMPLETED,})
+    CUSTOMER_RESPONSE_STAGES: Final[frozenset[PipelineStage]] = frozenset({PipelineStage.GUARDRAILS_COMPLETED, PipelineStage.ESCALATED,})
     SUCCESSFUL_TERMINAL_STAGES: Final[frozenset[PipelineStage]] = frozenset({PipelineStage.GUARDRAILS_COMPLETED, PipelineStage.ESCALATED,})
     TERMINAL_STAGES: Final[frozenset[PipelineStage]] = frozenset({*SUCCESSFUL_TERMINAL_STAGES, PipelineStage.FAILED,})
 
@@ -735,25 +746,40 @@ class ProcessCustomerMessage:
     @staticmethod
     def _persist_assistant_response(*, repositories: _Repositories, conversation_id: uuid.UUID, state: AIState) -> MessageModel:
         """
-        Persist an approved customer-visible assistant response.
+        Persist safe customer-visible pipeline text.
 
-        This method may only be called after response guardrails completed successfully.
+        GUARDRAILS_COMPLETED
+            Persists the approved generated response.
 
-        ``generated_response`` represents the generated candidate while RESPONSE_GENERATED. It becomes eligible for customer
-        persistence only after the orchestration state reaches GUARDRAILS_COMPLETED.
+        ESCALATED
+            Persists only the application-controlled customer notice.
+            Any generated candidate retained in orchestration state remains internal and is never selected here.
 
-        Message sequencing is allocated through ConversationRepository so customer and assistant messages share one concurrency-safe sequence.
+        The stored metadata contains only low-cardinality, application-controlled values.
         """
-        if state.stage is not PipelineStage.GUARDRAILS_COMPLETED:
-            raise PersistenceContractError("Assistant response may only be persisted after guardrails complete successfully")
+        if state.stage is PipelineStage.GUARDRAILS_COMPLETED:
+            response = state.generated_response
+            message_kind = "assistant_response"
+            feedback_eligible = True
 
-        response = state.generated_response
-        if response is None:
-            raise PersistenceContractError("GUARDRAILS_COMPLETED state must contain a generated response")
+            if response is None:
+                raise PersistenceContractError("GUARDRAILS_COMPLETED state must contain a generated response")
 
-        normalized_response = response.strip()
+        elif state.stage is PipelineStage.ESCALATED:
+            response = state.customer_notice
+            message_kind = "escalation_notice"
+            feedback_eligible = False
+            if response is None:
+                raise PersistenceContractError("ESCALATED state must contain a customer notice")
+
+        else:
+            raise PersistenceContractError(
+                "Customer-visible pipeline text may only be persisted from GUARDRAILS_COMPLETED or ESCALATED state"
+            )
+
+        normalized_response = " ".join(response.split())
         if not normalized_response:
-            raise PersistenceContractError("GUARDRAILS_COMPLETED state contains a blank generated response")
+            raise PersistenceContractError("Customer-visible pipeline text cannot be blank")
 
         sequence_number = repositories.conversations.allocate_message_sequence(conversation_id)
         assistant_message = MessageModel(
@@ -761,7 +787,10 @@ class ProcessCustomerMessage:
             role="assistant",
             content=normalized_response,
             sequence_number=sequence_number,
-            metadata_={},
+            metadata_={
+                "message_kind": message_kind,
+                "feedback_eligible": feedback_eligible,
+            },
         )
 
         repositories.messages.add(assistant_message)
@@ -820,6 +849,16 @@ class ProcessCustomerMessage:
 
         if state.stage not in cls.TERMINAL_STAGES:
             raise PersistenceContractError(f"Orchestrator returned a non-terminal pipeline state: {state.stage.value}")
+        
+        if state.stage is PipelineStage.ESCALATED:
+            if state.customer_notice is None:
+                raise PersistenceContractError("ESCALATED state must contain a customer notice")
+
+            if state.escalation_source is None:
+                raise PersistenceContractError("ESCALATED state must contain escalation source")
+
+            if state.escalation_reason_code is None:
+                raise PersistenceContractError("ESCALATED state must contain escalation reason")
 
     @staticmethod
     def _normalize_customer_message(message: str) -> str:

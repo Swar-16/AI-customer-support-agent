@@ -274,6 +274,130 @@ describe('session controller', () => {
 
     expect(listener).not.toHaveBeenCalled();
   });
+
+  it('authenticates a newly registered customer', async () => {
+    const { controller, api, readToken } = setup();
+
+    api.register.mockResolvedValue(success(authentication()));
+
+    await expect(
+      controller.register({
+        display_name: 'Customer',
+        email: 'customer@example.test',
+        password: 'registration-password',
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(api.register).toHaveBeenCalledWith({
+      display_name: 'Customer',
+      email: 'customer@example.test',
+      password: 'registration-password',
+    });
+
+    expect(controller.getSnapshot()).toEqual({
+      phase: 'authenticated',
+      user: authentication().user,
+      error: null,
+    });
+
+    expect(readToken()).toBe('test-only-private-token');
+  });
+
+  it('does not add a role to public registration input', async () => {
+    const { controller, api } = setup();
+
+    api.register.mockResolvedValue(success(authentication()));
+
+    await controller.register({
+      email: 'customer@example.test',
+      password: 'registration-password',
+    });
+
+    const submitted = api.register.mock.calls[0]?.[0];
+
+    expect(submitted).toEqual({
+      email: 'customer@example.test',
+      password: 'registration-password',
+    });
+
+    expect(submitted).not.toHaveProperty('role');
+  });
+
+  it('does not expose registration credentials through public state', async () => {
+    const { controller, api } = setup();
+
+    api.register.mockResolvedValue(success(authentication()));
+
+    const result = await controller.register({
+      display_name: 'Customer',
+      email: 'customer@example.test',
+      password: 'private-registration-password',
+    });
+
+    const publicData = JSON.stringify({
+      snapshot: controller.getSnapshot(),
+      expiry: controller.getExpiry(),
+      result,
+    });
+
+    expect(publicData).not.toContain('private-registration-password');
+    expect(publicData).not.toContain('test-only-private-token');
+  });
+
+  it('does not authenticate when registration is rejected', async () => {
+    const { controller, api, readToken } = setup();
+
+    api.register.mockResolvedValue({
+      ok: false,
+      error: SafeApiError.fromHttp(409, null),
+      retryAfterMs: null,
+    });
+
+    const result = await controller.register({
+      email: 'existing@example.test',
+      password: 'registration-password',
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'request-failed',
+    });
+
+    expect(controller.getSnapshot()).toMatchObject({
+      phase: 'unavailable',
+      user: null,
+    });
+
+    expect(readToken()).toBeNull();
+  });
+
+  it('prevents login from overlapping an active registration', async () => {
+    const { controller, api } = setup();
+
+    const pending = deferred<TransportResult<AuthenticationResponse>>();
+
+    api.register.mockReturnValue(pending.promise);
+
+    const registration = controller.register({
+      email: 'customer@example.test',
+      password: 'registration-password',
+    });
+
+    await vi.waitFor(() => {
+      expect(api.register).toHaveBeenCalledTimes(1);
+    });
+
+    await expect(controller.login(credentials)).resolves.toEqual({
+      ok: false,
+      reason: 'busy',
+    });
+
+    expect(api.login).not.toHaveBeenCalled();
+
+    pending.resolve(success(authentication()));
+
+    await expect(registration).resolves.toEqual({ ok: true });
+  });
 });
 
 describe('coordinated session invalidation', () => {

@@ -15,6 +15,7 @@ from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
 from packages.application.audit.models import AuditActor, AuditActorType, RecordAuditEventCommand
 from packages.application.audit.recorder import AuditRecorder
 from packages.database.repositories.audit.audit_event_repository import AuditEventRepository
+from packages.application.conversations.conversation_notification import AppendConversationNotificationCommand, ConversationNotificationWriter
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork,]
 Clock = Callable[[], datetime]
@@ -30,6 +31,7 @@ ALLOWED_TICKET_TRANSITIONS: Final[dict[str, frozenset[str]]] = {
     "reopened": frozenset({"in_progress", "waiting_for_customer", "resolved",}),
 }
 MAX_RESOLUTION_SUMMARY_LENGTH: Final[int] = 5_000
+MAX_CUSTOMER_MESSAGE_LENGTH: Final[int] = 2_000
 TICKET_UPDATE_ROLES: Final[frozenset[AuthRole]] = frozenset({AuthRole.SUPPORT_AGENT, AuthRole.ADMIN,})
 
 class UpdateTicketError(RuntimeError):
@@ -101,6 +103,7 @@ class UpdateTicketCommand:
     assigned_agent_id: uuid.UUID | None = None
     unassign: bool = False
     resolution_summary: str | None = None
+    customer_message: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.ticket_id, uuid.UUID):
@@ -144,11 +147,19 @@ class UpdateTicketCommand:
         has_mutation = any((target_status is not None, priority is not None, category is not None, self.assigned_agent_id is not None, self.unassign,))
         if not has_mutation:
             raise ValueError("At least one ticket mutation must be requested")
+        
+        customer_message = self._normalize_optional_text(self.customer_message, field_name="customer_message", max_length=MAX_CUSTOMER_MESSAGE_LENGTH)
+        if target_status == "waiting_for_customer" and customer_message is None:
+            raise ValueError("customer_message is required when target_status='waiting_for_customer'")
+
+        if target_status != "waiting_for_customer" and customer_message is not None:
+            raise ValueError("customer_message may only be supplied when target_status='waiting_for_customer'")
 
         object.__setattr__(self, "target_status", target_status)
         object.__setattr__(self, "priority", priority)
         object.__setattr__(self, "category", category)
         object.__setattr__(self, "resolution_summary", resolution_summary)
+        object.__setattr__(self, "customer_message", customer_message)
 
     @staticmethod
     def _normalize_optional_choice(value: str | None, *, field_name: str, valid_values: frozenset[str]) -> str | None:
@@ -207,6 +218,7 @@ class UpdateTicketResult:
     closed_at: datetime | None
     updated_at: datetime
     changed: bool
+    notification_message_id: uuid.UUID | None
 
 class UpdateTicket:
     """
@@ -214,17 +226,21 @@ class UpdateTicket:
 
     A row lock protects lifecycle validation, while row_version protects clients from overwriting a state they did not retrieve.
     """
-    def __init__(self, *, uow_factory: UnitOfWorkFactory, clock: Clock | None = None) -> None:
+    def __init__(self, *, uow_factory: UnitOfWorkFactory, notification_writer: ConversationNotificationWriter, clock: Clock | None = None) -> None:
         if uow_factory is None:
             raise TypeError("uow_factory cannot be None")
 
         if not callable(uow_factory):
             raise TypeError("uow_factory must be callable")
 
+        if not isinstance(notification_writer, ConversationNotificationWriter):
+            raise TypeError("notification_writer must be a ConversationNotificationWriter")
+
         if clock is not None and not callable(clock):
             raise TypeError("clock must be callable or None")
 
         self._uow_factory = uow_factory
+        self._notification_writer = notification_writer
         self._clock = clock if clock is not None else self._utc_now
 
     def execute(self, command: UpdateTicketCommand) -> UpdateTicketResult:
@@ -233,7 +249,7 @@ class UpdateTicket:
 
         try:
             with self._uow_factory() as uow:
-                ticket_repository, audit_repository = self._require_repositories(uow)
+                (ticket_repository, audit_repository,) = self._require_repositories(uow)
                 ticket = ticket_repository.get_by_id_for_update(command.ticket_id)
                 if ticket is None:
                     raise TicketDoesNotExistError(command.ticket_id)
@@ -251,9 +267,41 @@ class UpdateTicket:
                 self._validate_clock_value(occurred_at)
                 previous_status = ticket.status
                 changed = self._apply_mutations(ticket=ticket, command=command, occurred_at=occurred_at, uow=uow)
+                notification_message_id: uuid.UUID | None = None
                 if changed:
                     ticket.updated_at = occurred_at
                     uow.flush()
+
+                    status_changed = (ticket.status != previous_status)
+                    if status_changed:
+                        notification = self._notification_writer.execute_in_uow(
+                            command=AppendConversationNotificationCommand(
+                                conversation_id=ticket.conversation_id,
+                                notification_kind=self._notification_kind(ticket.status),
+                                content=self._notification_content(ticket=ticket, customer_message=command.customer_message),
+                                metadata={
+                                    "ticket_id": str(ticket.id),
+                                    "ticket_reference": self._ticket_reference(ticket),
+                                    "ticket_status": ticket.status,
+                                },
+                            ),
+                            uow=uow,
+                        )
+
+                        notification_message_id = notification.message_id
+
+                    audit_metadata: dict[str, Any] = {
+                        "ticket_number": ticket.ticket_number,
+                        "expected_row_version": command.expected_row_version,
+                        "status_changed": status_changed,
+                    }
+
+                    if notification_message_id is not None:
+                        audit_metadata["notification_message_id"] = str(notification_message_id)
+
+                    if command.customer_message is not None:
+                        audit_metadata["customer_message_supplied"] = True
+                        audit_metadata["customer_message_length"] = len(command.customer_message)
 
                     AuditRecorder(repository=audit_repository).record(
                         RecordAuditEventCommand(
@@ -266,15 +314,18 @@ class UpdateTicket:
                             conversation_id=ticket.conversation_id,
                             before_state=before_state,
                             after_state=self._audit_state(ticket),
-                            metadata={
-                                "ticket_number": ticket.ticket_number,
-                                "expected_row_version": command.expected_row_version,
-                            },
+                            metadata=audit_metadata,
                             occurred_at=occurred_at,
                         )
                     )
 
-                result = self._to_result(ticket=ticket, previous_status=previous_status, changed=changed)
+                result = self._to_result(
+                    ticket=ticket,
+                    previous_status=previous_status,
+                    changed=changed,
+                    notification_message_id=notification_message_id,
+                )
+
                 uow.commit()
                 return result
 
@@ -395,6 +446,60 @@ class UpdateTicket:
         # Reopening may be combined with assignment, priority, or category updates in the same atomic command.
 
     @staticmethod
+    def _ticket_reference(ticket: TicketModel) -> str:
+        if ticket.ticket_number is None:
+            raise TicketPersistenceContractError("Persisted ticket has no ticket number")
+
+        return f"TKT-{ticket.ticket_number:08d}"
+
+    @staticmethod
+    def _notification_kind(target_status: str) -> str:
+        mapping = {
+            "in_progress": "ticket_in_progress",
+            "waiting_for_customer": "ticket_waiting_for_customer",
+            "resolved": "ticket_resolved",
+            "closed": "ticket_closed",
+            "reopened": "ticket_reopened",
+        }
+
+        notification_kind = mapping.get(target_status)
+        if notification_kind is None:
+            raise TicketPersistenceContractError("Ticket status has no customer notification mapping")
+
+        return notification_kind
+
+    @staticmethod
+    def _notification_content(*, ticket: TicketModel, customer_message: str | None) -> str:
+        ticket_reference = UpdateTicket._ticket_reference(ticket)
+        if ticket.status == "in_progress":
+            return (
+                f"Support ticket {ticket_reference} is now being reviewed by the support team. We will share an update when more information is available."
+            )
+
+        if ticket.status == "waiting_for_customer":
+            if customer_message is None:
+                raise TicketPersistenceContractError("Waiting-for-customer transition has no customer-facing information request")
+
+            return f"Support ticket {ticket_reference} needs information from you: {customer_message}"
+
+        if ticket.status == "resolved":
+            if ticket.resolution_summary is None:
+                raise TicketPersistenceContractError("Resolved ticket has no resolution summary")
+
+            return f"Support ticket {ticket_reference} has been resolved. {ticket.resolution_summary}"
+
+        if ticket.status == "closed":
+            if ticket.resolution_summary is None:
+                raise TicketPersistenceContractError("Closed ticket has no resolution summary")
+
+            return f"Support ticket {ticket_reference} has been closed. Resolution: {ticket.resolution_summary}"
+
+        if ticket.status == "reopened":
+            return f"Support ticket {ticket_reference} has been reopened and returned to the support queue."
+
+        raise TicketPersistenceContractError("Ticket status has no customer notification content")
+
+    @staticmethod
     def _require_repositories(uow: SqlAlchemyUnitOfWork) -> tuple[TicketRepository, AuditEventRepository]:
         if uow.session is None:
             raise TicketPersistenceContractError("Active SQLAlchemy Session unavailable")
@@ -435,7 +540,7 @@ class UpdateTicket:
         }
 
     @staticmethod
-    def _to_result(*, ticket: TicketModel, previous_status: str, changed: bool) -> UpdateTicketResult:
+    def _to_result(*, ticket: TicketModel, previous_status: str, changed: bool, notification_message_id: uuid.UUID | None) -> UpdateTicketResult:
         if ticket.id is None:
             raise TicketPersistenceContractError("Persisted ticket has no ID")
 
@@ -445,7 +550,7 @@ class UpdateTicket:
         return UpdateTicketResult(
             ticket_id=ticket.id,
             ticket_number=ticket.ticket_number,
-            ticket_reference=f"TKT-{ticket.ticket_number:08d}",
+            ticket_reference=UpdateTicket._ticket_reference(ticket),
             conversation_id=ticket.conversation_id,
             customer_id=ticket.customer_id,
             previous_status=previous_status,
@@ -460,6 +565,7 @@ class UpdateTicket:
             closed_at=ticket.closed_at,
             updated_at=ticket.updated_at,
             changed=changed,
+            notification_message_id=notification_message_id,
         )
 
     @staticmethod

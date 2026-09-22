@@ -407,10 +407,28 @@ class SubmitFeedback:
             raise FeedbackResponseMessageDoesNotExistError(command.response_message_id)
 
         if message.conversation_id != command.conversation_id:
-            raise FeedbackResponseMessageMismatchError(f"Response message {message.id} does not belong to conversation {command.conversation_id}")
+            raise FeedbackResponseMessageMismatchError("The response message does not belong to the supplied conversation.")
 
         if message.role != "assistant":
-            raise FeedbackResponseMessageMismatchError(f"Message {message.id} cannot receive AI-response feedback because role={message.role!r}")
+            raise FeedbackResponseMessageMismatchError("The selected message is not eligible for AI-response feedback.")
+
+        metadata = message.metadata_
+        if not isinstance(metadata, dict):
+            raise FeedbackPersistenceContractError("Persisted message metadata must be an object")
+
+        message_kind = metadata.get("message_kind")
+        if message_kind is not None and not isinstance(message_kind, str):
+            raise FeedbackPersistenceContractError("Persisted message_kind must be a string")
+
+        explicit_eligibility = metadata.get("feedback_eligible")
+        if explicit_eligibility is not None and not isinstance(explicit_eligibility, bool):
+            raise FeedbackPersistenceContractError("Persisted feedback_eligible must be a boolean")
+
+        if message_kind in {"escalation_notice", "lifecycle_notice",}:
+            raise FeedbackResponseMessageMismatchError("Lifecycle notifications cannot receive AI-response feedback.")
+
+        if explicit_eligibility is False:
+            raise FeedbackResponseMessageMismatchError("The selected assistant message is not eligible for feedback.")
 
     @staticmethod
     def _validate_ai_run(*, command: SubmitFeedbackCommand, uow: SqlAlchemyUnitOfWork) -> None:

@@ -196,8 +196,12 @@ def _to_message_view(message: MessageModel, *, runs_by_response_message: dict[uu
         )
 
     feedback_record = feedback_by_response_message.get(message.id)
-    selected_run = _select_response_run(runs=runs_by_response_message.get(message.id, (),), feedback=feedback_record)
-    feedback_view = _to_feedback_view(feedback_record) if feedback_record is not None else None
+    selected_run = _select_response_run(runs=runs_by_response_message.get(message.id, ()), feedback=feedback_record)
+    feedback_eligible = _resolve_feedback_eligibility(message=message, selected_run=selected_run)
+
+    # Escalation notices are deliberately not feedback targets. If inconsistent historical data somehow 
+    # associates feedback with such a notice, do not expose that association as a valid customer rating.
+    feedback_view = _to_feedback_view(feedback_record) if (feedback_eligible and feedback_record is not None) else None
 
     return ConversationMessageView(
         message_id=message.id,
@@ -207,9 +211,46 @@ def _to_message_view(message: MessageModel, *, runs_by_response_message: dict[uu
         sequence_number=message.sequence_number,
         created_at=message.created_at,
         ai_run_id=selected_run.id if selected_run is not None else None,
-        feedback_eligible=selected_run is not None,
+        feedback_eligible=feedback_eligible,
         feedback=feedback_view,
     )
+
+def _resolve_feedback_eligibility(*, message: MessageModel, selected_run: AIRunModel | None) -> bool:
+    """
+    Determine whether an assistant message represents a rateable AI response.
+
+    Rules:
+
+    - a completed linked AI run is required;
+    - escalation notices are never rateable;
+    - lifecycle notifications are never rateable;
+    - explicit metadata false always wins;
+    - historical assistant responses without metadata remain compatible.
+    """
+    metadata = message.metadata_
+    if not isinstance(metadata, dict):
+        raise ConversationQueryPersistenceContractError("Persisted message metadata must be an object")
+
+    message_kind = metadata.get("message_kind")
+    if message_kind is not None and not isinstance(message_kind, str):
+        raise ConversationQueryPersistenceContractError("Persisted message_kind must be a string")
+
+    explicit_eligibility = metadata.get("feedback_eligible")
+    if explicit_eligibility is not None and not isinstance(explicit_eligibility, bool):
+        raise ConversationQueryPersistenceContractError("Persisted feedback_eligible must be a boolean")
+
+    if selected_run is None:
+        return False
+
+    if message_kind in {"escalation_notice", "lifecycle_notice",}:
+        return False
+
+    if explicit_eligibility is False:
+        return False
+
+    # Explicit true and legacy assistant responses without the metadata
+    # flag are eligible when valid completed AI-run provenance exists.
+    return True
 
 def _validate_pagination(*, limit: int, offset: int) -> None:
     if isinstance(limit, bool) or not isinstance(limit, int):

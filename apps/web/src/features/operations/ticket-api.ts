@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { SafeApiError } from '../../shared/api/safe-error';
 import type { TransportResult, createTransport } from '../../shared/api/transport';
+import type { components } from '../../shared/api/generated/schema';
 import {
   decodeTicketCommentReceipt,
   decodeTicketDetail,
@@ -13,6 +14,7 @@ import {
   ticketIdSchema,
   ticketPrioritySchema,
   ticketStatusSchema,
+  ticketCustomerMessageSchema,
   type TicketCategory,
   type TicketCommentReceipt,
   type TicketCommentVisibility,
@@ -44,6 +46,8 @@ export interface TicketUpdateInput {
   readonly assignedAgentId?: string | null;
   readonly unassign?: boolean;
   readonly resolutionSummary?: string | null;
+  /* Required only when transitioning to waiting_for_customer. */
+  readonly customerMessage?: string | null;
 }
 
 export interface AddTicketCommentInput {
@@ -90,6 +94,7 @@ const ticketUpdateInputSchema = z
     assignedAgentId: z.uuid().nullable().optional(),
     unassign: z.boolean().default(false),
     resolutionSummary: z.string().trim().min(1).max(5_000).nullable().optional(),
+    customerMessage: ticketCustomerMessageSchema.nullable().optional(),
   })
   .strict()
   .superRefine((update, context) => {
@@ -140,6 +145,26 @@ const ticketUpdateInputSchema = z
         code: 'custom',
         path: [],
         message: 'At least one ticket mutation must be requested.',
+      });
+    }
+
+    if (
+      update.targetStatus === 'waiting_for_customer' &&
+      typeof update.customerMessage !== 'string'
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['customerMessage'],
+        message: 'Describe the information required from the customer.',
+      });
+    }
+
+    if (update.targetStatus !== 'waiting_for_customer' && update.customerMessage != null) {
+      context.addIssue({
+        code: 'custom',
+        path: ['customerMessage'],
+        message:
+          'A customer-facing information request is only allowed when waiting for the customer.',
       });
     }
   });
@@ -216,7 +241,15 @@ export function createTicketApi(request: Transport) {
         path: `/v1/tickets/${parsedId.data}`,
         method: 'GET',
         authentication: 'bearer',
-        decode: decodeTicketDetail,
+        decode(value) {
+          const detail = decodeTicketDetail(value);
+
+          if (detail.ticket.ticket_id !== parsedId.data) {
+            throw SafeApiError.fromLocal('invalid-response');
+          }
+
+          return detail;
+        },
         ...requestSignal(signal),
       });
     },
@@ -233,33 +266,30 @@ export function createTicketApi(request: Transport) {
         return invalidRequest<TicketUpdateResponse>();
       }
 
-      const body: Record<string, unknown> = {
+      const body = {
         expected_row_version: parsedUpdate.data.expectedRowVersion,
-      };
+        unassign: parsedUpdate.data.unassign,
 
-      if (parsedUpdate.data.targetStatus != null) {
-        body.target_status = parsedUpdate.data.targetStatus;
-      }
+        ...(parsedUpdate.data.targetStatus != null
+          ? { target_status: parsedUpdate.data.targetStatus }
+          : {}),
 
-      if (parsedUpdate.data.priority != null) {
-        body.priority = parsedUpdate.data.priority;
-      }
+        ...(parsedUpdate.data.priority != null ? { priority: parsedUpdate.data.priority } : {}),
 
-      if (parsedUpdate.data.category != null) {
-        body.category = parsedUpdate.data.category;
-      }
+        ...(parsedUpdate.data.category != null ? { category: parsedUpdate.data.category } : {}),
 
-      if (parsedUpdate.data.assignedAgentId != null) {
-        body.assigned_agent_id = parsedUpdate.data.assignedAgentId;
-      }
+        ...(parsedUpdate.data.assignedAgentId != null
+          ? { assigned_agent_id: parsedUpdate.data.assignedAgentId }
+          : {}),
 
-      if (parsedUpdate.data.unassign) {
-        body.unassign = true;
-      }
+        ...(parsedUpdate.data.resolutionSummary != null
+          ? { resolution_summary: parsedUpdate.data.resolutionSummary }
+          : {}),
 
-      if (parsedUpdate.data.resolutionSummary != null) {
-        body.resolution_summary = parsedUpdate.data.resolutionSummary;
-      }
+        ...(parsedUpdate.data.customerMessage != null
+          ? { customer_message: parsedUpdate.data.customerMessage }
+          : {}),
+      } satisfies components['schemas']['UpdateTicketRequest'];
 
       return request({
         path: `/v1/tickets/${parsedId.data}`,
@@ -269,7 +299,15 @@ export function createTicketApi(request: Transport) {
           kind: 'json',
           value: body,
         },
-        decode: decodeTicketUpdateResponse,
+        decode(value) {
+          const result = decodeTicketUpdateResponse(value);
+
+          if (result.ticket_id !== parsedId.data) {
+            throw SafeApiError.fromLocal('invalid-response');
+          }
+
+          return result;
+        },
         ...requestSignal(signal),
       });
     },

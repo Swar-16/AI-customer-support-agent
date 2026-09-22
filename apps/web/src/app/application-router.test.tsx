@@ -13,6 +13,7 @@ vi.mock('../shared/auth/session-context', () => ({
   useSession: vi.fn(),
   useSessionController: () => ({
     login: vi.fn(),
+    register: vi.fn(),
   }),
 }));
 
@@ -25,6 +26,45 @@ vi.mock('../features/chat/chat-page', async () => {
     },
   };
 });
+
+vi.mock('../features/operations/operations-page', () => ({
+  default: function OperationsRouteFixture() {
+    return (
+      <main>
+        <h1>Operations</h1>
+      </main>
+    );
+  },
+}));
+
+vi.mock('../features/knowledge/knowledge-page', async () => {
+  const { NavLink, Outlet } = await import('react-router');
+
+  return {
+    default: function KnowledgeRouteFixture() {
+      return (
+        <main>
+          <h1>Knowledge</h1>
+
+          <nav aria-label="Workspace navigation">
+            <NavLink to="/operations">Operations</NavLink>
+            <NavLink to="/knowledge" end>
+              Knowledge
+            </NavLink>
+          </nav>
+
+          <Outlet />
+        </main>
+      );
+    },
+  };
+});
+
+vi.mock('../features/knowledge/knowledge-library', () => ({
+  KnowledgeLibrary: function KnowledgeLibraryFixture() {
+    return <section aria-label="Knowledge library fixture" />;
+  },
+}));
 
 function authenticated(role: AuthUser['role']): SessionSnapshot {
   return {
@@ -156,10 +196,61 @@ describe('application routes', () => {
     expect(screen.queryByRole('navigation')).toBeNull();
   });
 
-  it('does not invent unimplemented detail routes', () => {
+  it('shows not found for an unknown knowledge route', async () => {
     vi.mocked(useSession).mockReturnValue(authenticated('admin'));
-    open('/knowledge/documents/not-implemented');
 
-    expect(screen.getByRole('heading', { name: 'Page not found' })).toBeInTheDocument();
+    open('/knowledge/not-implemented');
+
+    expect(
+      await screen.findByRole('heading', {
+        name: 'Page not found',
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it('opens public customer registration for an anonymous visitor', async () => {
+    open('/register');
+
+    expect(
+      await screen.findByRole('heading', {
+        name: 'Create your account',
+      }),
+    ).toBeInTheDocument();
+
+    expect(screen.getByRole('link', { name: 'Sign in instead' })).toHaveAttribute('href', '/login');
+  });
+
+  it('links sign-in to public registration', async () => {
+    open('/login');
+
+    expect(
+      await screen.findByRole('heading', {
+        name: 'Sign in',
+      }),
+    ).toBeInTheDocument();
+
+    expect(screen.getByRole('link', { name: 'Create an account' })).toHaveAttribute(
+      'href',
+      '/register',
+    );
+  });
+
+  it('redirects an authenticated customer away from registration', async () => {
+    vi.mocked(useSession).mockReturnValue(authenticated('customer'));
+
+    open('/register');
+
+    expect(
+      await screen.findByRole('heading', {
+        name: 'Customer Chat',
+        level: 1,
+      }),
+    ).toBeInTheDocument();
+
+    expect(
+      screen.queryByRole('heading', {
+        name: 'Create your account',
+      }),
+    ).not.toBeInTheDocument();
   });
 });

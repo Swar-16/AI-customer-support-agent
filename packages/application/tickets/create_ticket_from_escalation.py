@@ -8,6 +8,7 @@ from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
 from packages.application.tickets.create_ticket import CreateTicket, CreateTicketCommand, CreateTicketResult, TicketConversationDoesNotExistError
 from packages.application.tickets.create_ticket import TicketCreationAccessDeniedError, TicketEscalationDoesNotExistError, TicketPersistenceContractError
 from packages.database.unit_of_work.sqlalchemy_uow import SqlAlchemyUnitOfWork
+from packages.application.conversations.conversation_notification import AppendConversationNotificationCommand, ConversationNotificationWriter
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 
@@ -37,15 +38,19 @@ class CreateTicketFromEscalation:
 
     The escalation and conversation are loaded inside the same transaction. Repeated submissions reuse the ticket already linked to the escalation.
     """
-    def __init__(self, *, uow_factory: UnitOfWorkFactory, create_ticket: CreateTicket) -> None:
+    def __init__(self, *, uow_factory: UnitOfWorkFactory, create_ticket: CreateTicket, notification_writer: ConversationNotificationWriter) -> None:
         if uow_factory is None or not callable(uow_factory):
             raise TypeError("uow_factory must be callable")
 
         if not isinstance(create_ticket, CreateTicket):
             raise TypeError("create_ticket must be a CreateTicket service")
 
+        if not isinstance(notification_writer, ConversationNotificationWriter):
+            raise TypeError("notification_writer must be a ConversationNotificationWriter")
+
         self._uow_factory = uow_factory
         self._create_ticket = create_ticket
+        self._notification_writer = notification_writer
 
     def execute(self, command: CreateTicketFromEscalationCommand) -> CreateTicketResult:
         if not isinstance(command, CreateTicketFromEscalationCommand):
@@ -82,10 +87,31 @@ class CreateTicketFromEscalation:
                     priority=command.priority,
                     principal=command.principal,
                     trace_id=command.trace_id,
-                    metadata={"created_from": "escalation_review",},
+                    metadata={
+                        "created_from": "escalation_review",
+                    },
                 ),
                 uow=uow,
             )
+
+            if result.created:
+                self._notification_writer.execute_in_uow(
+                    command=AppendConversationNotificationCommand(
+                        conversation_id=result.conversation_id,
+                        notification_kind="ticket_created",
+                        content=(
+                            f"A support ticket {result.ticket_reference} has been created from your escalation. The support team can "
+                            "now track your case. You can view the ticket for updates and customer-visible comments."
+                        ),
+                        metadata={
+                            "ticket_id": str(result.ticket_id),
+                            "ticket_reference": result.ticket_reference,
+                            "escalation_id": str(command.escalation_id),
+                            "ticket_status": result.status,
+                        },
+                    ),
+                    uow=uow,
+                )
 
             uow.commit()
             return result

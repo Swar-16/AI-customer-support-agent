@@ -4,7 +4,7 @@ import uuid
 from typing import Annotated
 from fastapi import APIRouter, HTTPException, Path, Query, status, Depends
 
-from apps.api.app.api.v1.schemas.escalations import EscalationListResponse, EscalationPriority, EscalationResponse
+from apps.api.app.api.v1.schemas.escalations import EscalationListResponse, EscalationPriority, EscalationResponse, CustomerLinkedTicketResponse
 from apps.api.app.api.v1.schemas.escalations import EscalationStatus, UpdateEscalationRequest, UpdateEscalationResponse
 from apps.api.app.api.v1.schemas.escalations import EscalationDetailResponse, LinkedEscalationTicketResponse, CustomerEscalationStatusResponse
 # from packages.application.escalations.query_escalations import EscalationDoesNotExistError as QueryEscalationDoesNotExistError
@@ -113,6 +113,7 @@ def update_escalation(escalation_id: EscalationIdPath, payload: UpdateEscalation
             target_status=payload.status,
             principal=principal,
             trace_id=trace_id,
+            customer_message=payload.customer_message,
         )
     )
 
@@ -125,6 +126,7 @@ def update_escalation(escalation_id: EscalationIdPath, payload: UpdateEscalation
         resolved_at=result.resolved_at,
         updated_at=result.updated_at,
         changed=result.changed,
+        notification_message_id=result.notification_message_id,
     )
 
 
@@ -202,6 +204,13 @@ def get_customer_escalation_status(conversation_id: ConversationIdPath, services
         GetCustomerEscalationStatusQuery(conversation_id=conversation_id, principal=principal)
     )
 
+    linked_ticket = escalation.linked_ticket
+    linked_ticket_response = None if linked_ticket is None else CustomerLinkedTicketResponse(
+        ticket_id=linked_ticket.ticket_id,
+        ticket_reference=linked_ticket.ticket_reference,
+        status=linked_ticket.status,
+    )
+
     return CustomerEscalationStatusResponse(
         escalation_id=escalation.escalation_id,
         conversation_id=escalation.conversation_id,
@@ -210,4 +219,5 @@ def get_customer_escalation_status(conversation_id: ConversationIdPath, services
         created_at=escalation.created_at,
         updated_at=escalation.updated_at,
         resolved_at=escalation.resolved_at,
+        linked_ticket=linked_ticket_response,
     )

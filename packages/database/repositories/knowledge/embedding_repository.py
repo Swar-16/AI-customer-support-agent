@@ -1,7 +1,7 @@
 # AI-customer-support-agent\packages\database\repositories\knowledge\embedding_repository.py
 from __future__ import annotations
 from uuid import UUID
-from sqlalchemy import select
+from sqlalchemy import and_, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -9,6 +9,8 @@ from packages.database.models.knowledge.chunk_embedding import KnowledgeChunkEmb
 from packages.database.repositories.knowledge.mappers import chunk_embedding_to_domain, chunk_embedding_to_model
 from packages.knowledge.domain.embedding import KnowledgeChunkEmbedding
 from packages.knowledge.embeddings.models import EmbeddingInputDescriptor, EmbeddingProviderDescriptor
+from packages.database.models.knowledge.chunk import KnowledgeChunkModel
+from packages.knowledge.repositories.embedding_repository import KnowledgeVersionEmbeddingCoverage
 
 
 class SQLAlchemyKnowledgeEmbeddingRepository:
@@ -128,3 +130,50 @@ class SQLAlchemyKnowledgeEmbeddingRepository:
         models = self._session.scalars(statement).all()
 
         return [chunk_embedding_to_domain(model) for model in models]
+    
+    def get_coverage_for_version(self, version_id: UUID, *, provider: EmbeddingProviderDescriptor, input_descriptor: EmbeddingInputDescriptor) -> KnowledgeVersionEmbeddingCoverage:
+        """
+        Return authoritative embedding coverage for one knowledge version under one exact active embedding profile.
+
+        This executes one aggregate query regardless of the number of chunks and therefore avoids N+1 repository access.
+
+        COUNT(DISTINCT ...) is deliberate. A chunk may contain historical artifacts produced under different input
+        fingerprints, but it must contribute at most once to coverage for the selected active profile.
+        """
+        if not isinstance(version_id, UUID):
+            raise TypeError("version_id must be a UUID.")
+
+        if not isinstance(provider, EmbeddingProviderDescriptor):
+            raise TypeError("provider must be an EmbeddingProviderDescriptor.")
+
+        if not isinstance(input_descriptor, EmbeddingInputDescriptor):
+            raise TypeError("input_descriptor must be an EmbeddingInputDescriptor.")
+
+        embedding_match_conditions = [
+            KnowledgeChunkEmbeddingModel.chunk_id == KnowledgeChunkModel.id,
+            KnowledgeChunkEmbeddingModel.provider == provider.provider,
+            KnowledgeChunkEmbeddingModel.model == provider.model,
+            KnowledgeChunkEmbeddingModel.dimensions == provider.dimensions,
+            KnowledgeChunkEmbeddingModel.input_strategy_id == input_descriptor.strategy_id,
+            KnowledgeChunkEmbeddingModel.input_strategy_version == input_descriptor.version,
+            KnowledgeChunkEmbeddingModel.input_config_fingerprint == input_descriptor.config_fingerprint,
+        ]
+        if provider.revision is None:
+            embedding_match_conditions.append(KnowledgeChunkEmbeddingModel.model_revision.is_(None))
+            
+        else:
+            embedding_match_conditions.append(KnowledgeChunkEmbeddingModel.model_revision == provider.revision)
+
+        statement = (select(func.count(func.distinct(KnowledgeChunkModel.id)).label("total_chunk_count"),
+                            func.count(func.distinct(KnowledgeChunkEmbeddingModel.chunk_id)).label("embedded_chunk_count"))
+                     .select_from(KnowledgeChunkModel)
+                     .outerjoin(KnowledgeChunkEmbeddingModel, and_(*embedding_match_conditions))
+                     .where(KnowledgeChunkModel.version_id == version_id)
+        )
+
+        row = self._session.execute(statement).one()
+
+        return KnowledgeVersionEmbeddingCoverage(
+            total_chunk_count=int(row.total_chunk_count or 0),
+            embedded_chunk_count=int(row.embedded_chunk_count or 0),
+        )

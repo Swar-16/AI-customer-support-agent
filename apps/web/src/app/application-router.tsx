@@ -17,6 +17,7 @@ import { canOpenWorkspace, homePath } from '../shared/auth/workspace-access';
 import type { Workspace } from '../shared/auth/workspace-access';
 import { LoginPage } from '../features/auth/login-page';
 import { LogoutPage } from '../features/auth/logout-page';
+import { RegisterPage } from '../features/auth/register-page';
 import { loginDestination } from '../features/auth/login-destination';
 import { RouteErrorBoundary } from './route-error-boundary';
 import { LogoutDialogProvider } from '../features/auth/logout-dialog';
@@ -26,6 +27,24 @@ import { ChatNavigationGuard } from '../features/chat/chat-navigation-guard';
 const ChatPage = lazy(() => import('../features/chat/chat-page'));
 const OperationsPage = lazy(() => import('../features/operations/operations-page'));
 const KnowledgePage = lazy(() => import('../features/knowledge/knowledge-page'));
+
+const KnowledgeLibrary = lazy(() =>
+  import('../features/knowledge/knowledge-library').then((module) => ({
+    default: module.KnowledgeLibrary,
+  })),
+);
+
+const KnowledgeDocumentDetail = lazy(() =>
+  import('../features/knowledge/knowledge-document-detail').then((module) => ({
+    default: module.KnowledgeDocumentDetail,
+  })),
+);
+
+const KnowledgeVersionDetail = lazy(() =>
+  import('../features/knowledge/knowledge-version-detail').then((module) => ({
+    default: module.KnowledgeVersionDetail,
+  })),
+);
 
 function Notice({ title, children }: { readonly title: string; readonly children: ReactNode }) {
   return (
@@ -58,6 +77,30 @@ function Home() {
   return <Navigate to={destination ?? '/login'} replace />;
 }
 
+function RegisterEntry() {
+  const session = useSession();
+
+  if (session.phase === 'authenticated') {
+    const destination = homePath(session.user);
+
+    if (destination !== null) {
+      return <Navigate to={destination} replace />;
+    }
+
+    /*
+     * Defensive fallback. The session controller normally prevents unsupported or inactive accounts from becoming authenticated.
+     */
+    return (
+      <Notice title="No workspace is available">
+        <p role="alert">This account does not have access to an application workspace.</p>
+        <Link to="/logout">Sign out</Link>
+      </Notice>
+    );
+  }
+
+  return <RegisterPage />;
+}
+
 function LoginEntry() {
   const session = useSession();
   const location = useLocation();
@@ -82,14 +125,24 @@ function RequireWorkspace({
   readonly children: ReactNode;
 }) {
   const session = useSession();
+  const location = useLocation();
 
   if (session.phase === 'uninitialized' || session.phase === 'pending') {
     return <SessionPending />;
   }
 
   if (session.phase === 'anonymous') {
-    // Only a known workspace root is retained. No arbitrary URL or query data.
-    return <Navigate to="/login" replace state={{ returnTo: `/${workspace}` }} />;
+    const workspaceRoot = `/${workspace}`;
+
+    /*
+     * Preserve only a path that belongs to the requested workspace. Query strings, hashes, and external URLs are deliberately excluded.
+     */
+    const returnTo =
+      location.pathname === workspaceRoot || location.pathname.startsWith(`${workspaceRoot}/`)
+        ? location.pathname
+        : workspaceRoot;
+
+    return <Navigate to="/login" replace state={{ returnTo }} />;
   }
 
   if (session.phase !== 'authenticated' || session.user === null) {
@@ -135,6 +188,7 @@ export function ApplicationRoutes({
             <Routes>
               <Route path="/" element={<Home />} />
               <Route path="/login" element={<LoginEntry />} />
+              <Route path="/register" element={<RegisterEntry />} />
               <Route path="/logout" element={<LogoutPage />} />
 
               <Route
@@ -170,7 +224,16 @@ export function ApplicationRoutes({
                     <KnowledgePage />
                   </RequireWorkspace>
                 }
-              />
+              >
+                <Route index element={<KnowledgeLibrary />} />
+
+                <Route path="documents/:documentId" element={<KnowledgeDocumentDetail />} />
+
+                <Route
+                  path="documents/:documentId/versions/:versionId"
+                  element={<KnowledgeVersionDetail />}
+                />
+              </Route>
 
               <Route
                 path="*"

@@ -213,11 +213,16 @@ class TestEscalationLifecycle:
         assert in_review_body["current_status"] == "in_review"
         assert in_review_body["resolved_at"] is None
         assert in_review_body["changed"] is True
+        in_review_notification_id = uuid.UUID(in_review_body["notification_message_id"])
 
         resolved_response = support_agent_client.patch(
             f"/v1/escalations/{seeded_escalation.escalation_id}",
             json={
                 "status": "resolved",
+                "customer_message": (
+                    "We reviewed your request and completed the "
+                    "required support follow-up."
+                ),
             },
         )
 
@@ -229,6 +234,8 @@ class TestEscalationLifecycle:
         assert resolved_body["current_status"] == "resolved"
         assert resolved_body["resolved_at"] is not None
         assert resolved_body["changed"] is True
+        resolved_notification_id = uuid.UUID(resolved_body["notification_message_id"])
+        assert resolved_notification_id != in_review_notification_id
 
         with test_session_factory() as session:
             persisted = session.get(
@@ -239,6 +246,36 @@ class TestEscalationLifecycle:
             assert persisted is not None
             assert persisted.status == "resolved"
             assert persisted.resolved_at is not None
+
+            notifications = tuple(
+                session.query(MessageModel)
+                .filter(
+                    MessageModel.conversation_id
+                    == seeded_escalation.conversation_id,
+                    MessageModel.id.in_(
+                        (
+                            in_review_notification_id,
+                            resolved_notification_id,
+                        )
+                    ),
+                )
+                .order_by(
+                    MessageModel.sequence_number.asc()
+                )
+                .all()
+            )
+
+            assert len(notifications) == 2
+
+            assert notifications[0].role == "assistant"
+            assert notifications[0].metadata_["message_kind"] == "lifecycle_notice"
+            assert notifications[0].metadata_["notification_kind"] == "escalation_in_review"
+            assert notifications[0].metadata_["feedback_eligible"] is False
+
+            assert notifications[1].role == "assistant"
+            assert notifications[1].metadata_["notification_kind"] == "escalation_resolved"
+            assert "completed the required support follow-up" in notifications[1].content
+            assert notifications[1].metadata_["feedback_eligible"] is False
 
     def test_repeating_current_status_is_idempotent(
         self,
@@ -259,6 +296,7 @@ class TestEscalationLifecycle:
         assert body["previous_status"] == "open"
         assert body["current_status"] == "open"
         assert body["changed"] is False
+        assert body["notification_message_id"] is None
 
     def test_invalid_terminal_transition_returns_conflict(
         self,
@@ -269,6 +307,10 @@ class TestEscalationLifecycle:
             f"/v1/escalations/{seeded_escalation.escalation_id}",
             json={
                 "status": "resolved",
+                "customer_message": (
+                    "We reviewed your request and completed the "
+                    "required support follow-up."
+                ),
             },
         )
 
@@ -309,6 +351,26 @@ class TestEscalationLifecycle:
 
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "INVALID_REQUEST"
+        
+    def test_terminal_transition_requires_customer_message(
+        self,
+        support_agent_client: TestClient,
+        seeded_escalation: SeededEscalation,
+    ) -> None:
+        response = support_agent_client.patch(
+            (
+                f"/v1/escalations/"
+                f"{seeded_escalation.escalation_id}"
+            ),
+            json={
+                "status": "resolved",
+            },
+        )
+
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == (
+            "INVALID_REQUEST"
+        )
 
 
 class TestEscalationCreationIdempotency:

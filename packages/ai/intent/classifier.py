@@ -286,6 +286,28 @@ class IntentClassifier:
 
             "Examples include questions about support hours, accepted payment "
             "methods, or how the company's service works.\n\n"
+            
+            "KNOWLEDGE TOPICS NOT PRESENT IN THE TAXONOMY\n\n"
+
+            "The canonical intent taxonomy represents support workflows, not every "
+            "possible company, product, service, or policy topic.\n\n"
+
+            "When the customer asks an understandable informational question about "
+            "the company, its products, services, policies, benefits, programs, "
+            "features, procedures, or supported offerings, select general_question "
+            "if no more specific canonical intent applies.\n\n"
+
+            "Do not select unknown or out_of_scope merely because the specific "
+            "knowledge topic does not have its own canonical intent.\n\n"
+
+            "Examples of topics that should normally use general_question include "
+            "gift cards, store credit, warranties, discounts, loyalty programs, "
+            "support availability, product features, accepted payment methods, and "
+            "other company-specific informational subjects introduced by published "
+            "knowledge.\n\n"
+
+            "The downstream retrieval system—not the intent taxonomy—determines "
+            "whether published knowledge exists for that topic.\n\n"
 
             "Use out_of_scope when the customer's request is understandable but "
             "unrelated to the supported customer-service domain.\n\n"
@@ -335,28 +357,90 @@ class IntentClassifier:
 
             "CLARIFICATION\n\n"
 
-            "Set needs_clarification=true when:\n"
-            "- the support intent is genuinely ambiguous;\n"
-            "- the intent is understood but information required to route the "
-            "request safely is missing;\n"
-            "- the latest message depends on prior context that is unavailable "
-            "or insufficient.\n\n"
+            "Set needs_clarification=true only when information is genuinely "
+            "required before the system can provide a useful and safe response.\n\n"
+
+            "Do not request clarification merely because the customer:\n"
+            "- is angry, frustrated, critical, or informal;\n"
+            "- uses imperfect grammar;\n"
+            "- reports that a return, refund, cancellation, or payment request "
+            "was rejected;\n"
+            "- asks why a process produced an unfavorable outcome;\n"
+            "- has not supplied an order, transaction, subscription, or account "
+            "identifier when the question can still be answered with general "
+            "published policy or procedural guidance.\n\n"
+
+            "Distinguish informational guidance from operational lookup.\n\n"
+
+            "For an informational question, use the appropriate supported intent "
+            "with needs_clarification=false when published knowledge could provide "
+            "useful policy, eligibility, timing, required-document, or next-step "
+            "guidance. This remains true even when the system cannot determine the "
+            "customer's exact account-specific outcome.\n\n"
+
+            "Examples:\n"
+            "- \"Why might a return be rejected?\" is a return_exchange knowledge "
+            "question and normally does not require clarification.\n"
+            "- \"I returned an item within five days but it was rejected. What "
+            "should I do?\" is normally return_exchange and should retrieve "
+            "published return guidance rather than ask a generic question.\n"
+            "- \"My refund has not arrived after twenty days. How long can it "
+            "take?\" is normally refund_request and should retrieve published "
+            "refund timing guidance.\n"
+            "- \"I was charged twice. What steps should I take?\" is normally "
+            "payment_issue and may retrieve published duplicate-charge guidance "
+            "without requiring identifiers.\n\n"
+
+            "For an operational request asking for the current state of a specific "
+            "business record, request only the identifier required by that "
+            "workflow.\n\n"
 
             "For order_status, set needs_clarification=true when no explicit "
             "order_id is available.\n\n"
 
-            "For payment_issue, set needs_clarification=true when resolving the "
-            "specific issue requires an order_id or transaction_id and neither "
-            "is available. Do not require an identifier for a purely general "
-            "payment-policy question.\n\n"
+            "For payment_issue, set needs_clarification=true only when completing "
+            "the requested operational lookup requires an order_id or "
+            "transaction_id and neither is available. Do not require an identifier "
+            "for general payment-policy, duplicate-charge, or troubleshooting "
+            "guidance.\n\n"
 
-            "For subscription_issue, set needs_clarification=true when resolving "
-            "a specific subscription requires a subscription_id and none is "
-            "available. Do not require an identifier for a general subscription-"
-            "policy question.\n\n"
+            "For subscription_issue, set needs_clarification=true only when a "
+            "specific subscription lookup or change requires a subscription_id. "
+            "Do not require it for general subscription-policy guidance.\n\n"
 
-            "Do not set needs_clarification merely because the customer is angry, "
-            "critical, informal, or uses imperfect grammar.\n\n"
+            "FOLLOW-UP MESSAGES\n\n"
+
+            "Use the supplied conversation context to resolve short follow-ups such "
+            "as:\n"
+            "- \"What details do you need?\"\n"
+            "- \"How long does that take?\"\n"
+            "- \"Can it be faster?\"\n"
+            "- \"Why was it rejected?\"\n"
+            "- \"What should I do now?\"\n\n"
+
+            "When the latest message refers to a clearly established earlier "
+            "support topic, preserve that topic's intent. Do not classify the "
+            "follow-up as unknown merely because it is short.\n\n"
+
+            "When the customer asks what information is required, use the prior "
+            "conversation to determine the relevant workflow. Set "
+            "needs_clarification=true only if customer-supplied information is "
+            "actually necessary. Extract identifiers from context only when the "
+            "customer explicitly supplied them.\n\n"
+
+            "UNINTELLIGIBLE INPUT\n\n"
+
+            "If a non-empty message is meaningless, random, or cannot be understood "
+            "as a supported or unsupported request, return:\n"
+            "- intent=unknown;\n"
+            "- needs_clarification=true;\n"
+            "- a low confidence value;\n"
+            "- no invented entities;\n"
+            "- no escalation signals unless independently and clearly supported.\n\n"
+
+            "Do not fail the classification merely because the message contains "
+            "gibberish, spelling mistakes, fragments, or unusual punctuation. "
+            "Return a valid structured unknown classification whenever possible.\n\n"
 
             "ESCALATION SIGNALS\n\n"
 

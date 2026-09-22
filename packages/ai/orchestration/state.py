@@ -185,6 +185,15 @@ class AIState(BaseModel):
     decision_result: DecisionResult | None = None
     retrieved_evidence: tuple[RetrievedEvidence, ...] = Field(default_factory=tuple)
     generated_response: str | None = None
+    customer_notice: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=2_000,
+        description=(
+            "Application-controlled customer-facing notice for a non-answer terminal outcome such as escalation. This must "
+            "never contain an unapproved model-generated candidate."
+        ),
+    )
     
     # Sanitized guardrail disposition
     guardrail_disposition: GuardrailDisposition | None = None
@@ -238,6 +247,15 @@ class AIState(BaseModel):
 
         normalized = value.strip()
 
+        return normalized or None
+    
+    @field_validator("customer_notice")
+    @classmethod
+    def normalize_customer_notice(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+
+        normalized = " ".join(value.split())
         return normalized or None
     
     @field_validator("escalation_reason_code")
@@ -331,6 +349,9 @@ class AIState(BaseModel):
 
             if self.escalation_reason_code is None:
                 raise ValueError("ESCALATED requires escalation_reason_code")
+            
+            if self.customer_notice is None:
+                raise ValueError("ESCALATED requires a customer_notice")
             
             if self.escalation_source is EscalationSource.GUARDRAIL:
                 if self.guardrail_disposition is not GuardrailDisposition.ESCALATE:
@@ -448,7 +469,7 @@ class AIState(BaseModel):
             }
         )
     
-    def with_guardrail_escalation(self, *, escalation_reason_code: str, guardrail_reason_code: str, policy_id: str | None = None) -> AIState:
+    def with_guardrail_escalation(self, *, escalation_reason_code: str, guardrail_reason_code: str, customer_notice: str, policy_id: str | None = None) -> AIState:
         """
         Transition a rejected generated candidate to human review while retaining only sanitized guardrail identifiers.
 
@@ -457,6 +478,7 @@ class AIState(BaseModel):
         if self.stage is not PipelineStage.RESPONSE_GENERATED:
             raise ValueError("Guardrail escalation requires RESPONSE_GENERATED stage")
 
+        normalized_notice = self._normalize_customer_notice_input(customer_notice)
         normalized_guardrail_reason = self._normalize_guardrail_value(field_name="guardrail_reason_code", value=guardrail_reason_code)
         normalized_policy_id = self._normalize_guardrail_value(field_name="policy_id", value=policy_id) if policy_id is not None else None
         escalated = self.model_copy(
@@ -467,18 +489,16 @@ class AIState(BaseModel):
             }
         )
 
-        return escalated.with_escalation(source=EscalationSource.GUARDRAIL, reason_code=escalation_reason_code)
+        return escalated.with_escalation(source=EscalationSource.GUARDRAIL, reason_code=escalation_reason_code, customer_notice=normalized_notice)
     
-    def with_escalation(self, *, source: EscalationSource, reason_code: str) -> AIState:
+    def with_escalation(self, *, source: EscalationSource, reason_code: str, customer_notice: str) -> AIState:
         """
-        Return a copy representing a workflow that requires human review.
+        Return a state requiring human review.
 
-        Escalation is a normal workflow disposition, not a pipeline failure.
+        ``customer_notice`` is safe application-controlled text explaining the outcome to the customer. It is deliberately
+        separate from ``generated_response`` because a generated candidate may have triggered the escalation and must remain internal.
 
-        This transition records *why* orchestration requested escalation. Creation of the persistent 
-        escalation record belongs to the application/persistence layer and may later populate ``escalation_id``.
-
-        A generated response, if one exists, remains an internal candidate. Reaching ESCALATED does not authorize that candidate for customer persistence.
+        Creation of the persistent escalation record belongs to the application layer.
         """
         if self.intent_result is None:
             raise ValueError("Cannot escalate before intent classification")
@@ -493,15 +513,17 @@ class AIState(BaseModel):
             raise TypeError("reason_code must be a string")
 
         normalized_reason_code = reason_code.strip().lower()
-
         if not normalized_reason_code:
             raise ValueError("reason_code cannot be empty")
+
+        normalized_notice = self._normalize_customer_notice_input(customer_notice)
 
         return self.model_copy(
             update={
                 "stage": PipelineStage.ESCALATED,
                 "escalation_source": source,
                 "escalation_reason_code": normalized_reason_code,
+                "customer_notice": normalized_notice,
                 "completed_at": datetime.now(timezone.utc),
             }
         )
@@ -543,5 +565,19 @@ class AIState(BaseModel):
 
         if not normalized:
             raise ValueError(f"{field_name} cannot be blank")
+
+        return normalized
+    
+    @staticmethod
+    def _normalize_customer_notice_input(value: str,) -> str:
+        if not isinstance(value, str):
+            raise TypeError("customer_notice must be a string")
+
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("customer_notice cannot be blank")
+
+        if len(normalized) > 2_000:
+            raise ValueError("customer_notice cannot exceed 2000 characters")
 
         return normalized

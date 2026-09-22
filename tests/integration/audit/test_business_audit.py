@@ -39,6 +39,9 @@ from packages.database.repositories.audit.audit_event_repository import (
 from packages.database.unit_of_work.sqlalchemy_uow import (
     SqlAlchemyUnitOfWork,
 )
+from packages.application.conversations.conversation_notification import (
+    ConversationNotificationWriter,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,7 +155,10 @@ class TestTicketBusinessAudit:
             initial_row_version = ticket.row_version
 
         update_service = UpdateTicket(
-            uow_factory=uow_factory
+            uow_factory=uow_factory,
+            notification_writer=(
+                ConversationNotificationWriter()
+            ),
         )
         update_service.execute(
             UpdateTicketCommand(

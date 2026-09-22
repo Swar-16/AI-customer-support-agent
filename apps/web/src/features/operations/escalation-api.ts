@@ -10,12 +10,15 @@ import {
   escalationIdSchema,
   escalationPrioritySchema,
   escalationStatusSchema,
+  escalationTransitionRequestSchema,
+  type EscalationTransitionRequest,
   type EscalationDetail,
   type EscalationPage,
   type EscalationPriority,
   type EscalationStatus,
   type EscalationUpdate,
 } from './escalation-contract';
+import type { components } from '../../shared/api/generated/schema';
 
 type Transport = ReturnType<typeof createTransport>;
 
@@ -126,15 +129,34 @@ export function createEscalationApi(request: Transport) {
 
     updateStatus(
       escalationId: string,
-      status: EscalationStatus,
+      transition: EscalationTransitionRequest,
       signal?: AbortSignal,
     ): Promise<TransportResult<EscalationUpdate>> {
       const parsedId = escalationIdSchema.safeParse(escalationId);
-      const parsedStatus = escalationStatusSchema.safeParse(status);
 
-      if (!parsedId.success || !parsedStatus.success) {
+      const parsedTransition = escalationTransitionRequestSchema.safeParse(transition);
+
+      if (!parsedId.success || !parsedTransition.success) {
         return invalidRequest<EscalationUpdate>();
       }
+
+      const terminal =
+        parsedTransition.data.status === 'resolved' || parsedTransition.data.status === 'dismissed';
+
+      const body = terminal
+        ? {
+            status: parsedTransition.data.status,
+            customer_message: parsedTransition.data.customer_message,
+          }
+        : {
+            status: parsedTransition.data.status,
+          };
+
+      /*
+       * Non-terminal transitions omit customer_message completely.
+       * Terminal transitions include the agent-written safe explanation.
+       */
+      const requestBody = body satisfies components['schemas']['UpdateEscalationRequest'];
 
       return request({
         path: `/v1/escalations/${parsedId.data}`,
@@ -142,11 +164,17 @@ export function createEscalationApi(request: Transport) {
         authentication: 'bearer',
         body: {
           kind: 'json',
-          value: {
-            status: parsedStatus.data,
-          },
+          value: requestBody,
         },
-        decode: decodeEscalationUpdate,
+        decode(value) {
+          const result = decodeEscalationUpdate(value);
+
+          if (result.escalation_id !== parsedId.data) {
+            throw SafeApiError.fromLocal('invalid-response');
+          }
+
+          return result;
+        },
         ...requestSignal(signal),
       });
     },
