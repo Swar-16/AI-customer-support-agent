@@ -13,6 +13,7 @@ from typing import Any, Protocol
 from packages.knowledge.embeddings.errors import EmbeddingProviderTimeoutError, KnowledgeEmbeddingError
 from packages.knowledge.embeddings.models import EmbeddingBatch, EmbeddingProviderDescriptor, EmbeddingVector
 from packages.knowledge.embeddings.provider.base import EmbeddingProvider
+from packages.knowledge.embeddings.provider.query_cache import QueryEmbeddingCache
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,9 @@ class InstrumentedEmbeddingProvider(EmbeddingProvider):
 
     Raw input text and embedding vectors are never persisted.
     """
-    def __init__(self, *, provider: EmbeddingProvider, recorder: EmbeddingTelemetryRecorderContract, context: EmbeddingCallContext) -> None:
+    def __init__(self, *, provider: EmbeddingProvider, recorder: EmbeddingTelemetryRecorderContract, context: EmbeddingCallContext,
+                 query_cache: QueryEmbeddingCache | None = None
+    ) -> None:
         if not isinstance(provider, EmbeddingProvider):
             raise TypeError("provider must implement EmbeddingProvider")
 
@@ -78,9 +81,13 @@ class InstrumentedEmbeddingProvider(EmbeddingProvider):
         if not isinstance(context, EmbeddingCallContext):
             raise TypeError("context must be an EmbeddingCallContext")
 
+        if query_cache is not None and not isinstance(query_cache, QueryEmbeddingCache):
+            raise TypeError("query_cache must be a QueryEmbeddingCache instance or None")
+
         self._provider = provider
         self._recorder = recorder
         self._context = context
+        self._query_cache = query_cache
         self._last_call_id: uuid.UUID | None = None
 
     @property
@@ -119,7 +126,20 @@ class InstrumentedEmbeddingProvider(EmbeddingProvider):
         return self._execute_documents(stable_texts)
 
     def embed_query(self, text: str) -> EmbeddingVector:
-        return self._execute_query(text)
+        if self._query_cache is None:
+            return self._execute_query(text)
+
+        result = self._query_cache.get_or_compute(
+            text=text,
+            descriptor=self.descriptor,
+            loader=lambda: self._execute_query(text),
+        )
+
+        if result.cache_hit:
+            # This request did not invoke the external provider and therefore must not reference a previous or another request's telemetry row.
+            self._last_call_id = None
+
+        return result.vector
 
     def health_check(self) -> bool:
         """

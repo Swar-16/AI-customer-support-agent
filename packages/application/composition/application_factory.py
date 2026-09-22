@@ -77,6 +77,7 @@ from packages.application.conversations.start_conversation import StartConversat
 from packages.application.conversations.assign_conversation_title import AssignConversationTitle
 from packages.application.tickets.create_ticket_from_escalation import CreateTicketFromEscalation
 from packages.application.conversations.conversation_notification import ConversationNotificationWriter
+from packages.knowledge.embeddings.provider.query_cache import QueryEmbeddingCache
 
 SessionFactory = sessionmaker[Session]
 ProviderFactory = Callable[..., LLMProvider]
@@ -216,11 +217,16 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
     resolved_observer = _resolve_observer(observer=observer)
     pipeline_factory = AIPipelineFactory(base_provider=resolved_provider, observer=resolved_observer)
     embedding_services = create_knowledge_embedding_services(settings)
+    query_embedding_cache = QueryEmbeddingCache(
+        max_entries=settings.query_embedding_cache_max_entries,
+        ttl_seconds=settings.query_embedding_cache_ttl_seconds,
+    )
     retrieval_profile = create_default_customer_support_profile()
     embedding_input_builder = ContextualEmbeddingInputBuilder()
     grounding_budget = GroundingContextBudget(
         max_tokens=settings.rag_context_max_tokens,
         max_blocks=settings.rag_context_max_blocks,
+        max_blocks_per_document=settings.rag_context_max_blocks_per_document,
     )
     conversation_context_builder = ConversationContextBuilder(
         config=ConversationContextConfig(
@@ -363,6 +369,7 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
         grounding_context_budget=grounding_budget,
         knowledge_application=knowledge_application,
         conversation_context_builder=conversation_context_builder,
+        query_embedding_cache=query_embedding_cache,
     )
     
     assign_conversation_title = AssignConversationTitle(

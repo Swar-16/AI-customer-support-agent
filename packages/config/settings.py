@@ -46,6 +46,16 @@ class Settings(BaseSettings):
     groq_max_completion_tokens: int = 1024
     groq_temperature: float = 0.0
     
+    # Process-local provider capacity protection
+    ai_provider_max_concurrency: int = 2
+    ai_provider_queue_timeout_seconds: float = 8.0
+    ai_provider_minimum_start_interval_seconds: float = 0.75
+    
+    ai_provider_max_retries: int = 1
+    ai_provider_retry_base_delay_seconds: float = 0.75
+    ai_provider_retry_maximum_delay_seconds: float = 8.0
+    ai_provider_retry_jitter_ratio: float = 0.20
+    
     ## Conversation title generation
     conversation_title_enabled: bool = True
     conversation_title_max_input_characters: int = 2_000
@@ -65,9 +75,14 @@ class Settings(BaseSettings):
     jina_embedding_model: str = "jina-embeddings-v4"
     jina_embedding_timeout_seconds: float = 30.0
     
+    # Process-local retrieval-query embedding cache
+    query_embedding_cache_ttl_seconds: float = 3_600.0
+    query_embedding_cache_max_entries: int = 512
+    
     ## RAG / Grounding
-    rag_context_max_tokens: int = 6000
-    rag_context_max_blocks: int = 8
+    rag_context_max_tokens: int = 3_500
+    rag_context_max_blocks: int = 5
+    rag_context_max_blocks_per_document: int = 2
     
     ## Conversation context
     conversation_context_max_messages: int = 12
@@ -148,6 +163,42 @@ class Settings(BaseSettings):
         if not self.llm_provider:
             raise ValueError("llm_provider must not be blank.")
         
+        if isinstance(self.ai_provider_max_concurrency, bool) or not isinstance(self.ai_provider_max_concurrency, int):
+            raise TypeError("ai_provider_max_concurrency must be an integer")
+
+        if not 1 <= self.ai_provider_max_concurrency <= 32:
+            raise ValueError("ai_provider_max_concurrency must be between 1 and 32")
+
+        if self.ai_provider_queue_timeout_seconds <= 0:
+            raise ValueError("ai_provider_queue_timeout_seconds must be greater than zero")
+
+        if self.ai_provider_queue_timeout_seconds > 60:
+            raise ValueError("ai_provider_queue_timeout_seconds cannot exceed 60 seconds")
+
+        if self.ai_provider_minimum_start_interval_seconds < 0:
+            raise ValueError("ai_provider_minimum_start_interval_seconds cannot be negative")
+
+        if self.ai_provider_minimum_start_interval_seconds > 10:
+            raise ValueError("ai_provider_minimum_start_interval_seconds cannot exceed 10 seconds")
+        
+        if isinstance(self.ai_provider_max_retries, bool) or not isinstance(self.ai_provider_max_retries, int):
+            raise TypeError("ai_provider_max_retries must be an integer")
+
+        if not 0 <= self.ai_provider_max_retries <= 3:
+            raise ValueError("ai_provider_max_retries must be between 0 and 3")
+
+        if self.ai_provider_retry_base_delay_seconds < 0:
+            raise ValueError("ai_provider_retry_base_delay_seconds cannot be negative")
+
+        if self.ai_provider_retry_maximum_delay_seconds <= 0:
+            raise ValueError("ai_provider_retry_maximum_delay_seconds must be greater than zero")
+
+        if self.ai_provider_retry_base_delay_seconds > self.ai_provider_retry_maximum_delay_seconds:
+            raise ValueError("ai_provider_retry_base_delay_seconds cannot exceed ai_provider_retry_maximum_delay_seconds")
+
+        if not 0 <= self.ai_provider_retry_jitter_ratio <= 1:
+            raise ValueError("ai_provider_retry_jitter_ratio must be between 0 and 1")
+        
         if isinstance(self.conversation_title_max_input_characters, bool) or not isinstance(self.conversation_title_max_input_characters, int):
             raise TypeError("conversation_title_max_input_characters must be an integer.")
 
@@ -192,6 +243,18 @@ class Settings(BaseSettings):
 
         self.jina_embedding_model = self.jina_embedding_model.strip()
         
+        if isinstance(self.query_embedding_cache_max_entries, bool) or not isinstance(self.query_embedding_cache_max_entries, int):
+            raise TypeError("query_embedding_cache_max_entries must be an integer.")
+
+        if not 1 <= self.query_embedding_cache_max_entries <= 100_000:
+            raise ValueError("query_embedding_cache_max_entries must be between 1 and 100000.")
+
+        if self.query_embedding_cache_ttl_seconds <= 0:
+            raise ValueError("query_embedding_cache_ttl_seconds must be greater than zero.")
+
+        if self.query_embedding_cache_ttl_seconds > 86_400:
+            raise ValueError("query_embedding_cache_ttl_seconds cannot exceed 86400 seconds.")
+        
         if self.knowledge_upload_max_bytes <= 0:
             raise ValueError("knowledge_upload_max_bytes must be greater than zero.")
 
@@ -203,6 +266,15 @@ class Settings(BaseSettings):
 
         if self.rag_context_max_blocks <= 0:
             raise ValueError("rag_context_max_blocks must be greater than zero.")
+        
+        if isinstance(self.rag_context_max_blocks_per_document, bool) or not isinstance(self.rag_context_max_blocks_per_document, int):
+            raise TypeError("rag_context_max_blocks_per_document must be an integer.")
+
+        if self.rag_context_max_blocks_per_document <= 0:
+            raise ValueError("rag_context_max_blocks_per_document must be greater than zero.")
+
+        if self.rag_context_max_blocks_per_document > self.rag_context_max_blocks:
+            raise ValueError("rag_context_max_blocks_per_document cannot exceed rag_context_max_blocks.")
         
         if self.conversation_context_max_messages <= 0:
             raise ValueError("conversation_context_max_messages must be greater than zero.")

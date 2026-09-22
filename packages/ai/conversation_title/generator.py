@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from packages.ai.conversation_title.fallback import ConversationTitleFallback
-from packages.ai.conversation_title.models import ConversationTitleOutput, ConversationTitleResult, ConversationTitleSource
+from packages.ai.conversation_title.models import ConversationTitleResult, ConversationTitleSource
 from packages.ai.conversation_title.prompts import ConversationTitlePromptBuilder
 from packages.ai.conversation_title.sanitizer import ConversationTitleSanitizer
 from packages.ai.providers.base import LLMProvider
@@ -57,23 +57,16 @@ class ConversationTitleGenerator:
         prompt = self._prompt_builder.build(customer_message=customer_message)
 
         try:
-            response = self._provider.generate_structured(
+            response = self._provider.generate(
                 system_prompt=prompt.system_prompt,
                 user_prompt=prompt.user_prompt,
-                response_model=ConversationTitleOutput,
             )
         except LLMProviderError:
-            # Provider adapters already convert raw provider failures into safe provider-neutral errors. Do not log the exception text.
+            # Provider adapters already normalize provider failures. Title generation is non-critical, so preserve the deterministic fallback.
             self._record_fallback(reason="provider_failure")
             return fallback_result
 
-        output = response.output
-        if not isinstance(output, ConversationTitleOutput):
-            # A provider returning the wrong validated model violates the
-            # provider abstraction itself. Do not silently hide that defect.
-            raise TypeError("provider returned an unexpected structured response model")
-
-        sanitized_title = self._sanitizer.sanitize(output.title)
+        sanitized_title = self._sanitizer.sanitize(response.content)
         if sanitized_title is None:
             self._record_fallback(reason="unsafe_or_invalid_output")
             return fallback_result

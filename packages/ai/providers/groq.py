@@ -347,9 +347,20 @@ class GroqProvider(LLMProvider):
         if response is not None:
             headers = getattr(response, "headers", None)
             if headers is not None:
-                request_id = headers.get("x-request-id") or headers.get("request-id")
+                request_id = (headers.get("x-request-id") or headers.get("request-id"))
                 if request_id:
                     metadata["provider_request_id"] = str(request_id)
+
+                retry_after = headers.get("retry-after")
+                if retry_after is not None:
+                    try:
+                        retry_after_seconds = float(str(retry_after).strip())
+                        
+                    except ValueError:
+                        retry_after_seconds = None
+
+                    if retry_after_seconds is not None and retry_after_seconds >= 0:
+                        metadata["retry_after_seconds"] = retry_after_seconds
 
         return metadata
 
