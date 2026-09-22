@@ -12,6 +12,7 @@ import {
   type TicketFilters,
   type TicketUpdateInput,
 } from './ticket-api';
+import { escalationKeys } from './escalation-queries';
 
 export const ticketKeys = {
   all: (operatorId: string | null) => ['operations', operatorId, 'tickets'] as const,
@@ -122,36 +123,24 @@ export function useUpdateTicket() {
       return unwrap(await api.update(ticketId, update));
     },
 
-    onSuccess: async (_result, variables) => {
-      const refreshConversation =
-        variables.update.targetStatus !== null && variables.update.targetStatus !== undefined;
-
+    onSettled: async (_result, _error, variables) => {
       await Promise.all([
-        /* Refreshes ticket detail/list, linked escalation state, and Operations analytics. */
         queryClient.invalidateQueries({
-          queryKey: ['operations', operatorId],
+          queryKey: ticketKeys.lists(operatorId),
         }),
 
-        /*
-         * Only status transitions create lifecycle conversation messages.
-         * Priority, category, and assignment-only changes should not cause unnecessary chat refreshes.
-         */
-        ...(refreshConversation
-          ? [
-              queryClient.invalidateQueries({
-                queryKey: ['chat'],
-              }),
-            ]
-          : []),
-      ]);
-    },
-
-    onError: async (error, variables) => {
-      if (error instanceof SafeApiError && error.status === 409) {
-        await queryClient.invalidateQueries({
+        queryClient.invalidateQueries({
           queryKey: ticketKeys.detail(operatorId, variables.ticketId),
-        });
-      }
+        }),
+
+        queryClient.invalidateQueries({
+          queryKey: escalationKeys.all(operatorId),
+        }),
+
+        queryClient.invalidateQueries({
+          queryKey: ['chat'],
+        }),
+      ]);
     },
   });
 }

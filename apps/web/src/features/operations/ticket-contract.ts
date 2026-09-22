@@ -163,6 +163,7 @@ export const ticketUpdateResponseSchema = z
     resolution_summary: z.string().nullable().default(null),
     row_version: z.number().int().min(1),
     assigned_at: timestampSchema.nullable().default(null),
+    notification_message_id: z.uuid().nullable().default(null),
     resolved_at: timestampSchema.nullable().default(null),
     closed_at: timestampSchema.nullable().default(null),
     updated_at: timestampSchema,
