@@ -1,4 +1,4 @@
-# AI-customer-support-agent\packages\ai\intent\schemas.py
+# AI-customer-support-agent\packages\ai\intent\taxonomy.py
 from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum

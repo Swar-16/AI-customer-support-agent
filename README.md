@@ -1,399 +1,439 @@
-# CIMBA AI Customer Support Agent
+<div align="center">
 
-CIMBA is an auditable AI customer-support backend built around grounded answer generation, hybrid knowledge retrieval, deterministic decision policies, guardrails, and complete AI-run telemetry.
+# AI Customer Support Agent
 
-The project also contains a Knowledge Management foundation for immutable document versioning, ingestion, chunking, embedding, publication, supersession, archival, and retrieval evaluation.
+### Grounded answers. Human-aware escalation. Observable AI operations.
 
-> **Current status:** backend vertical slice under active development. The customer chat UI, operations dashboard, Knowledge Management UI, ticket system, feedback system, and complete audit-event layer are planned but are not yet implemented.
+A production-oriented customer-support platform that combines a responsive customer chat, an operations dashboard, and a complete knowledge-management workflow with a controlled, retrieval-grounded AI pipeline.
 
-## Current capabilities
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![React](https://img.shields.io/badge/React-19-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 
-- FastAPI application with health/readiness endpoints, stable error responses, and trace propagation.
-- PostgreSQL persistence organized into `support`, `ai`, `knowledge`, `config`, and `audit` schemas.
-- Conversation and message persistence with concurrency-safe message sequencing.
-- Provider-neutral LLM integration with Groq and a configurable mock provider.
-- Structured intent classification and deterministic decision routing.
-- Grounded response generation with evidence and citation validation.
-- Deterministic response guardrails with pass, refuse, and escalate outcomes.
-- AI telemetry for runs, LLM calls, intent predictions, decisions, latency, token usage, and errors.
-- Knowledge documents with immutable versions and controlled lifecycle transitions.
-- Markdown/plain-text parsing, normalization, structural chunking, and provenance preservation.
-- Jina document/query embeddings stored through PostgreSQL `pgvector`.
-- PostgreSQL lexical search, vector search, Reciprocal Rank Fusion, optional reranking contracts, and context budgeting.
-- Knowledge seeding and embedding-backfill command-line scripts.
-- Retrieval evaluation using Hit@K, Hit Rate@K, Recall@K, Mean Recall@K, Reciprocal Rank, and MRR.
-- Unit, API, integration, repository, provider, and live end-to-end test foundations.
+[Features](#-why-this-project) · [Architecture](#-architecture) · [Quick start](#-quick-start) · [Knowledge seeding](#-seed-the-knowledge-base) · [API](#-api-and-contracts) · [Testing](#-quality-gates)
 
-## Intended product surfaces
+</div>
 
-The completed MVP will expose three primary interfaces:
+---
 
-1. **Customer workspace** — grounded chat, citations, ticket creation/tracking, escalation status, and answer/conversation feedback.
-2. **Operations dashboard** — conversations, tickets, feedback, AI traces, retrieval evidence, guardrail outcomes, errors, latency, token usage, knowledge health, and customizable widgets.
-3. **Knowledge Management console** — document creation, version history, processing, embedding, publishing, supersession, retry, and archival.
+## ✨ Why this project
 
-These interfaces are not part of the current backend-only implementation.
+This is more than a chat box around an LLM. It is an end-to-end support system built around explicit contracts, trusted evidence, safety boundaries, operational visibility, and a clean separation between product workflows and AI providers.
 
-## Architecture
+| Experience | What it provides |
+|---|---|
+| **Customer Chat** | Conversation history, grounded AI answers, feedback, conversation closure, and human-support requests |
+| **Operations Dashboard** | Conversations, escalations, tickets, feedback, retrieval activity, AI latency, failures, and provider telemetry |
+| **Knowledge Studio** | Document upload, processing, versioning, embedding, publishing, search, and archival |
+| **AI Runtime** | Deterministic routing, intent analysis, hybrid retrieval, grounded generation, guardrails, and safe outcomes |
+
+### Engineering highlights
+
+- **Grounded RAG** over published, versioned knowledge instead of unrestricted model recall.
+- **Hybrid retrieval** combining semantic vector search and lexical search, followed by rank fusion.
+- **Cost-aware routing** that handles high-confidence greetings, acknowledgements, capability questions, and explicit human requests without unnecessary LLM calls.
+- **Bounded context** for both conversation history and evidence, including per-document diversity limits.
+- **Provider protection** through concurrency limits, start-rate spacing, queue timeouts, bounded retries, and jitter.
+- **Process-local query-embedding cache** with TTL, LRU eviction, and single-flight behavior.
+- **Deterministic guardrails** between model generation and customer-visible responses.
+- **First-class observability** for HTTP requests, AI runs, stages, LLM calls, embeddings, retrieval, and failures.
+- **Contract-first frontend** generated from the committed OpenAPI schema.
+- **Human handoff workflows** through escalations and support tickets.
+
+## 🧰 Technology stack
+
+<div align="center">
+
+### Product interfaces
+
+[![React](https://img.shields.io/badge/React_19-20232A?style=flat-square&logo=react&logoColor=61DAFB)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Vite](https://img.shields.io/badge/Vite-646CFF?style=flat-square&logo=vite&logoColor=white)](https://vite.dev/)
+[![React Router](https://img.shields.io/badge/React_Router-CA4245?style=flat-square&logo=reactrouter&logoColor=white)](https://reactrouter.com/)
+[![TanStack Query](https://img.shields.io/badge/TanStack_Query-FF4154?style=flat-square&logo=reactquery&logoColor=white)](https://tanstack.com/query)
+[![Zod](https://img.shields.io/badge/Zod-3E67B1?style=flat-square&logo=zod&logoColor=white)](https://zod.dev/)
+
+### API, data, and AI
+
+[![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Pydantic](https://img.shields.io/badge/Pydantic-E92063?style=flat-square&logo=pydantic&logoColor=white)](https://docs.pydantic.dev/)
+[![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-D71F00?style=flat-square&logo=sqlalchemy&logoColor=white)](https://www.sqlalchemy.org/)
+[![Alembic](https://img.shields.io/badge/Alembic-Migrations-6BA81E?style=flat-square)](https://alembic.sqlalchemy.org/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL_+_pgvector-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
+[![Groq](https://img.shields.io/badge/Groq-LLM-F55036?style=flat-square)](https://groq.com/)
+[![Jina AI](https://img.shields.io/badge/Jina_AI-Embeddings-009191?style=flat-square)](https://jina.ai/)
+
+### Quality
+
+[![Pytest](https://img.shields.io/badge/pytest-0A9EDC?style=flat-square&logo=pytest&logoColor=white)](https://pytest.org/)
+[![Jest](https://img.shields.io/badge/Jest-C21325?style=flat-square&logo=jest&logoColor=white)](https://jestjs.io/)
+[![Testing Library](https://img.shields.io/badge/Testing_Library-E33332?style=flat-square&logo=testinglibrary&logoColor=white)](https://testing-library.com/)
+[![Playwright](https://img.shields.io/badge/Playwright-2EAD33?style=flat-square&logo=playwright&logoColor=white)](https://playwright.dev/)
+[![OpenAPI](https://img.shields.io/badge/OpenAPI-6BA539?style=flat-square&logo=openapiinitiative&logoColor=white)](https://www.openapis.org/)
+
+</div>
+
+## 🏗 Architecture
+
+The repository uses a layered, provider-independent architecture. HTTP and UI concerns remain at the edges; application services coordinate business workflows; AI, knowledge, guardrails, and persistence stay behind explicit boundaries.
+
+```mermaid
+flowchart TB
+    subgraph UX["Product interfaces"]
+        Chat["Customer Chat"]
+        Ops["Operations Dashboard"]
+        Studio["Knowledge Studio"]
+    end
+
+    UX --> API["FastAPI · /v1"]
+    API --> App["Application use cases"]
+
+    App --> AI["AI orchestration"]
+    App --> Knowledge["Knowledge lifecycle & retrieval"]
+    AI --> Guardrails["Deterministic guardrails"]
+    AI <--> Knowledge
+
+    App --> DB[("PostgreSQL + pgvector")]
+    AI --> Providers["Groq · Jina AI"]
+    Knowledge --> Providers
+```
+
+### Grounded answer lifecycle
 
 ```mermaid
 flowchart TD
-    C["Customer request"] --> API["FastAPI"]
-    API --> U["ProcessCustomerMessage"]
-    U --> I["Intent classifier"]
-    I --> D["Decision engine"]
-    D --> R["Hybrid knowledge retrieval"]
-    R --> G["Grounded generation"]
-    G --> Q["Guardrails"]
-    Q --> P["Messages and AI telemetry"]
-    R --> DB["PostgreSQL and pgvector"]
-    P --> DB
+    A["Customer message"] --> B{"Deterministic route?"}
+    B -->|Yes| C["Direct response or human handoff"]
+    B -->|No| D["Intent & decision"]
+    D --> E["Hybrid knowledge retrieval"]
+    E --> F["Budgeted grounding context"]
+    F --> G["LLM generation"]
+    G --> H{"Guardrail result"}
+    H -->|Pass| I["Grounded answer"]
+    H -->|Clarify / refuse| J["Safe response"]
+    H -->|Escalate| K["Human support"]
+    C --> L["Persist · audit · telemetry"]
+    I --> L
+    J --> L
+    K --> L
 ```
 
-The main implemented request path is:
+### Knowledge lifecycle
 
-```text
-HTTP request
-  -> trace ID
-  -> customer-message persistence
-  -> AI run
-  -> intent classification
-  -> deterministic decision
-  -> semantic + lexical query preparation
-  -> vector + lexical retrieval
-  -> Reciprocal Rank Fusion
-  -> context selection and budgeting
-  -> grounded answer generation
-  -> guardrail evaluation
-  -> assistant-message and telemetry persistence
+```mermaid
+flowchart LR
+    A["Markdown source"] --> B["Document"]
+    B --> C["Version"]
+    C --> D["Parse & normalize"]
+    D --> E["Chunks"]
+    E --> F["Embeddings"]
+    F --> G["Publish"]
+    G --> H["Hybrid retrieval"]
+    H --> I["Grounding context"]
 ```
 
-## Repository layout
+> The current retrieval path fuses vector and lexical candidates. The reranker boundary exists, but the active implementation is passthrough rather than a learned/provider reranker.
+
+## 📁 Repository map
 
 ```text
-.
+AI-customer-support-agent/
 ├── apps/
-│   └── api/app/                  # FastAPI application, routes, schemas, dependencies
+│   ├── api/                 # FastAPI composition, routes, middleware, HTTP contracts
+│   └── web/                 # React customer, operations, and knowledge interfaces
 ├── packages/
-│   ├── ai/                       # Intent, decision, generation, orchestration, providers
-│   ├── application/              # Application use cases and dependency composition
-│   ├── config/                   # Environment-backed settings
-│   ├── database/                 # ORM models, repositories, sessions, Units of Work
-│   ├── guardrails/               # Deterministic response safety checks
-│   └── knowledge/                # KM domain, ingestion, embeddings, retrieval
-├── evaluation/
-│   └── retrieval/                # Evaluation models, metrics, relevance, runners
-├── infra/database/               # PostgreSQL extension/schema initialization
-├── migrations/                   # Alembic environment and revisions (name may vary)
+│   ├── application/         # Use cases, workflows, authorization, composition
+│   ├── ai/                  # Intent, decisions, generation, orchestration, telemetry
+│   ├── knowledge/           # Ingestion, chunking, embeddings, retrieval, grounding
+│   ├── guardrails/          # Deterministic response safety checks
+│   ├── database/            # SQLAlchemy models, repositories, sessions, UoW
+│   └── config/              # Validated environment configuration
+├── migrations/              # Alembic migration environment and revision history
+├── scripts/                 # Bootstrap, seeding, embedding, contract, diagnostics
 ├── knowledge_data/
-│   ├── faqs/                     # Initial FAQ Markdown sources
-│   └── policies/                 # Initial policy Markdown sources
-├── scripts/
-│   ├── seed_knowledge.py         # Idempotent document/version bootstrap
-│   └── embed_knowledge.py        # Published-version embedding backfill
-└── tests/                        # Unit, API, integration, evaluation, and live tests
+│   ├── faqs/                # Repository-managed FAQ sources
+│   └── policies/            # Repository-managed policy sources
+├── contracts/
+│   └── openapi.json         # Committed API source of truth for the frontend
+└── tests/                   # Unit, integration, and live-provider test suites
 ```
 
-## Technology stack
+> You can find out README.md files in each section to understand more about the problem, the approach how it was handeled.
 
-- Python 3.11+
-- FastAPI and Pydantic v2
-- SQLAlchemy 2 and Alembic
-- PostgreSQL with `pgvector`
-- Psycopg 3
-- Groq for intent classification and grounded generation
-- Jina embeddings (configured for 1024 dimensions by default)
-- Pytest and Hypothesis
+## 🚀 Quick start
 
-## Prerequisites
+### Prerequisites
 
-- Python 3.11 or newer
-- PostgreSQL with the `vector` extension
-- Access to a PostgreSQL role able to use the required schemas
-- Groq API key for live LLM execution
-- Jina API key for live embedding and hybrid retrieval execution
+- Python **3.11+** and `pip`
+- Node.js and `npm` supported by the frontend lockfile
+- PostgreSQL with the **pgvector** extension available
+- A Groq API key
+- A Jina AI API key
 
-The existing database design also uses UUIDv7 generation. Ensure the database initialization supplied with the project has installed/configured the expected UUID function before running the migrations.
+The default local URLs are:
 
-## Installation
+| Service | URL |
+|---|---|
+| Frontend | `http://localhost:5173` |
+| API | `http://localhost:8000` |
+| Swagger UI | `http://localhost:8000/docs` |
+| ReDoc | `http://localhost:8000/redoc` |
+| OpenAPI schema | `http://localhost:8000/openapi.json` |
 
-From the repository root:
+### 1. Clone and install the backend
 
 ```bash
+git clone <repository-url>
+cd AI-customer-support-agent
+
 python -m venv .venv
-```
-
-Activate it on Linux/macOS:
-
-```bash
 source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
-Activate it on Windows PowerShell:
+On Windows PowerShell, activate the environment with:
 
 ```powershell
-.venv\Scripts\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 ```
 
-Install dependencies:
+### 2. Configure the environment
 
 ```bash
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+cp .env.example .env
 ```
 
-## Environment configuration
+PowerShell:
 
-The settings module recognizes:
+```powershell
+Copy-Item .env.example .env
+```
 
-- `.env` for development
-- `.env.test` for tests
-- `.env.production` for production
+At minimum, replace the example database password and provider keys, and generate a JWT secret of at least 32 bytes:
 
-Example development configuration:
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
 
-```dotenv
+Key settings:
+
+```env
 APP_ENV=development
-APP_NAME=support-ai
+AUTH_JWT_SECRET=<generated-secret>
 
 DATABASE_HOST=localhost
 DATABASE_PORT=5432
 DATABASE_NAME=support_ai
 DATABASE_USER=support_ai_admin
-DATABASE_PASSWORD=replace_me
-DATABASE_ECHO=false
+DATABASE_PASSWORD=<your-password>
 
 LLM_PROVIDER=groq
-GROQ_API_KEY=replace_me
-GROQ_MODEL=openai/gpt-oss-20b
-GROQ_TIMEOUT_SECONDS=30
-GROQ_MAX_COMPLETION_TOKENS=1024
-GROQ_TEMPERATURE=0
+GROQ_API_KEY=<your-groq-key>
 
 EMBEDDING_PROVIDER=jina
-EMBEDDING_DIMENSIONS=1024
-EMBEDDING_BATCH_SIZE=16
-JINA_API_KEY=replace_me
-JINA_EMBEDDING_MODEL=jina-embeddings-v4
-JINA_EMBEDDING_TIMEOUT_SECONDS=30
+JINA_API_KEY=<your-jina-key>
 
-RAG_CONTEXT_MAX_TOKENS=6000
-RAG_CONTEXT_MAX_BLOCKS=8
+BROWSER_ALLOWED_ORIGINS=["http://localhost:5173"]
+AUTH_REFRESH_COOKIE_SECURE=false
 ```
 
-For `.env.test`, use `DATABASE_NAME=support_ai_test`. Never point destructive or cleanup-enabled tests at `support_ai`.
+Do not commit `.env` or real credentials. The complete configuration surface—including provider capacity, retries, conversation context, RAG budgets, title generation, analytics caching, and embedding caching—is documented by `.env.example` and `packages/config/`.
 
-Do not commit any populated environment file or API key.
+### 3. Prepare PostgreSQL
 
-## Database setup
-
-The project expects two databases during development:
-
-| Database | Purpose |
-|---|---|
-| `support_ai` | Development and real-knowledge/live-provider execution |
-| `support_ai_test` | Isolated automated integration testing |
-
-Both databases use five schemas:
-
-- `support`
-- `ai`
-- `knowledge`
-- `config`
-- `audit`
-
-Run the supplied database initialization before Alembic so required extensions and schemas exist.
-
-Apply development migrations:
+Create the configured database/user, ensure pgvector is installed on the PostgreSQL server, then apply the versioned schema from the repository root:
 
 ```bash
 alembic -x env=development upgrade head
+alembic -x env=development current
 ```
 
-Apply test migrations:
+The development database name expected by repository bootstrap utilities is `support_ai`. Alembic reads database settings through the application configuration; the placeholder URL in `alembic.ini` is not the runtime connection string.
 
-```bash
-alembic -x env=test upgrade head
-```
+### 4. Seed the knowledge base
 
-Inspect the active revision:
-
-```bash
-alembic -x env=test current
-```
-
-The exact Alembic configuration path may need to be supplied with `-c` if `alembic.ini` is not stored at the repository root.
-
-## Seed and embed knowledge
-
-Place initial Markdown documents under:
+Place Markdown knowledge in:
 
 ```text
 knowledge_data/faqs/
 knowledge_data/policies/
 ```
 
-Seed documents, create changed versions, process chunks, and publish:
+Then run:
 
 ```bash
-python -m scripts.seed_knowledge
+python scripts/seed_knowledge.py
 ```
 
-The seed operation derives stable document IDs from source paths and hashes normalized content. Re-running it should skip unchanged knowledge and create a new immutable version when content changes.
+The seeder discovers source files, normalizes and hashes content, creates or updates documents, creates versions, processes them, and publishes them. It uses stable source identities and reports created, processed, published, skipped, and failed items, making repeated bootstrap runs safe.
 
-Generate missing embeddings for all eligible published versions:
+Backfill embeddings for all eligible published versions:
 
 ```bash
-python -m scripts.embed_knowledge --environment development
+python scripts/embed_knowledge.py
 ```
 
-Generate embeddings for one version:
+Or target a single version:
 
 ```bash
-python -m scripts.embed_knowledge --environment development --version-id <UUID>
+python scripts/embed_knowledge.py --version-id <version-uuid>
 ```
 
-## Run the API
+Both knowledge utilities intentionally refuse to operate against an unexpected database name.
 
-From the repository root, run the FastAPI application module containing the exported `app` object. With the reconstructed application path, the expected command is:
+### 5. Provision an administrator
 
 ```bash
-uvicorn apps.api.app.main:app --reload
+python scripts/create_admin.py
 ```
 
-If the application entry file uses a different name in the final reconstructed tree, adjust only the module portion of this command.
+This development-only utility validates the environment and database, applies the application password policy and Argon2 hashing, and asks you to type `support_ai` before writing.
 
-Useful endpoints:
-
-- `GET /v1/health` — process liveness
-- `GET /v1/health/ready` — dependency readiness
-- FastAPI API documentation — `/docs`
-- OpenAPI schema — `/openapi.json`
-
-The precise versioned customer-message route is defined by the routers under `apps/api/app/api/v1/` and is visible in `/docs`.
-
-## Testing
-
-Run tests that do not require live providers:
+### 6. Start the backend
 
 ```bash
-pytest -m "not live_provider and not live_embedding"
+uvicorn apps.api.app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Run integration tests against `support_ai_test`:
+Check that both process health and dependency readiness succeed:
+
+```bash
+curl http://localhost:8000/v1/health
+curl http://localhost:8000/v1/health/ready
+```
+
+### 7. Start the frontend
+
+In a second terminal:
+
+```bash
+cd apps/web
+npm install
+cp .env.example .env.local
+npm run api:generate
+npm run dev
+```
+
+PowerShell environment copy:
+
+```powershell
+Copy-Item .env.example .env.local
+```
+
+Set the frontend API URL if it is not already present:
+
+```env
+VITE_API_BASE_URL=http://localhost:8000
+```
+
+Open `http://localhost:5173`, sign in with the provisioned account, and explore Customer Chat, Operations, and Knowledge Studio.
+
+## 🔌 API and contracts
+
+The versioned API includes resources for authentication, users, conversations, tickets, knowledge, feedback, escalations, dashboards, and health checks under `/v1`.
+
+`contracts/openapi.json` is the committed transport contract and the source for generated frontend types. After changing an API schema:
+
+```bash
+python scripts/export_openapi.py
+
+cd apps/web
+npm run api:generate
+npm run api:check
+npm run typecheck
+```
+
+Detect backend contract drift without rewriting the contract:
+
+```bash
+python scripts/export_openapi.py --check
+```
+
+Generated frontend declarations should never be edited by hand.
+
+## 🧪 Quality gates
+
+### Backend
+
+```bash
+pytest
+```
+
+Tests that require infrastructure or real providers are explicitly marked:
 
 ```bash
 pytest -m integration
+pytest -m live_provider
+pytest -m live_embedding
+pytest -m live_smoke
 ```
 
-Run Groq live tests explicitly:
+Real-provider suites can consume quota and require valid credentials; run them deliberately.
+
+### Frontend
 
 ```bash
-pytest -m "live_provider"
+cd apps/web
+npm run api:check
+npm run typecheck
+npm run lint
+npm run test
+npm run build
+npx playwright test
 ```
 
-Run embedding-provider live tests explicitly:
+**Few Test files aren't updated as per recent Production files!! Don't worry about them**
 
-```bash
-pytest -m "live_embedding"
-```
+## 🛡 Security and reliability model
 
-Run the complete live smoke group explicitly:
+- JWT access and refresh-token flows with configurable expiry, clock skew, login lockout, and browser-origin policy.
+- Argon2 password hashing for provisioned accounts.
+- Request-scoped database sessions and explicit transaction boundaries.
+- Idempotency protection for conversation-start processing.
+- Untrusted-input boundaries and evidence allowlists in AI prompting.
+- Deterministic refusal, clarification, and escalation outcomes.
+- Sanitized request, AI-stage, provider-call, embedding, and retrieval telemetry.
+- Test-database migration guards that reject an unexpected database name.
+- Short-lived database work around remote provider calls.
 
-```bash
-pytest -m "live_smoke"
-```
+## ⚙️ Useful operations
 
-Some live tests intentionally target `support_ai` to use its published knowledge, while other smoke tests require `support_ai_test`. Read each live test's safety guard before execution. Never remove its database-name assertion merely to force a test to run.
+| Goal | Command |
+|---|---|
+| Apply all migrations | `alembic -x env=development upgrade head` |
+| Inspect migration state | `alembic -x env=development current` |
+| Seed repository knowledge | `python scripts/seed_knowledge.py` |
+| Backfill published embeddings | `python scripts/embed_knowledge.py` |
+| Provision the first admin | `python scripts/create_admin.py` |
+| Register a local test customer | `python scripts/register_customer.py` |
+| Export OpenAPI | `python scripts/export_openapi.py` |
+| Check OpenAPI drift | `python scripts/export_openapi.py --check` |
+| Build the web application | `cd apps/web && npm run build` |
 
-Coverage:
+## 🤝 Contributing
 
-```bash
-pytest --cov=packages --cov=apps --cov-report=term-missing
-```
+1. Create a focused branch.
+2. Keep HTTP, application, AI, knowledge, guardrail, and persistence responsibilities inside their existing boundaries.
+3. Add or update tests for behavior changes.
+4. Regenerate the OpenAPI contract and frontend types when transport schemas change.
+5. Run the relevant quality gates before opening a pull request.
+6. Never commit credentials, local environment files, or customer-sensitive data.
 
-## Knowledge lifecycle
+When changing the database, review generated Alembic revisions manually—especially constraints, indexes, defaults, enum changes, PostgreSQL-specific objects, and destructive operations.
 
-```text
-draft -> processing -> ready -> published -> superseded
-             |
-             -> failed -> processing (retry)
-```
+## 🧭 Project principles
 
-- Source content is immutable within a version.
-- Updating authoritative content creates a new version.
-- Processing creates reproducible chunks.
-- Embedding artifacts retain provider/model/configuration identity.
-- Publishing a new version supersedes the previously published version atomically.
-- Retrieval considers active documents and compatible, successfully ingested, published versions.
+> **Evidence before generation. Contracts before coupling. Observability before guesswork. Humans when automation should stop.**
 
-## Retrieval pipeline
+The system is designed so each capability can evolve independently: providers can change without rewriting orchestration, retrieval can improve without leaking into HTTP handlers, and the frontend can evolve against a stable generated contract.
 
-The default customer-support retrieval profile enables:
+---
 
-- vector candidate limit: 20
-- lexical candidate limit: 20
-- fused candidate limit: 20
-- final candidate limit: 8
-- Reciprocal Rank Fusion `k`: 60
-- reranking: disabled (passthrough contract available)
-- grounding budget: 6000 estimated tokens and 8 blocks by default
+<div align="center">
 
-Vector, lexical, fusion, reranker, and context scores are kept separate because they have different meanings and scales.
+Built as a serious foundation for safe, explainable, and operable AI customer support.
 
-## Observability and safety
-
-The current implementation records structured AI telemetry including:
-
-- AI run status and total latency
-- provider/model call purpose
-- LLM call status, latency, token usage, and sanitized errors
-- intent prediction and confidence
-- deterministic decision and reason
-- trace linkage across request, conversation, messages, and AI records
-
-Guardrails reject incompatible or unsupported responses before they become customer-visible. In particular, the system must not claim sensitive actions or customer-specific operational facts without trusted operational evidence.
-
-The planned MVP adds append-only `audit.events`, complete retrieval/generation/guardrail stage events, ticket/feedback events, a redaction policy, and dashboard trace exploration. Secrets, authorization headers, database credentials, full embedding vectors, and unnecessary duplicated customer content must never be logged.
-
-## Known limitations
-
-- Operational retrieval (such as live order or payment status) is not implemented.
-- Escalation ORM work is incomplete: migration, registration, repository, Unit of Work, and service/API wiring remain.
-- Ticket management and customer feedback are not implemented.
-- The `audit` schema does not yet contain the planned immutable event stream.
-- Knowledge application use cases are not yet exposed through a complete admin API.
-- No customer, operations, or Knowledge Management frontend currently exists.
-- Reranking is currently a passthrough implementation.
-- The knowledge seed script constructs ingestion dependencies locally instead of using one shared API/CLI/worker composition factory.
-- Production authentication, authorization, deployment, and privacy controls remain future work.
-
-## MVP roadmap
-
-The recommended completion order is:
-
-1. Establish a clean migration and test baseline.
-2. Complete escalation and ticket persistence.
-3. Add feedback and immutable audit events.
-4. Expose conversation, ticket, feedback, knowledge, and observability APIs.
-5. Build customer chat with ticket tracking and feedback controls.
-6. Build the Knowledge Management console.
-7. Build the operations dashboard, trace explorer, ticket queue, feedback insights, logs, and saved widget layouts.
-8. Evaluate at least 50 representative conversations and publish the results.
-
-See `CIMBA_MVP_COMPLETION_ROADMAP.md` for the detailed file-by-file implementation plan.
-
-## Development rules
-
-- Preserve domain and application boundaries; do not import SQLAlchemy models into AI/domain code.
-- Keep transaction ownership in Units of Work and commit explicitly.
-- Do not mutate published knowledge source content.
-- Do not compare lexical and vector scores directly; use rank fusion.
-- Propagate trace IDs through every new application action and telemetry record.
-- Add stable error codes rather than exposing provider/database exceptions to clients.
-- Add tests for lifecycle transitions, rollback, access control, and failure behavior.
-- Keep live-provider tests opt-in.
-
-## Project status
-
-This repository is an assignment implementation in progress. It should not yet be treated as a production customer-support system.
+</div>
