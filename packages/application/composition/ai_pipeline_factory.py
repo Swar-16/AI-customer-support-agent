@@ -9,6 +9,7 @@ from packages.ai.decision.engine import DecisionEngine, DecisionEngineConfig
 from packages.ai.generation.generator import GroundedResponseGenerator
 from packages.ai.generation.prompts import GroundedGenerationPromptBuilder
 from packages.ai.intent.classifier import IntentClassifier, IntentClassifierConfig
+from packages.ai.intent.jev_classifier import JevIntentClassifier
 from packages.ai.orchestration.direct_response import DirectResponseResolver
 from packages.ai.orchestration.orchestrator import AIOrchestrator, AIOrchestratorConfig, OrchestrationObserver
 from packages.ai.providers.base import LLMProvider
@@ -210,7 +211,9 @@ class AIPipelineFactory:
                  decision_engine_config: DecisionEngineConfig | None = None, orchestrator_config: AIOrchestratorConfig | None = None,
                  generation_prompt_builder: GroundedGenerationPromptBuilder | None = None,
                  direct_response_resolver: DirectResponseResolver | None = None, guardrail_evaluator: GuardrailEvaluator | None = None,
-                 observer: OrchestrationObserver | None = None, config: AIPipelineFactoryConfig | None = None
+                 observer: OrchestrationObserver | None = None, config: AIPipelineFactoryConfig | None = None,
+                 typesafe_api_key: str | None = None, typesafe_model: str = "jev-latest",
+                 typesafe_confidence_threshold: float = 0.70, use_jev: bool = True
     ) -> None:
         if not isinstance(base_provider, LLMProvider):
             raise TypeError("base_provider must implement LLMProvider")
@@ -245,6 +248,10 @@ class AIPipelineFactory:
         self._guardrail_evaluator = guardrail_evaluator if guardrail_evaluator is not None else GuardrailEvaluator()
         self._observer = observer
         self._config = config or AIPipelineFactoryConfig()
+        self._typesafe_api_key = typesafe_api_key
+        self._typesafe_model = typesafe_model
+        self._typesafe_confidence_threshold = typesafe_confidence_threshold
+        self._use_jev = use_jev
 
     # Public construction API
     def create(self, *, ai_run_id: uuid.UUID, llm_call_recorder: LLMCallRecorder, 
@@ -281,7 +288,18 @@ class AIPipelineFactory:
             prompt_version_id=self._config.generation_prompt_version_id,
             temperature=self._config.generation_temperature,
         )
-        intent_classifier = IntentClassifier(provider=intent_provider, config=self._intent_classifier_config)
+        base_classifier = IntentClassifier(provider=intent_provider, config=self._intent_classifier_config)
+        if self._use_jev and self._typesafe_api_key:
+            intent_classifier = JevIntentClassifier(
+                fallback_classifier=base_classifier,
+                typesafe_api_key=self._typesafe_api_key,
+                model=self._typesafe_model,
+                confidence_threshold=self._typesafe_confidence_threshold,
+                config=self._intent_classifier_config,
+            )
+        else:
+            intent_classifier = base_classifier
+
         decision_engine = DecisionEngine(config=self._decision_engine_config)
         grounded_response_generator = GroundedResponseGenerator(
             provider=generation_provider,

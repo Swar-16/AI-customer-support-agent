@@ -14,7 +14,7 @@ from packages.ai.conversation_title.models import (
     ConversationTitleOutput,
     ConversationTitleSource,
 )
-from packages.ai.providers.mock import MockLLMProvider
+from packages.ai.providers.mock import MockLLMProvider, MockProviderConfig
 from packages.application.auth.models import (
     AuthenticatedPrincipal,
     AuthRole,
@@ -199,13 +199,13 @@ def _provider_returning(
         user_prompt: str,
         response_model,
     ):
-        assert response_model is ConversationTitleOutput
-
         return {
             "title": title,
         }
 
     return MockLLMProvider(
+        config=MockProviderConfig(default_text_response=title),
+        text_resolver=lambda system_prompt, user_prompt: title,
         structured_resolver=structured_resolver,
     )
 
@@ -523,7 +523,27 @@ class TestAssignConversationTitle:
                 "title": "Late generated title",
             }
 
+        def racing_text_resolver(
+            system_prompt: str,
+            user_prompt: str,
+        ) -> str:
+            with test_session_factory() as session:
+                session.execute(
+                    update(ConversationModel)
+                    .where(
+                        ConversationModel.id
+                        == title_context.conversation_id
+                    )
+                    .values(
+                        title="Concurrent explicit title"
+                    )
+                )
+                session.commit()
+
+            return "Late generated title"
+
         provider = MockLLMProvider(
+            text_resolver=racing_text_resolver,
             structured_resolver=racing_resolver,
         )
 

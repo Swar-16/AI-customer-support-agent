@@ -81,7 +81,7 @@ class DefaultDocumentChunkerResolver:
 
         Validation happens once during application composition rather than repeatedly while processing knowledge versions.
         """
-        if not isinstance(chunker, DocumentChunker):
+        if not any("descriptor" in c.__dict__ for c in type(chunker).__mro__):
             raise KnowledgeChunkerConfigurationError(
                 "Configured chunker does not satisfy the DocumentChunker protocol.",
                 chunker_name=cls._safe_chunker_name(chunker)
@@ -89,6 +89,13 @@ class DefaultDocumentChunkerResolver:
 
         descriptor = cls._read_descriptor(chunker)
         supported_source_types = cls._read_supported_source_types(chunker, descriptor)
+
+        if not isinstance(chunker, DocumentChunker):
+            raise KnowledgeChunkerConfigurationError(
+                "Configured chunker does not satisfy the DocumentChunker protocol.",
+                chunker_name=cls._safe_chunker_name(chunker)
+            )
+
         for source_type in supported_source_types:
             cls._validate_supports_consistency(chunker, descriptor, source_type)
 

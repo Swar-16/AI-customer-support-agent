@@ -45,15 +45,28 @@ class Settings(BaseSettings):
     groq_timeout_seconds: float = 30.0
     groq_max_completion_tokens: int = 1024
     groq_temperature: float = 0.0
+
+    ## Google Gemini / LLM
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-3.5-flash-lite"
+    gemini_timeout_seconds: float = 30.0
+    gemini_max_completion_tokens: int = 1024
+    gemini_temperature: float = 0.0
+
+    ## TypeSafe AI / Jev (System One Intent Classification)
+    typesafe_api_key: str | None = None
+    typesafe_model: str = "jev-latest"
+    typesafe_confidence_threshold: float = 0.70
+    use_jev_intent_classification: bool = False
     
     # Process-local provider capacity protection
     ai_provider_max_concurrency: int = 2
-    ai_provider_queue_timeout_seconds: float = 8.0
-    ai_provider_minimum_start_interval_seconds: float = 0.75
+    ai_provider_queue_timeout_seconds: float = 30.0
+    ai_provider_minimum_start_interval_seconds: float = 1.0
     
-    ai_provider_max_retries: int = 1
-    ai_provider_retry_base_delay_seconds: float = 0.75
-    ai_provider_retry_maximum_delay_seconds: float = 8.0
+    ai_provider_max_retries: int = 3
+    ai_provider_retry_base_delay_seconds: float = 1.5
+    ai_provider_retry_maximum_delay_seconds: float = 10.0
     ai_provider_retry_jitter_ratio: float = 0.20
     
     ## Conversation title generation
@@ -162,6 +175,19 @@ class Settings(BaseSettings):
 
         if not self.llm_provider:
             raise ValueError("llm_provider must not be blank.")
+
+        if self.llm_provider == "gemini":
+            if self.gemini_api_key is None or not self.gemini_api_key.strip():
+                raise ValueError("gemini_api_key must be configured when llm_provider='gemini'.")
+            if not self.gemini_model or not self.gemini_model.strip():
+                raise ValueError("gemini_model cannot be blank.")
+            self.gemini_model = self.gemini_model.strip()
+            if self.gemini_timeout_seconds <= 0:
+                raise ValueError("gemini_timeout_seconds must be greater than zero.")
+            if self.gemini_max_completion_tokens <= 0:
+                raise ValueError("gemini_max_completion_tokens must be greater than zero.")
+            if not (0.0 <= self.gemini_temperature <= 2.0):
+                raise ValueError("gemini_temperature must be between 0 and 2.")
         
         if isinstance(self.ai_provider_max_concurrency, bool) or not isinstance(self.ai_provider_max_concurrency, int):
             raise TypeError("ai_provider_max_concurrency must be an integer")

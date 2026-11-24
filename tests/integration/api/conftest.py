@@ -138,10 +138,12 @@ def _structured_llm_resolver(system_prompt: str, user_prompt: str, response_mode
     
     if response_model is GroundedGenerationResult:
         try:
-            serialized_payload = user_prompt.rsplit(
-                "\n\n",
-                maxsplit=1,
-            )[1]
+            if "\n\n" in user_prompt:
+                serialized_payload = user_prompt.rsplit("\n\n", maxsplit=1)[1]
+            elif ":\n" in user_prompt:
+                serialized_payload = user_prompt.split(":\n", 1)[1]
+            else:
+                serialized_payload = user_prompt.rsplit("\n", maxsplit=1)[1]
             payload = json.loads(serialized_payload)
         except (IndexError, TypeError, json.JSONDecodeError) as exc:
             raise AssertionError(
@@ -188,9 +190,21 @@ def _structured_llm_resolver(system_prompt: str, user_prompt: str, response_mode
     raise AssertionError(f"Unexpected structured response model: {response_model.__name__}")
 
 
+def _text_llm_resolver(system_prompt: str, user_prompt: str) -> str:
+    normalized = user_prompt.casefold()
+    if "return policy" in normalized or "return" in normalized:
+        return "Return policy question"
+    if "where is" in normalized or "order" in normalized or "ord-" in normalized or "[redacted identifier]" in normalized:
+        return "Order status request"
+    return "Support request"
+
+
 @pytest.fixture()
 def mock_llm_provider() -> MockLLMProvider:
-    return MockLLMProvider(structured_resolver=_structured_llm_resolver)
+    return MockLLMProvider(
+        text_resolver=_text_llm_resolver,
+        structured_resolver=_structured_llm_resolver,
+    )
 
 
 # Real application composition

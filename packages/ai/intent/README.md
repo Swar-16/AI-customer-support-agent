@@ -1,23 +1,26 @@
-# Intent Taxonomy
+# Intent Subsystem
 
 ## Overview
 
-The `intent` package defines the **canonical semantic taxonomy** used by the AI customer-support agent to classify customer requests.
+The `intent` package defines the **canonical semantic taxonomy and classification engine** used by the AI customer-support agent to classify customer requests.
 
-This package establishes the vocabulary of supported customer goals and the semantic meaning of each intent. It is deliberately limited to **classification semantics** and does not encode workflow, routing, business actions, or downstream operational behavior.
+This package establishes the vocabulary of supported customer goals, provides deterministic fast-path routing, implements zero-output-token System One intent classification with Jev (`typesafe-sdk`), and provides structured LLM intent classification with Google Gemini and Groq.
 
-The current package contains:
+The package contains:
 
 ```text
 AI-customer-support-agent/
 └── packages/
     └── ai/
         └── intent/
-            ├── taxonomy.py
-            └── README.md
+            ├── taxonomy.py              # Canonical IntentType vocabulary and definitions
+            ├── schemas.py               # Pydantic classification outputs and entity models
+            ├── deterministic_router.py  # Regex and pattern matching for zero-latency routes
+            ├── jev_classifier.py        # System One zero-output-token classifier with fallback
+            ├── classifier.py            # Structured LLM classifier (Gemini / Groq)
+            ├── __init__.py              # Public exports
+            └── README.md                # Subsystem documentation
 ```
-
-The primary implementation is `taxonomy.py`.
 
 ---
 
@@ -1200,33 +1203,100 @@ These behaviors are implemented directly in `taxonomy.py`.
 
 ---
 
+# Multi-Tier Intent Classification Pipeline
+
+Customer messages are evaluated through a high-performance multi-tier classification strategy:
+
+```text
+Incoming Customer Message
+           │
+           ▼
+[Tier 1: Deterministic Router]
+   ├── Greeting, farewell, closure? ───────► Immediate canonical intent (e.g. conversational)
+   ├── Explicit human handover request? ───► Handover signal (signals: EXPLICIT_HUMAN_REQUEST)
+   └── Out of scope? ──────────────────────► Out-of-scope response
+           │
+           │ (No deterministic match)
+           ▼
+[Tier 2: Jev System One Classifier] (typesafe-sdk)
+   ├── Enabled via USE_JEV_INTENT_CLASSIFICATION=true
+   ├── Zero Output Token inference via Choice and Noul questions
+   ├── Calibrated confidence >= 0.70? ─────► High confidence intent result
+   └── Low confidence (<0.70) or unconfigured ──┐
+                                                │
+                                                ▼ (Fallback)
+[Tier 3: LLM Intent Classifier] (Gemini / Groq)
+   ├── Full conversation history context
+   ├── Structured JSON schema validation
+   └── IntentResult with extracted entities & confidence
+```
+
+---
+
+# Jev System One Classifier (`jev_classifier.py`)
+
+`JevIntentClassifier` provides fast, cost-effective intent classification using the `typesafe-sdk`:
+
+### Key Features:
+1. **Zero Output Tokens**: Uses constrained choice evaluation over predefined candidate intents (`IntentType.ORDER_STATUS`, `REFUND_REQUEST`, `TECHNICAL_SUPPORT`, etc.). Because choices are resolved without auto-regressive generation, output token consumption is zero.
+2. **Entity Extraction**: Employs conservative regex pattern extractors for core business entities:
+   - Order IDs (e.g., `ORD-123456`, `#123456`)
+   - Transaction IDs (e.g., `TXN-987654`)
+   - Subscription IDs (e.g., `SUB-456789`)
+   - Account IDs (e.g., `ACC-1234`)
+3. **Calibrated Confidence Threshold**: Jev returns a calibrated confidence score. If confidence falls below `0.70`, the classifier logs the low confidence and seamlessly defers to the configured fallback classifier.
+4. **Resilient Fallback**: Accepts a `fallback_classifier` (typically `LLMIntentClassifier`). If Jev is unconfigured, disabled, missing an API key, receives a 401/429 error, or detects a placeholder API key (`YOUR_TYPESAFE_API_KEY_HERE`), it executes the fallback classifier cleanly with zero user-visible errors.
+5. **Configuration Flag**: Controlled via `USE_JEV_INTENT_CLASSIFICATION` (boolean) and `TYPESAFE_API_KEY` in application settings.
+
+---
+
+# LLM Intent Classifier (`classifier.py`)
+
+`LLMIntentClassifier` performs deep contextual classification using the active LLM provider (Google Gemini or Groq):
+* **Schema Enforcement**: Enforces `IntentClassificationResult` Pydantic schema containing `primary_intent`, `secondary_intents`, `confidence`, `entities`, and `signals`.
+* **Prompt Engineering**: Provides system instructions with the canonical intent taxonomy definitions and few-shot disambiguation rules.
+* **Structured Output**: Compatible with Gemini's cleaned OpenAPI 3.0 schemas and Groq's JSON mode.
+
+---
+
+# Deterministic Router (`deterministic_router.py`)
+
+`DeterministicIntentRouter` executes before any external API calls:
+* High-confidence regex matchers for short greetings ("hi", "hello", "good morning").
+* Conversational closers ("thanks", "that worked", "bye").
+* Capability queries ("what can you help me with?").
+* Emergency and human-support trigger phrases ("talk to a human", "agent please", "representative").
+* Returns an `IntentResult` with confidence `1.0` and appropriate downstream routing signals.
+
+---
+
 # Component Map
 
 ```text
 intent/
 │
 ├── taxonomy.py
-│   │
-│   ├── IntentType
-│   │   └── Canonical intent identifiers
-│   │
-│   ├── IntentDefinition
-│   │   └── Semantic definition + examples
-│   │
-│   ├── _INTENT_DEFINITIONS
-│   │   └── Internal canonical registry
-│   │
-│   ├── INTENT_DEFINITIONS
-│   │   └── Read-only public registry
-│   │
-│   ├── get_intent_definition()
-│   │   └── Definition lookup
-│   │
-│   ├── validate_intent_definitions()
-│   │   └── Registry integrity validation
-│   │
-│   └── _intent_name()
-│       └── Error-message helper
+│   ├── IntentType (canonical identifiers)
+│   ├── IntentDefinition (meaning & examples)
+│   ├── INTENT_DEFINITIONS (registry)
+│   └── validate_intent_definitions()
+│
+├── schemas.py
+│   ├── IntentClassificationResult
+│   ├── ExtractedEntities
+│   └── IntentResult
+│
+├── deterministic_router.py
+│   └── DeterministicIntentRouter
+│
+├── jev_classifier.py
+│   └── JevIntentClassifier (zero-output-token System One classifier with fallback)
+│
+├── classifier.py
+│   └── LLMIntentClassifier (structured schema classifier)
+│
+├── __init__.py
+│   └── Public exports
 │
 └── README.md
     └── Package documentation

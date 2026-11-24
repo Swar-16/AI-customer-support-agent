@@ -12,25 +12,14 @@ from packages.ai.conversation_title.models import (
     ConversationTitleOutput,
     ConversationTitleSource,
 )
-from packages.ai.providers.mock import MockLLMProvider
+from packages.ai.providers.mock import MockLLMProvider, MockProviderConfig
 
 
 def _provider_returning(
     title: str,
 ) -> MockLLMProvider:
-    def structured_resolver(
-        system_prompt: str,
-        user_prompt: str,
-        response_model,
-    ):
-        assert response_model is ConversationTitleOutput
-
-        return {
-            "title": title,
-        }
-
     return MockLLMProvider(
-        structured_resolver=structured_resolver,
+        config=MockProviderConfig(default_text_response=title),
     )
 
 
@@ -79,12 +68,9 @@ class TestConversationTitleGeneratorProviderSuccess:
 
         assert len(calls) == 1
         assert calls[0].operation == (
-            "generate_structured"
+            "generate"
         )
-        assert (
-            calls[0].response_model
-            is ConversationTitleOutput
-        )
+        assert calls[0].response_model is None
 
     def test_sends_redacted_customer_data(
         self,
@@ -174,14 +160,15 @@ class TestConversationTitleGeneratorFallback:
         def invalid_resolver(
             system_prompt: str,
             user_prompt: str,
-            response_model,
         ):
-            return {
-                "unexpected_field": "Missing title",
-            }
+            from packages.ai.providers.errors import LLMProviderResponseError
+            raise LLMProviderResponseError(
+                provider="mock",
+                message="Unexpected output format",
+            )
 
         provider = MockLLMProvider(
-            structured_resolver=invalid_resolver,
+            text_resolver=invalid_resolver,
         )
 
         generator = ConversationTitleGenerator(

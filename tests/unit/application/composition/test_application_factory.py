@@ -37,6 +37,9 @@ def make_settings(**overrides) -> Settings:
         "groq_timeout_seconds": 30.0,
         "groq_max_completion_tokens": 1024,
         "groq_temperature": 0.0,
+
+        "auth_jwt_secret": "test-jwt-secret-key-at-least-32-chars-long!",
+        "jina_api_key": "test-jina-api-key",
     }
 
     values.update(overrides)

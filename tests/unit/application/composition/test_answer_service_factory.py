@@ -347,16 +347,10 @@ class TestInjectedComposition:
             "answer_service_factory"
         )
 
-        with (
-            patch(
-                f"{factory_module}."
-                "create_knowledge_application_components"
-            ) as application_factory,
-            patch(
-                f"{factory_module}."
-                "create_knowledge_retrieval_components"
-            ) as retrieval_factory,
-        ):
+        with patch(
+            f"{factory_module}."
+            "create_knowledge_retrieval_components"
+        ) as retrieval_factory:
             create_with_injected_components(
                 session=session,
                 profile=profile,
@@ -371,7 +365,6 @@ class TestInjectedComposition:
                 evidence_mapper=evidence_mapper,
             )
 
-        application_factory.assert_not_called()
         retrieval_factory.assert_not_called()
 
 
@@ -437,55 +430,6 @@ class TestAnswerServiceWiring:
 
 class TestDefaultComposition:
 
-    def test_creates_default_application_components(
-        self,
-        session,
-        profile,
-        context_budget,
-        response_generator,
-        knowledge_retrieval,
-    ):
-        factory_module = (
-            "packages.application.composition."
-            "answer_service_factory"
-        )
-
-        application_components = KnowledgeApplicationComponents(
-            retrieval_context_service=MagicMock(
-                spec_set=KnowledgeRetrievalContextService,
-            ),
-        )
-
-        with (
-            patch(
-                f"{factory_module}."
-                "create_knowledge_application_components",
-                return_value=application_components,
-            ) as application_factory,
-        ):
-            components = (
-                create_answer_service_components(
-                    session=session,
-                    profile=profile,
-                    default_context_budget=(
-                        context_budget
-                    ),
-                    response_generator=(
-                        response_generator
-                    ),
-                    knowledge_retrieval=(
-                        knowledge_retrieval
-                    ),
-                )
-            )
-
-        application_factory.assert_called_once_with()
-
-        assert (
-            components.knowledge_application
-            is application_components
-        )
-
     def test_creates_default_retrieval_components(
         self,
         session,
@@ -515,12 +459,15 @@ class TestDefaultComposition:
 
         retrieval_factory.assert_called_once_with(
             session=session,
+            retrieval_uow_factory=None,
             profile=profile,
             default_context_budget=context_budget,
             embedding_provider=None,
             embedding_input_descriptor=None,
             reranker=None,
             token_estimator=None,
+            telemetry_recorder=None,
+            reranker_telemetry_recorder=None,
         )
 
         assert (

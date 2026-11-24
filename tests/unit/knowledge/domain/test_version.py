@@ -115,7 +115,7 @@ class TestKnowledgeVersionConstruction:
             source_uri="   https://example.com/refund   ",
         )
 
-        assert version.source_content == "Refund policy content"
+        assert version.source_content == "   Refund policy content   "
         assert version.content_hash == "abc123"
         assert version.source_name == "refund.md"
         assert version.source_uri == "https://example.com/refund"

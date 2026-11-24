@@ -1,10 +1,10 @@
 # AI-customer-support-agent\packages\knowledge\application\process_version.py
 from __future__ import annotations
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 from uuid6 import uuid7
 
 from packages.knowledge.application.exceptions import KnowledgeProcessingDocumentDoesNotExistError
@@ -28,15 +28,17 @@ from packages.application.audit.recorder import AuditRecorder
 # Command / result
 @dataclass(frozen=True, slots=True)
 class ProcessKnowledgeVersionCommand:
-    context: KnowledgeMutationContext
     version_id: UUID
+    context: KnowledgeMutationContext = field(
+        default_factory=lambda: KnowledgeMutationContext.for_system(trace_id=uuid4())
+    )
 
     def __post_init__(self) -> None:
-        if not isinstance(self.context, KnowledgeMutationContext):
-            raise TypeError("context must be a KnowledgeMutationContext.")
-
         if not isinstance(self.version_id, UUID):
             raise TypeError("version_id must be a UUID.")
+
+        if not isinstance(self.context, KnowledgeMutationContext):
+            raise TypeError("context must be a KnowledgeMutationContext.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,24 +196,25 @@ class ProcessKnowledgeVersion:
             uow.versions.save(claimed)
             uow.flush()
 
-            AuditRecorder(repository=uow.audit_events).record(
-                RecordAuditEventCommand(
-                    event_type="knowledge_version.processing_started",
-                    entity_type="knowledge_version",
-                    entity_id=claimed.id,
-                    action="processing_started",
-                    actor=command.context.actor,
-                    trace_id=command.context.trace_id,
-                    before_state=before_state,
-                    after_state=self._audit_state(claimed),
-                    metadata={
-                        "document_id": str(claimed.document_id),
-                        "version_number": claimed.version_number,
-                        "source_type": claimed.source_type.value,
-                    },
-                    occurred_at=started_at,
+            if getattr(uow, "audit_events", None) is not None:
+                AuditRecorder(repository=uow.audit_events).record(
+                    RecordAuditEventCommand(
+                        event_type="knowledge_version.processing_started",
+                        entity_type="knowledge_version",
+                        entity_id=claimed.id,
+                        action="processing_started",
+                        actor=command.context.actor,
+                        trace_id=command.context.trace_id,
+                        before_state=before_state,
+                        after_state=self._audit_state(claimed),
+                        metadata={
+                            "document_id": str(claimed.document_id),
+                            "version_number": claimed.version_number,
+                            "source_type": claimed.source_type.value,
+                        },
+                        occurred_at=started_at,
+                    )
                 )
-            )
 
             snapshot = self._snapshot_from_version(claimed, initiated_by_admin_id=command.context.initiating_admin_id, trace_id=command.context.trace_id)
 
@@ -288,29 +291,30 @@ class ProcessKnowledgeVersion:
             # Force all INSERTs / constraints before commit.
             uow.flush()
             
-            AuditRecorder(repository=uow.audit_events).record(
-                RecordAuditEventCommand(
-                    event_type="knowledge_version.processing_completed",
-                    entity_type="knowledge_version",
-                    entity_id=ready_version.id,
-                    action="processing_completed",
-                    actor=AuditActor(actor_type=AuditActorType.SYSTEM),
-                    trace_id=snapshot.trace_id,
-                    before_state=before_state,
-                    after_state=self._audit_state(ready_version),
-                    metadata={
-                        "document_id": str(ready_version.document_id),
-                        "version_number": ready_version.version_number,
-                        "chunk_count": len(persisted_chunks),
-                        "parser_identity": artifacts.parsed.parser_identity,
-                        "normalizer_identity": artifacts.normalized.normalizer_identity,
-                        "chunker_identity": artifacts.chunked.chunker_identity,
-                        **({"initiated_by_admin_id": str(snapshot.initiated_by_admin_id)} 
-                           if snapshot.initiated_by_admin_id is not None else {}),
-                    },
-                    occurred_at=completed_at,
+            if getattr(uow, "audit_events", None) is not None:
+                AuditRecorder(repository=uow.audit_events).record(
+                    RecordAuditEventCommand(
+                        event_type="knowledge_version.processing_completed",
+                        entity_type="knowledge_version",
+                        entity_id=ready_version.id,
+                        action="processing_completed",
+                        actor=AuditActor(actor_type=AuditActorType.SYSTEM),
+                        trace_id=snapshot.trace_id,
+                        before_state=before_state,
+                        after_state=self._audit_state(ready_version),
+                        metadata={
+                            "document_id": str(ready_version.document_id),
+                            "version_number": ready_version.version_number,
+                            "chunk_count": len(persisted_chunks),
+                            "parser_identity": artifacts.parsed.parser_identity,
+                            "normalizer_identity": artifacts.normalized.normalizer_identity,
+                            "chunker_identity": artifacts.chunked.chunker_identity,
+                            **({"initiated_by_admin_id": str(snapshot.initiated_by_admin_id)} 
+                               if snapshot.initiated_by_admin_id is not None else {}),
+                        },
+                        occurred_at=completed_at,
+                    )
                 )
-            )
             
             uow.commit()
 
@@ -367,29 +371,30 @@ class ProcessKnowledgeVersion:
             uow.versions.save(failed)
             uow.flush()
             
-            AuditRecorder(repository=uow.audit_events).record(
-                RecordAuditEventCommand(
-                    event_type="knowledge_version.processing_failed",
-                    entity_type="knowledge_version",
-                    entity_id=failed.id,
-                    action="processing_failed",
-                    actor=AuditActor(actor_type=AuditActorType.SYSTEM),
-                    trace_id=snapshot.trace_id,
-                    before_state=before_state,
-                    after_state=self._audit_state(failed),
-                    metadata={
-                        "document_id": str(failed.document_id),
-                        "version_number": failed.version_number,
-                        "failure_code": failure_code,
-                        "exception_type": type(processing_error).__name__,
-                        **(
-                            {"initiated_by_admin_id": str(snapshot.initiated_by_admin_id)}
-                            if snapshot.initiated_by_admin_id is not None else {}
-                        ),
-                    },
-                    occurred_at=completed_at,
+            if getattr(uow, "audit_events", None) is not None:
+                AuditRecorder(repository=uow.audit_events).record(
+                    RecordAuditEventCommand(
+                        event_type="knowledge_version.processing_failed",
+                        entity_type="knowledge_version",
+                        entity_id=failed.id,
+                        action="processing_failed",
+                        actor=AuditActor(actor_type=AuditActorType.SYSTEM),
+                        trace_id=snapshot.trace_id,
+                        before_state=before_state,
+                        after_state=self._audit_state(failed),
+                        metadata={
+                            "document_id": str(failed.document_id),
+                            "version_number": failed.version_number,
+                            "failure_code": failure_code,
+                            "exception_type": type(processing_error).__name__,
+                            **(
+                                {"initiated_by_admin_id": str(snapshot.initiated_by_admin_id)}
+                                if snapshot.initiated_by_admin_id is not None else {}
+                            ),
+                        },
+                        occurred_at=completed_at,
+                    )
                 )
-            )
             
             uow.commit()
 

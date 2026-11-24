@@ -89,6 +89,7 @@ def make_config(
     overlap_chars: int = 20,
     min_chunk_chars: int = 20,
     preserve_section_boundaries: bool = True,
+    merge_small_sections: bool = True,
     separator: str = "\n\n",
 ) -> StructuralTextChunkerConfig:
     return StructuralTextChunkerConfig(
@@ -97,6 +98,7 @@ def make_config(
         overlap_chars=overlap_chars,
         min_chunk_chars=min_chunk_chars,
         preserve_section_boundaries=preserve_section_boundaries,
+        merge_small_sections=merge_small_sections,
         separator=separator,
     )
 
@@ -143,8 +145,8 @@ class TestStructuralTextChunkerConfig:
 
         assert config.target_chars == 1200
         assert config.max_chars == 1800
-        assert config.overlap_chars == 200
-        assert config.min_chunk_chars == 200
+        assert config.overlap_chars == 160
+        assert config.min_chunk_chars == 250
         assert config.preserve_section_boundaries is True
         assert config.separator == "\n\n"
 
@@ -403,11 +405,11 @@ class TestStructuralTextChunkerDescriptor:
         )
         assert (
             chunker.descriptor.version
-            == "1.0.0"
+            == "2.0.0"
         )
         assert (
             chunker.descriptor.identity
-            == "structural-text@1.0.0"
+            == "structural-text@2.0.0"
         )
 
     def test_descriptor_has_config_fingerprint(
@@ -914,6 +916,7 @@ class TestSectionBoundaries:
 
         result = make_chunker(
             overlap_chars=20,
+            merge_small_sections=False,
         ).chunk(document)
 
         assert result.chunk_count == 2
@@ -1074,15 +1077,15 @@ class TestOverlap:
         # is introduced during assembly.
         document = make_document(
             make_segment(
-                "A" * 80,
+                "A" * 60 + "\n" + "A" * 19,
                 index=0,
             ),
             make_segment(
-                "B" * 80,
+                "B" * 60 + "\n" + "B" * 19,
                 index=1,
             ),
             make_segment(
-                "C" * 80,
+                "C" * 60 + "\n" + "C" * 19,
                 index=2,
             ),
         )
@@ -1141,7 +1144,7 @@ class TestOverlap:
     ) -> None:
         document = make_document(
             make_segment(
-                "A" * 80,
+                "A" * 60 + "\n" + "A" * 19,
                 index=0,
             ),
             make_segment(
@@ -1162,12 +1165,12 @@ class TestOverlap:
 
         second = result.chunks[1]
 
-        # The previous 80-character piece contributes only its final
-        # 20 characters as overlap.
+        # The previous 80-character piece contributes its natural newline-delimited
+        # suffix as overlap.
         overlap_span = second.source_spans[0]
 
         assert overlap_span.source_segment_index == 0
-        assert overlap_span.start_offset == 60
+        assert overlap_span.start_offset == 61
         assert overlap_span.end_offset == 80
         assert second.source_spans[1].source_segment_index == 1
         
@@ -1290,7 +1293,7 @@ class TestProvenance:
         )
         assert (
             result.chunker_version
-            == "1.0.0"
+            == "2.0.0"
         )
         assert (
             result.chunker_config_fingerprint

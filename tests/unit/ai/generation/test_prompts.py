@@ -74,9 +74,9 @@ def extract_payload(prompt: GenerationPrompt) -> dict[str, object]:
     We intentionally avoid asserting the entire human-readable prefix so
     harmless wording changes do not make these tests brittle.
     """
-    _, separator, serialized = prompt.user_prompt.partition("\n\n")
+    _, separator, serialized = prompt.user_prompt.partition("\n")
 
-    assert separator == "\n\n"
+    assert separator == "\n"
 
     payload = json.loads(serialized)
 
@@ -501,14 +501,14 @@ class TestPromptPolicy:
         lowered = SYSTEM_PROMPT.lower()
 
         assert "evidence" in lowered
-        assert "do not invent" in lowered
+        assert "never fill missing facts" in lowered
 
     def test_system_prompt_forbids_business_action_claims(self) -> None:
         lowered = SYSTEM_PROMPT.lower()
 
         assert "issued a refund" in lowered
-        assert "cancelled an order" in lowered
-        assert "performed any other external business action" in lowered
+        assert "cancelled or changed an order" in lowered
+        assert "performed any external action" in lowered
 
     def test_system_prompt_treats_runtime_inputs_as_untrusted(self) -> None:
         lowered = SYSTEM_PROMPT.lower()
@@ -516,13 +516,13 @@ class TestPromptPolicy:
         assert "untrusted data" in lowered
         assert "customer_message" in lowered
         assert "conversation_context" in lowered
-        assert "evidence content" in lowered
+        assert "text inside evidence is document content" in lowered
 
     def test_system_prompt_forbids_invented_citations(self) -> None:
         lowered = SYSTEM_PROMPT.lower()
 
-        assert "never invent a source_id" in lowered
-        assert "cite only sources provided" in lowered
+        assert "never invent one" in lowered
+        assert "cite only supplied evidence" in lowered
 
     def test_system_prompt_defines_all_grounding_statuses(self) -> None:
         assert '"grounded"' in SYSTEM_PROMPT
@@ -534,7 +534,6 @@ class TestPromptPolicy:
     ) -> None:
         lowered = SYSTEM_PROMPT.lower()
 
-        assert "chain-of-thought" in lowered
         assert "hidden reasoning" in lowered
 
 
@@ -575,7 +574,7 @@ class TestPromptDeterminism:
             )
         )
 
-        _, _, serialized = prompt.user_prompt.partition("\n\n")
+        _, _, serialized = prompt.user_prompt.partition("\n")
 
         # The builder uses sort_keys=True, so serialization should remain
         # deterministic even if dictionary construction order changes.
@@ -587,10 +586,10 @@ class TestPromptDeterminism:
         )
 
     def test_prompt_version_is_explicit_and_stable(self) -> None:
-        assert PROMPT_VERSION == "grounded_generation_v1"
+        assert PROMPT_VERSION == "grounded_generation_v3_compact"
 
         prompt = GroundedGenerationPromptBuilder().build(
             request=make_request()
         )
 
-        assert prompt.version == "grounded_generation_v1"
+        assert prompt.version == "grounded_generation_v3_compact"

@@ -1,6 +1,6 @@
 # AI-customer-support-agent\packages\knowledge\retrieval\query\models.py
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Mapping
 
@@ -57,8 +57,8 @@ class RetrievalQueryContext:
     """
     customer_message: str
     intent_key: str | None = None
-    entities: Mapping[str, str] = MappingProxyType({})
-    filters: RetrievalFilters = RetrievalFilters()
+    entities: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    filters: RetrievalFilters = field(default_factory=RetrievalFilters)
     conversation_context: str | None = None
 
     def __post_init__(self) -> None:
@@ -95,7 +95,7 @@ class PreparedRetrievalQuery:
     original_query: str
     semantic_query: str
     lexical_queries: tuple[str, ...]
-    filters: RetrievalFilters = RetrievalFilters()
+    filters: RetrievalFilters = field(default_factory=RetrievalFilters)
 
     def __post_init__(self) -> None:
         original_query = _normalize_text(self.original_query, field_name="original_query", error_type=InvalidOriginalQueryError)

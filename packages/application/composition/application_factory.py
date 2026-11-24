@@ -215,7 +215,14 @@ def create_application(*, settings: Settings, session_factory: SessionFactory = 
     resolved_provider = _resolve_provider(settings=settings, base_provider=base_provider)
     title_provider = _resolve_title_provider(settings=settings, injected_provider=base_provider, resolved_provider=resolved_provider)
     resolved_observer = _resolve_observer(observer=observer)
-    pipeline_factory = AIPipelineFactory(base_provider=resolved_provider, observer=resolved_observer)
+    pipeline_factory = AIPipelineFactory(
+        base_provider=resolved_provider,
+        observer=resolved_observer,
+        typesafe_api_key=settings.typesafe_api_key,
+        typesafe_model=settings.typesafe_model,
+        typesafe_confidence_threshold=settings.typesafe_confidence_threshold,
+        use_jev=settings.use_jev_intent_classification,
+    )
     embedding_services = create_knowledge_embedding_services(settings)
     query_embedding_cache = QueryEmbeddingCache(
         max_entries=settings.query_embedding_cache_max_entries,
@@ -505,6 +512,9 @@ def _resolve_title_provider(*, settings: Settings, injected_provider: LLMProvide
             "groq_timeout_seconds": settings.conversation_title_timeout_seconds,
             "groq_max_completion_tokens": settings.conversation_title_max_completion_tokens,
             "groq_temperature": 0.0,
+            "gemini_timeout_seconds": settings.conversation_title_timeout_seconds,
+            "gemini_max_completion_tokens": settings.conversation_title_max_completion_tokens,
+            "gemini_temperature": 0.0,
         },
     )
 

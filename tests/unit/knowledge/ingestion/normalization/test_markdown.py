@@ -76,7 +76,7 @@ class TestMarkdownNormalizerDescriptor:
         )
         assert (
             normalizer.descriptor.version
-            == "1.0.0"
+            == "1.1.0"
         )
         assert (
             normalizer.descriptor.config_fingerprint

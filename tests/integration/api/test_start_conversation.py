@@ -172,8 +172,7 @@ class TestStartConversation:
         )
 
         title_calls_after_first = sum(
-            call.response_model
-            is ConversationTitleOutput
+            call.response_model is ConversationTitleOutput or call.operation == "generate"
             for call in mock_llm_provider.calls
         )
 
@@ -187,8 +186,7 @@ class TestStartConversation:
         )
 
         title_calls_after_second = sum(
-            call.response_model
-            is ConversationTitleOutput
+            call.response_model is ConversationTitleOutput or call.operation == "generate"
             for call in mock_llm_provider.calls
         )
 
@@ -537,6 +535,20 @@ class TestStartConversation:
                 response_model,
             )
 
+        def timeout_title_text(system_prompt: str, user_prompt: str) -> str:
+            raise LLMProviderTimeoutError(
+                provider="mock",
+                message=(
+                    "Sensitive upstream timeout text "
+                    "must not reach the API."
+                ),
+            )
+
+        monkeypatch.setattr(
+            mock_llm_provider,
+            "_text_resolver",
+            timeout_title_text,
+        )
         monkeypatch.setattr(
             mock_llm_provider,
             "_structured_resolver",

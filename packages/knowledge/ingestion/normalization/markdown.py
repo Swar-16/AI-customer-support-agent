@@ -222,6 +222,22 @@ class MarkdownNormalizer(BaseDocumentNormalizer):
                 )
             )
 
+        if not normalized_segments and document.segments:
+            # Loss resistance fallback: if semantic normalization filtered out all non-semantic
+            # structures (e.g. thematic breaks or alt-less images), fall back to raw segment text.
+            for parsed_segment in document.segments:
+                raw_text = parsed_segment.text.strip()
+                if raw_text:
+                    normalized_segments.append(
+                        NormalizedSegment(
+                            index=len(normalized_segments),
+                            source_segment_index=parsed_segment.index,
+                            text=raw_text,
+                            section_path=parsed_segment.section_path,
+                            metadata=self._build_segment_metadata(parsed_segment),
+                        )
+                    )
+
         if not normalized_segments:
             raise KnowledgeNormalizerOutputError(
                 "Markdown normalizer produced no normalized segments.",

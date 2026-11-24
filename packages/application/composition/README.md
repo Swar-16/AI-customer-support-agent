@@ -228,8 +228,9 @@ The returned provider is deliberately **not request-instrumented**. Request-spec
 The factory currently supports:
 
 ```text
-groq
-mock
+gemini (Google AI Studio REST endpoint)
+groq   (Groq Cloud API)
+mock   (Deterministic in-memory mock)
 ```
 
 Provider names are normalized using:
@@ -243,6 +244,38 @@ Unsupported values raise:
 ```text
 ProviderConfigurationError
 ```
+
+---
+
+## Gemini Composition
+
+For Gemini (`llm_provider="gemini"`), the factory creates:
+
+```text
+GeminiProvider
+       │
+       ▼
+CapacityLimitedLLMProvider
+       │
+       ▼
+ResilientLLMProvider
+```
+
+The `GeminiProviderConfig` is constructed from:
+* `gemini_api_key`
+* `gemini_model` (default: `gemini-3.5-flash-lite`)
+* `gemini_timeout_seconds`
+* `gemini_max_completion_tokens`
+* `gemini_temperature`
+
+The capacity wrapper enforces:
+* `ai_provider_max_concurrency`
+* `ai_provider_queue_timeout_seconds`
+* `ai_provider_minimum_start_interval_seconds` (1.0s)
+
+The resilience wrapper enforces:
+* `ai_provider_max_retries`
+* `ai_provider_retry_base_delay_seconds`
 
 ---
 
@@ -1242,6 +1275,9 @@ Create generation instrumented provider
       │
       ▼
 Create IntentClassifier
+  ├── Build request-scoped LLMIntentClassifier
+  └── If settings.use_jev_intent_classification:
+        Wrap with JevIntentClassifier (System One zero-token classifier with LLM fallback)
       │
       ▼
 Create DecisionEngine

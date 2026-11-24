@@ -1057,22 +1057,17 @@ class TestTargetVersionValidation:
         harness = build_harness(
             document=document,
             target=target,
+            current_published=target,
         )
 
-        # The repository sees target itself as the current publication.
-        # The application detects this cross-version conflict before
-        # target.publish() is invoked again.
-        with pytest.raises(
-            KnowledgePublicationConflictError,
-            match="already the published version",
-        ):
-            harness.service.execute(
-                PublishKnowledgeVersionCommand(
-                    version_id=target.id
-                )
+        result = harness.service.execute(
+            PublishKnowledgeVersionCommand(
+                version_id=target.id
             )
+        )
 
-        assert harness.uow.commit_count == 0
+        assert result.version_id == target.id
+        assert result.status == KnowledgeVersionStatus.PUBLISHED
 
 
 # ===========================================================================

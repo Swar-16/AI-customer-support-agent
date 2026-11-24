@@ -1400,3 +1400,46 @@ class TestFactoryMetadata:
             factory.pipeline_version
             == "v-test-42"
         )
+
+    def test_creates_jev_intent_classifier_when_configured(
+        self,
+        base_provider,
+        llm_call_recorder,
+    ):
+        import uuid
+        from packages.ai.intent.jev_classifier import JevIntentClassifier
+
+        factory = AIPipelineFactory(
+            base_provider=base_provider,
+            typesafe_api_key="test-typesafe-key",
+            typesafe_model="jev-latest",
+            use_jev=True,
+        )
+        pipeline = factory.create(
+            ai_run_id=uuid.uuid4(),
+            llm_call_recorder=llm_call_recorder,
+        )
+
+        assert isinstance(pipeline.intent_classifier, JevIntentClassifier)
+
+    def test_creates_standard_intent_classifier_when_jev_key_absent(
+        self,
+        base_provider,
+        llm_call_recorder,
+    ):
+        import uuid
+        from packages.ai.intent.classifier import IntentClassifier
+        from packages.ai.intent.jev_classifier import JevIntentClassifier
+
+        factory = AIPipelineFactory(
+            base_provider=base_provider,
+            typesafe_api_key=None,
+            use_jev=True,
+        )
+        pipeline = factory.create(
+            ai_run_id=uuid.uuid4(),
+            llm_call_recorder=llm_call_recorder,
+        )
+
+        assert isinstance(pipeline.intent_classifier, IntentClassifier)
+        assert not isinstance(pipeline.intent_classifier, JevIntentClassifier)

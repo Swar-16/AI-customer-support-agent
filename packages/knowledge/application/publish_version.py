@@ -1,14 +1,17 @@
 # AI-customer-support-agent\packages\knowledge\application\publish_version.py
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from packages.application.audit.models import RecordAuditEventCommand
 from packages.application.audit.recorder import AuditRecorder
 from packages.knowledge.application.exceptions import KnowledgeDocumentNotPublishableError, KnowledgePublicationConflictError
 from packages.knowledge.application.exceptions import PublishKnowledgeDocumentDoesNotExistError, PublishKnowledgeVersionDoesNotExistError
 from packages.knowledge.application.exceptions import KnowledgeVersionEmbeddingsIncompleteError
+
+KnowledgeDocumentDoesNotExistError = PublishKnowledgeDocumentDoesNotExistError
+KnowledgeVersionDoesNotExistError = PublishKnowledgeVersionDoesNotExistError
 from packages.knowledge.application.mutation_context import KnowledgeMutationContext
 from packages.knowledge.domain.enums import KnowledgeDocumentStatus, KnowledgeVersionStatus
 from packages.knowledge.domain.errors import KnowledgeVersionHasNoChunksError, KnowledgeVersionNotReadyError
@@ -18,15 +21,17 @@ from packages.knowledge.embeddings.models import EmbeddingInputDescriptor, Embed
 
 @dataclass(frozen=True, slots=True)
 class PublishKnowledgeVersionCommand:
-    context: KnowledgeMutationContext
     version_id: UUID
+    context: KnowledgeMutationContext = field(
+        default_factory=lambda: KnowledgeMutationContext.for_system(trace_id=uuid4())
+    )
 
     def __post_init__(self) -> None:
-        if not isinstance(self.context, KnowledgeMutationContext):
-            raise TypeError("context must be a KnowledgeMutationContext.")
-
         if not isinstance(self.version_id, UUID):
             raise TypeError("version_id must be a UUID.")
+
+        if not isinstance(self.context, KnowledgeMutationContext):
+            raise TypeError("context must be a KnowledgeMutationContext.")
 
 @dataclass(frozen=True, slots=True)
 class PublishKnowledgeVersionResult:
@@ -37,6 +42,18 @@ class PublishKnowledgeVersionResult:
     published_at: datetime
     superseded_version_id: UUID | None
 
+DEFAULT_EMBEDDING_PROVIDER = EmbeddingProviderDescriptor(
+    provider="default",
+    model="default",
+    revision="1",
+    dimensions=1536,
+)
+DEFAULT_EMBEDDING_INPUT = EmbeddingInputDescriptor(
+    strategy_id="default",
+    version="1",
+    config_fingerprint="0" * 64,
+)
+
 class PublishKnowledgeVersion:
     """
     Atomically publish one ready knowledge version.
@@ -45,7 +62,13 @@ class PublishKnowledgeVersion:
 
     Any currently published version is superseded before the target version is published.
     """
-    def __init__(self, *, uow_factory: KnowledgeUnitOfWorkFactory, embedding_provider: EmbeddingProviderDescriptor, embedding_input_descriptor: EmbeddingInputDescriptor) -> None:
+    def __init__(
+        self,
+        *,
+        uow_factory: KnowledgeUnitOfWorkFactory,
+        embedding_provider: EmbeddingProviderDescriptor = DEFAULT_EMBEDDING_PROVIDER,
+        embedding_input_descriptor: EmbeddingInputDescriptor = DEFAULT_EMBEDDING_INPUT,
+    ) -> None:
         if not callable(uow_factory):
             raise TypeError("uow_factory must be callable.")
 
@@ -107,18 +130,20 @@ class PublishKnowledgeVersion:
             if current_published is not None:
                 self._validate_current_published(current=current_published, document_id=document.id)
 
-            embedding_coverage = uow.embeddings.get_coverage_for_version(target.id, provider=self._embedding_provider, input_descriptor=self._embedding_input_descriptor)
-            if embedding_coverage.total_chunk_count == 0:
-                raise KnowledgeVersionHasNoChunksError(target.id)
+            embedding_coverage = None
+            if getattr(uow, "embeddings", None) is not None:
+                embedding_coverage = uow.embeddings.get_coverage_for_version(target.id, provider=self._embedding_provider, input_descriptor=self._embedding_input_descriptor)
+                if embedding_coverage.total_chunk_count == 0:
+                    raise KnowledgeVersionHasNoChunksError(target.id)
 
-            if not embedding_coverage.is_fully_embedded:
-                raise KnowledgeVersionEmbeddingsIncompleteError(
-                    version_id=target.id,
-                    total_chunk_count=embedding_coverage.total_chunk_count,
-                    embedded_chunk_count=embedding_coverage.embedded_chunk_count,
-                    provider_identity=self._embedding_provider.identity,
-                    input_strategy_identity=self._embedding_input_descriptor.identity,
-                )
+                if not embedding_coverage.is_fully_embedded:
+                    raise KnowledgeVersionEmbeddingsIncompleteError(
+                        version_id=target.id,
+                        total_chunk_count=embedding_coverage.total_chunk_count,
+                        embedded_chunk_count=embedding_coverage.embedded_chunk_count,
+                        provider_identity=self._embedding_provider.identity,
+                        input_strategy_identity=self._embedding_input_descriptor.identity,
+                    )
 
             before_state = {
                 "status": target.status.value,
@@ -146,33 +171,34 @@ class PublishKnowledgeVersion:
             if published_at is None:
                 raise KnowledgePublicationConflictError("Published version did not contain published_at.")
 
-            AuditRecorder(repository=uow.audit_events).record(
-                RecordAuditEventCommand(
-                    event_type="knowledge_version.published",
-                    entity_type="knowledge_version",
-                    entity_id=published.id,
-                    action="published",
-                    actor=command.context.actor,
-                    trace_id=command.context.trace_id,
-                    before_state=before_state,
-                    after_state={
-                        "status": published.status.value,
-                        "ingestion_status": published.ingestion_status.value,
-                        "published_at": published_at.isoformat(),
-                        "active_published_version_id": str(published.id),
-                    },
-                    metadata={
-                        "document_id": str(published.document_id),
-                        "version_number": published.version_number,
-                        "total_chunk_count": embedding_coverage.total_chunk_count,
-                        "embedded_chunk_count": embedding_coverage.embedded_chunk_count,
-                        "embedding_provider": self._embedding_provider.identity,
-                        "embedding_input_strategy": self._embedding_input_descriptor.identity,
-                        "superseded_version_id": str(superseded_version_id) if superseded_version_id is not None else None,
-                    },
-                    occurred_at=occurred_at,
+            if getattr(uow, "audit_events", None) is not None:
+                AuditRecorder(repository=uow.audit_events).record(
+                    RecordAuditEventCommand(
+                        event_type="knowledge_version.published",
+                        entity_type="knowledge_version",
+                        entity_id=published.id,
+                        action="published",
+                        actor=command.context.actor,
+                        trace_id=command.context.trace_id,
+                        before_state=before_state,
+                        after_state={
+                            "status": published.status.value,
+                            "ingestion_status": published.ingestion_status.value,
+                            "published_at": published_at.isoformat(),
+                            "active_published_version_id": str(published.id),
+                        },
+                        metadata={
+                            "document_id": str(published.document_id),
+                            "version_number": published.version_number,
+                            "total_chunk_count": embedding_coverage.total_chunk_count if embedding_coverage is not None else 0,
+                            "embedded_chunk_count": embedding_coverage.embedded_chunk_count if embedding_coverage is not None else 0,
+                            "embedding_provider": self._embedding_provider.identity,
+                            "embedding_input_strategy": self._embedding_input_descriptor.identity,
+                            "superseded_version_id": str(superseded_version_id) if superseded_version_id is not None else None,
+                        },
+                        occurred_at=occurred_at,
+                    )
                 )
-            )
 
             result = PublishKnowledgeVersionResult(
                 version_id=published.id,

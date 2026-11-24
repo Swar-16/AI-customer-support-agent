@@ -1,4 +1,5 @@
 from __future__ import annotations
+from dataclasses import fields
 from unittest.mock import Mock, patch
 import pytest
 from collections.abc import Generator
@@ -29,13 +30,15 @@ def make_settings(**overrides) -> Settings:
         "groq_timeout_seconds": 30.0,
         "groq_max_completion_tokens": 1024,
         "groq_temperature": 0.0,
+        "auth_jwt_secret": "test-jwt-secret-key-at-least-32-chars-long!",
+        "jina_api_key": "test-jina-api-key",
     }
     values.update(overrides)
 
     return Settings(_env_file=None, **values)
 
 
-def make_application_services() -> ApplicationServices:
+def make_application_services(**overrides) -> ApplicationServices:
     """
     Build a real ApplicationServices container using test doubles for its
     collaborators.
@@ -43,13 +46,13 @@ def make_application_services() -> ApplicationServices:
     We intentionally use the real container rather than mocking the entire
     type because production code performs isinstance checks.
     """
-
-    return ApplicationServices(
-        process_customer_message=Mock(),
-        ai_pipeline_factory=Mock(),
-        base_llm_provider=Mock(),
-        orchestration_observer=Mock(),
-    )
+    kwargs = {f.name: Mock() for f in fields(ApplicationServices)}
+    base_llm = Mock()
+    base_llm.provider_name = "mock"
+    base_llm.model_name = "mock-model"
+    kwargs["base_llm_provider"] = base_llm
+    kwargs.update(overrides)
+    return ApplicationServices(**kwargs)
 
 # Cache isolation
 @pytest.fixture(autouse=True)
@@ -85,7 +88,7 @@ class TestBuildApplicationServices:
 
         assert result is expected
 
-        get_settings_mock.assert_called_once_with()
+        get_settings_mock.assert_called_once_with("development")
         create_application_mock.assert_called_once_with(settings=settings)
 
     @patch("apps.api.app.bootstrap.application.create_application")

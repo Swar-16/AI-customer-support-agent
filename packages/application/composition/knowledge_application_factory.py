@@ -35,22 +35,22 @@ class KnowledgeApplicationComponents:
     """
     retrieval_context_service: KnowledgeRetrievalContextService
 
-    list_documents: ListKnowledgeDocuments
-    get_document: GetKnowledgeDocument
-    list_versions: ListKnowledgeVersions
-    get_version: GetKnowledgeVersion
+    list_documents: ListKnowledgeDocuments | None = None
+    get_document: GetKnowledgeDocument | None = None
+    list_versions: ListKnowledgeVersions | None = None
+    get_version: GetKnowledgeVersion | None = None
 
-    create_document: CreateKnowledgeDocument
-    create_version: CreateKnowledgeVersion
-    process_version: ProcessKnowledgeVersion
-    embed_version: EmbedKnowledgeVersion
-    publish_version: PublishKnowledgeVersion
-    archive_document: ArchiveKnowledgeDocument
+    create_document: CreateKnowledgeDocument | None = None
+    create_version: CreateKnowledgeVersion | None = None
+    process_version: ProcessKnowledgeVersion | None = None
+    embed_version: EmbedKnowledgeVersion | None = None
+    publish_version: PublishKnowledgeVersion | None = None
+    archive_document: ArchiveKnowledgeDocument | None = None
     
-    upload_document: UploadKnowledgeDocument
-    upload_version: UploadKnowledgeVersion
+    upload_document: UploadKnowledgeDocument | None = None
+    upload_version: UploadKnowledgeVersion | None = None
 
-    ingestion: KnowledgeIngestionComponents
+    ingestion: KnowledgeIngestionComponents | None = None
 
 def create_knowledge_application_components(*, uow_factory: KnowledgeUnitOfWorkFactory, embedding_provider: EmbeddingProvider, 
                                             embedding_input_builder: EmbeddingInputBuilder, embedding_batch_size: int, knowledge_upload_max_bytes: int,

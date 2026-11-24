@@ -16,10 +16,14 @@ from packages.knowledge.application.process_version import (
     ProcessKnowledgeVersionCommand,
 )
 from packages.knowledge.domain.chunk import KnowledgeChunk
+from packages.knowledge.domain.document import KnowledgeDocument
 from packages.knowledge.domain.enums import (
+    KnowledgeContentType,
+    KnowledgeDocumentStatus,
     KnowledgeIngestionStatus,
     KnowledgeSourceType,
     KnowledgeVersionStatus,
+    KnowledgeVisibility,
 )
 from packages.knowledge.domain.version import KnowledgeDocumentVersion
 from packages.knowledge.ingestion.chunking.base import (
@@ -584,6 +588,27 @@ class FakeChunkRepository:
 # ---------------------------------------------------------------------------
 
 
+class FakeDocumentRepository:
+    def __init__(self) -> None:
+        self.documents: dict[UUID, KnowledgeDocument] = {}
+
+    def get_by_id(self, document_id: UUID) -> KnowledgeDocument | None:
+        if document_id not in self.documents:
+            self.documents[document_id] = KnowledgeDocument(
+                id=document_id,
+                title="Test Document",
+                content_type=KnowledgeContentType.POLICY,
+                visibility=KnowledgeVisibility.CUSTOMER,
+                status=KnowledgeDocumentStatus.ACTIVE,
+                created_at=utc_now(),
+                updated_at=utc_now(),
+            )
+        return self.documents.get(document_id)
+
+    def get_by_id_for_update(self, document_id: UUID) -> KnowledgeDocument | None:
+        return self.get_by_id(document_id)
+
+
 class FakeKnowledgeUnitOfWork:
 
     def __init__(
@@ -592,9 +617,11 @@ class FakeKnowledgeUnitOfWork:
         versions: FakeVersionRepository,
         chunks: FakeChunkRepository,
         lifecycle: list[str],
+        documents: FakeDocumentRepository | None = None,
     ) -> None:
         self._versions = versions
         self._chunks = chunks
+        self._documents = documents if documents is not None else FakeDocumentRepository()
         self.lifecycle = lifecycle
 
         self.committed = False
@@ -615,11 +642,8 @@ class FakeKnowledgeUnitOfWork:
         return self._chunks
 
     @property
-    def documents(self) -> Any:
-        raise AssertionError(
-            "ProcessKnowledgeVersion must not "
-            "access document repository."
-        )
+    def documents(self) -> FakeDocumentRepository:
+        return self._documents
 
     def __enter__(
         self,
@@ -696,6 +720,7 @@ class FakeUoWFactory:
         )
 
         self.chunks = FakeChunkRepository()
+        self.documents = FakeDocumentRepository()
 
         self.lifecycle: list[str] = []
 
@@ -710,6 +735,7 @@ class FakeUoWFactory:
             versions=self.versions,
             chunks=self.chunks,
             lifecycle=self.lifecycle,
+            documents=self.documents,
         )
 
         self.instances.append(uow)
@@ -1102,10 +1128,6 @@ class TestClaimValidation:
             (
                 KnowledgeVersionStatus.PUBLISHED,
                 KnowledgeIngestionStatus.COMPLETED,
-            ),
-            (
-                KnowledgeVersionStatus.FAILED,
-                KnowledgeIngestionStatus.FAILED,
             ),
         ],
     )

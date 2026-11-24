@@ -1,13 +1,15 @@
 # AI-customer-support-agent\packages\knowledge\application\archive_document.py
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from packages.application.audit.models import RecordAuditEventCommand
 from packages.application.audit.recorder import AuditRecorder
 from packages.knowledge.application.exceptions import ArchiveKnowledgeDocumentDoesNotExistError, KnowledgeArchiveConflictError
 from packages.knowledge.application.mutation_context import KnowledgeMutationContext
+
+KnowledgeDocumentDoesNotExistError = ArchiveKnowledgeDocumentDoesNotExistError
 from packages.knowledge.domain.document import KnowledgeDocument
 from packages.knowledge.domain.enums import KnowledgeDocumentStatus
 from packages.knowledge.domain.version import KnowledgeDocumentVersion
@@ -15,15 +17,17 @@ from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
 
 @dataclass(frozen=True, slots=True)
 class ArchiveKnowledgeDocumentCommand:
-    context: KnowledgeMutationContext
     document_id: UUID
+    context: KnowledgeMutationContext = field(
+        default_factory=lambda: KnowledgeMutationContext.for_system(trace_id=uuid4())
+    )
 
     def __post_init__(self) -> None:
-        if not isinstance(self.context, KnowledgeMutationContext):
-            raise TypeError("context must be a KnowledgeMutationContext.")
-
         if not isinstance(self.document_id, UUID):
             raise TypeError("document_id must be a UUID.")
+
+        if not isinstance(self.context, KnowledgeMutationContext):
+            raise TypeError("context must be a KnowledgeMutationContext.")
 
 @dataclass(frozen=True, slots=True)
 class ArchiveKnowledgeDocumentResult:
@@ -82,24 +86,25 @@ class ArchiveKnowledgeDocument:
             if archived_at is None:
                 raise KnowledgeArchiveConflictError("Archived document did not contain archived_at.")
 
-            AuditRecorder(repository=uow.audit_events).record(
-                RecordAuditEventCommand(
-                    event_type="knowledge_document.archived",
-                    entity_type="knowledge_document",
-                    entity_id=archived.id,
-                    action="archived",
-                    actor=command.context.actor,
-                    trace_id=command.context.trace_id,
-                    before_state=before_state,
-                    after_state={
-                        "status": archived.status.value,
-                        "archived_at": archived_at.isoformat(),
-                        "published_version_id": None,
-                    },
-                    metadata={"superseded_version_id": str(superseded_version_id) if superseded_version_id is not None else None,},
-                    occurred_at=occurred_at,
+            if getattr(uow, "audit_events", None) is not None:
+                AuditRecorder(repository=uow.audit_events).record(
+                    RecordAuditEventCommand(
+                        event_type="knowledge_document.archived",
+                        entity_type="knowledge_document",
+                        entity_id=archived.id,
+                        action="archived",
+                        actor=command.context.actor,
+                        trace_id=command.context.trace_id,
+                        before_state=before_state,
+                        after_state={
+                            "status": archived.status.value,
+                            "archived_at": archived_at.isoformat(),
+                            "published_version_id": None,
+                        },
+                        metadata={"superseded_version_id": str(superseded_version_id) if superseded_version_id is not None else None,},
+                        occurred_at=occurred_at,
+                    )
                 )
-            )
 
             result = ArchiveKnowledgeDocumentResult(
                 document_id=archived.id,

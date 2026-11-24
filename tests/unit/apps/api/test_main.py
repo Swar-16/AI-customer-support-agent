@@ -1,4 +1,5 @@
 from __future__ import annotations
+from dataclasses import fields
 from unittest.mock import Mock, patch
 import pytest
 from fastapi import FastAPI
@@ -17,23 +18,21 @@ from apps.api.app.main import (
 from packages.application.composition.application_factory import ApplicationServices
 
 # Helpers
-def make_application_services() -> ApplicationServices:
+def make_application_services(**overrides) -> ApplicationServices:
     """
     Build a real ApplicationServices container with mocked collaborators.
 
     The concrete container is preferable to mocking ApplicationServices
     itself because production code may perform runtime type checks.
     """
+    kwargs = {f.name: Mock() for f in fields(ApplicationServices)}
     provider = Mock()
     provider.provider_name = "mock"
     provider.model_name = "mock-model"
+    kwargs["base_llm_provider"] = provider
+    kwargs.update(overrides)
 
-    return ApplicationServices(
-        process_customer_message=Mock(),
-        ai_pipeline_factory=Mock(),
-        base_llm_provider=provider,
-        orchestration_observer=Mock(),
-    )
+    return ApplicationServices(**kwargs)
 
 # Application factory
 class TestCreateApiApp:
