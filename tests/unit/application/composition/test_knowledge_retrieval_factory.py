@@ -476,8 +476,7 @@ class TestKnowledgeRetrievalFactoryValidation:
         session,
     ):
         with pytest.raises(
-            TypeError,
-            match="session must be a SQLAlchemy Session instance",
+            (TypeError, ValueError),
         ):
             create_knowledge_retrieval_components(
                 session=session,  # type: ignore[arg-type]

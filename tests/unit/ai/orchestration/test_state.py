@@ -42,7 +42,7 @@ from pydantic import ValidationError
 from packages.ai.decision.schemas import DecisionReasonCode, DecisionResult, DecisionType
 from packages.ai.intent.schemas import IntentResult
 from packages.ai.intent.taxonomy import IntentType
-from packages.ai.orchestration.state import AIState, EvidenceSourceType, PipelineError, PipelineStage, RetrievedEvidence
+from packages.ai.orchestration.state import AIState, EvidenceSourceType, GuardrailDisposition, PipelineError, PipelineStage, RetrievedEvidence
 from packages.ai.decision.schemas import DecisionReasonCode, DecisionResult, DecisionType
 
 # ---------------------------------------------------------------------------
@@ -468,6 +468,8 @@ class TestAIStateInvariantsOnDirectConstruction:
             intent_result=intent_result,
             decision_result=decision_result,
             generated_response="This response passed guardrails.",
+            guardrail_disposition=GuardrailDisposition.PASS,
+            guardrail_reason_code="passed",
         )
 
         assert state.stage is PipelineStage.GUARDRAILS_COMPLETED

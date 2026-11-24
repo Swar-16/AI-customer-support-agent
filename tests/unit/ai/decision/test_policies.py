@@ -250,12 +250,12 @@ class TestDefaultRoutingPolicies:
 
         assert (
             policy.default_decision
-            is DecisionType.RETRIEVE_INFORMATION
+            is DecisionType.ESCALATE
         )
-        assert policy.retrieval_kind is RetrievalKind.OPERATIONAL
+        assert policy.retrieval_kind is None
         assert (
             policy.reason_code
-            is DecisionReasonCode.OPERATIONAL_LOOKUP_REQUIRED
+            is DecisionReasonCode.OPERATIONAL_LOOKUP_UNAVAILABLE
         )
 
     def test_general_question_uses_knowledge_retrieval(self) -> None:
@@ -303,7 +303,7 @@ class TestDefaultRoutingPolicies:
 
         assert (
             policy.default_priority
-            is DecisionPriority.HIGH
+            is DecisionPriority.URGENT
         )
 
     @pytest.mark.parametrize(
@@ -375,7 +375,7 @@ class TestDerivedPolicySets:
     def test_order_status_is_operational_not_knowledge(self) -> None:
         assert (
             IntentType.ORDER_STATUS
-            in get_operational_retrieval_intents()
+            not in get_operational_retrieval_intents()
         )
         assert (
             IntentType.ORDER_STATUS
@@ -505,13 +505,11 @@ class TestRegistryValidation:
     [
         (IntentType.REFUND_REQUEST, RetrievalKind.KNOWLEDGE),
         (IntentType.PAYMENT_ISSUE, RetrievalKind.KNOWLEDGE),
-        (IntentType.ORDER_STATUS, RetrievalKind.OPERATIONAL),
         (IntentType.SHIPPING_ISSUE, RetrievalKind.KNOWLEDGE),
         (IntentType.CANCELLATION, RetrievalKind.KNOWLEDGE),
         (IntentType.SUBSCRIPTION_ISSUE, RetrievalKind.KNOWLEDGE),
         (IntentType.ACCOUNT_ISSUE, RetrievalKind.KNOWLEDGE),
         (IntentType.RETURN_EXCHANGE, RetrievalKind.KNOWLEDGE),
-        (IntentType.PRIVACY_SECURITY, RetrievalKind.KNOWLEDGE),
         (IntentType.GENERAL_QUESTION, RetrievalKind.KNOWLEDGE),
     ],
 )

@@ -82,6 +82,9 @@ class FakeVersionRepository:
         self.published_document_id = document_id
         return self.published
 
+    def count_for_document(self, document_id, filter_=None):
+        return len(self.versions)
+
 
 class FakeUoW:
     def __init__(
@@ -137,7 +140,7 @@ def test_returns_document_and_empty_version_history():
     )
 
     assert result.document == document
-    assert result.versions == ()
+    assert result.version_count == 0
     assert result.published_version_id is None
 
     assert (
@@ -175,11 +178,7 @@ def test_returns_version_history_and_published_version_id():
         )
     )
 
-    assert result.versions == (
-        version_1,
-        version_2,
-    )
-
+    assert result.version_count == 2
     assert (
         result.published_version_id
         == published.id

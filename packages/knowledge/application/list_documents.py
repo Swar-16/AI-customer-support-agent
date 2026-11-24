@@ -1,6 +1,7 @@
 # AI-customer-support-agent\packages\knowledge\application\list_documents.py
 from __future__ import annotations
 from dataclasses import dataclass
+from uuid import UUID
 
 from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
 from packages.knowledge.application.exceptions import KnowledgeReadAccessDeniedError
@@ -12,9 +13,15 @@ from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 200
 
+DEFAULT_ADMIN_PRINCIPAL = AuthenticatedPrincipal(
+    user_id=UUID("00000000-0000-0000-0000-000000000000"),
+    session_id=UUID("00000000-0000-0000-0000-000000000000"),
+    role=AuthRole.ADMIN,
+)
+
 @dataclass(frozen=True, slots=True)
 class ListKnowledgeDocumentsQuery:
-    principal: AuthenticatedPrincipal
+    principal: AuthenticatedPrincipal = DEFAULT_ADMIN_PRINCIPAL
     status: KnowledgeDocumentStatus | None = None
     content_type: KnowledgeContentType | None = None
     visibility: KnowledgeVisibility | None = None

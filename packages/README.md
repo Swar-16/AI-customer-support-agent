@@ -95,7 +95,8 @@ It supplies configuration for areas such as:
 
 - authentication and browser security;
 - PostgreSQL;
-- LLM providers;
+- LLM providers (Google Gemini, Groq, and Mock);
+- intent classification providers (Jev System One with zero-token classification, LLM fallback);
 - embeddings;
 - retrieval/RAG;
 - knowledge uploads;
@@ -208,7 +209,7 @@ Its major responsibilities include:
 - structured AI errors;
 - execution telemetry.
 
-The package is intentionally provider-independent. Provider SDKs should remain behind provider-specific adapters rather than becoming dependencies of orchestration.
+The package is intentionally provider-independent. Provider SDKs should remain behind provider-specific adapters (such as `GeminiProvider`, `GroqProvider`, or `JevIntentClassifier`) rather than becoming direct dependencies of orchestration or business logic.
 
 The AI package **coordinates capabilities rather than owning infrastructure** such as raw SQL, HTTP routing, authentication, or provider SDK initialization.
 

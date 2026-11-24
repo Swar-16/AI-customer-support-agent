@@ -35,7 +35,7 @@ from packages.knowledge.embeddings.models import (
     EmbeddingVector,
     PreparedEmbeddingInput,
 )
-from packages.knowledge.embeddings import EmbeddingInputBuilder, EmbeddingProvider
+from packages.knowledge.embeddings import EmbeddingInputBuilder, EmbeddingProvider, EmbeddingSourceChunk
 
 
 # ============================================================================
@@ -111,24 +111,36 @@ class FakeEmbeddingInputBuilder(EmbeddingInputBuilder):
 
     def build(
         self,
+        source: EmbeddingSourceChunk | None = None,
         *,
-        chunk: KnowledgeChunk,
-        document_title: str,
+        chunk: KnowledgeChunk | None = None,
+        document_title: str | None = None,
     ) -> PreparedEmbeddingInput:
+        if source is not None:
+            chunk_id = source.chunk_id
+            doc_title = source.document_title
+            section_title = source.section_title or ""
+            content = source.chunk_text
+            chunk_index = source.chunk_metadata.get("chunk_index", 0) if source.chunk_metadata else 0
+        else:
+            chunk_id = chunk.id
+            doc_title = document_title
+            section_title = chunk.section_title or ""
+            content = chunk.content
+            chunk_index = chunk.chunk_index
+
         text = (
-            f"Document: {document_title}\n"
-            f"Section: {chunk.section_title or ''}\n\n"
-            f"{chunk.content}"
+            f"Document: {doc_title}\n"
+            f"Section: {section_title}\n\n"
+            f"{content}"
         )
 
-        # A deterministic fake fingerprint is sufficient here because
-        # fingerprint-generation behavior belongs to the builder's own tests.
         fingerprint = (
-            f"{chunk.chunk_index:064x}"
+            f"{chunk_index:064x}"
         )
 
         return PreparedEmbeddingInput(
-            chunk_id=chunk.id,
+            chunk_id=chunk_id,
             text=text,
             input_fingerprint=fingerprint,
         )

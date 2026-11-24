@@ -267,8 +267,7 @@ def test_none_context_renders_as_no_context_placeholder(classifier, mock_provide
     classifier.classify(customer_message="Where is my order?", conversation_context=None)
 
     user_prompt = get_call_kwargs(mock_provider)["user_prompt"]
-    assert "No conversation context provided." in user_prompt
-    assert "<conversation_context>" not in user_prompt
+    assert '"conversation_context":null' in user_prompt
 
 
 def test_whitespace_only_context_normalizes_to_none(classifier, mock_provider):
@@ -280,8 +279,7 @@ def test_whitespace_only_context_normalizes_to_none(classifier, mock_provider):
     )
 
     user_prompt = get_call_kwargs(mock_provider)["user_prompt"]
-    assert "No conversation context provided." in user_prompt
-    assert "<conversation_context>" not in user_prompt
+    assert '"conversation_context":null' in user_prompt
 
 
 def test_context_is_stripped_and_wrapped_when_present(classifier, mock_provider):
@@ -293,10 +291,7 @@ def test_context_is_stripped_and_wrapped_when_present(classifier, mock_provider)
     )
 
     user_prompt = get_call_kwargs(mock_provider)["user_prompt"]
-    assert "<conversation_context>" in user_prompt
-    assert "Customer previously asked about a refund." in user_prompt
-    # Ensure it was stripped, not just wrapped with leading/trailing whitespace intact.
-    assert "<conversation_context>\n   Customer" not in user_prompt
+    assert '"conversation_context":"Customer previously asked about a refund."' in user_prompt
 
 
 def test_non_string_context_rejected(classifier, mock_provider):
@@ -416,9 +411,7 @@ def test_customer_message_is_delimited_in_user_prompt(classifier, mock_provider)
     classifier.classify(customer_message="Refund my last order please")
 
     user_prompt = get_call_kwargs(mock_provider)["user_prompt"]
-    assert "<customer_message>" in user_prompt
-    assert "Refund my last order please" in user_prompt
-    assert "</customer_message>" in user_prompt
+    assert '"customer_message":"Refund my last order please"' in user_prompt
     
 def test_prompt_contains_semantic_description_for_every_intent(
     classifier,
@@ -445,6 +438,7 @@ def test_prompt_respects_max_examples_per_intent(
     classifier = IntentClassifier(
         provider=mock_provider,
         config=IntentClassifierConfig(
+            include_examples_in_prompt=True,
             max_examples_per_intent=1,
         ),
     )

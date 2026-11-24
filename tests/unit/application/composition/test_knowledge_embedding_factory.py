@@ -39,6 +39,7 @@ def make_settings(
     return Settings(
         _env_file=None,
         app_env="test",
+        auth_jwt_secret="test-jwt-secret-key-at-least-32-chars-long!",
         database_name="support_ai_test",
         database_password="test-password",
         embedding_provider=embedding_provider,

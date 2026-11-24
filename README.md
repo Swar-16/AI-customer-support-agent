@@ -62,7 +62,9 @@ This is more than a chat box around an LLM. It is an end-to-end support system b
 [![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-D71F00?style=flat-square&logo=sqlalchemy&logoColor=white)](https://www.sqlalchemy.org/)
 [![Alembic](https://img.shields.io/badge/Alembic-Migrations-6BA81E?style=flat-square)](https://alembic.sqlalchemy.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL_+_pgvector-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
+[![Google Gemini](https://img.shields.io/badge/Google_Gemini-LLM-4285F4?style=flat-square&logo=google&logoColor=white)](https://ai.google.dev/)
 [![Groq](https://img.shields.io/badge/Groq-LLM-F55036?style=flat-square)](https://groq.com/)
+[![Jev](https://img.shields.io/badge/Jev-TypeSafe_Intent-7928CA?style=flat-square)](https://typesafe.ai/)
 [![Jina AI](https://img.shields.io/badge/Jina_AI-Embeddings-009191?style=flat-square)](https://jina.ai/)
 
 ### Quality
@@ -96,7 +98,7 @@ flowchart TB
     AI <--> Knowledge
 
     App --> DB[("PostgreSQL + pgvector")]
-    AI --> Providers["Groq · Jina AI"]
+    AI --> Providers["Gemini · Groq · Jev · Jina AI"]
     Knowledge --> Providers
 ```
 
@@ -169,8 +171,9 @@ AI-customer-support-agent/
 - Python **3.11+** and `pip`
 - Node.js and `npm` supported by the frontend lockfile
 - PostgreSQL with the **pgvector** extension available
-- A Groq API key
+- A Google Gemini API key (recommended) or Groq API key
 - A Jina AI API key
+- *(Optional)* A Jev (`typesafe-sdk`) API key for zero-output-token intent classification (otherwise automatically falls back to Gemini)
 
 The default local URLs are:
 
@@ -230,8 +233,14 @@ DATABASE_NAME=support_ai
 DATABASE_USER=support_ai_admin
 DATABASE_PASSWORD=<your-password>
 
-LLM_PROVIDER=groq
-GROQ_API_KEY=<your-groq-key>
+# Primary LLM Provider: gemini (recommended) or groq
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=<your-gemini-key>
+GEMINI_MODEL=gemini-3.5-flash-lite
+
+# Optional: Jev System One Intent Classification (defaults to false; falls back to Gemini)
+USE_JEV_INTENT_CLASSIFICATION=false
+TYPESAFE_API_KEY=YOUR_TYPESAFE_API_KEY_HERE
 
 EMBEDDING_PROVIDER=jina
 JINA_API_KEY=<your-jina-key>

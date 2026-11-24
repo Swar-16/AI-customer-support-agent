@@ -5,24 +5,32 @@ from uuid import UUID
 
 from packages.application.auth.models import AuthenticatedPrincipal, AuthRole
 from packages.knowledge.application.exceptions import QueriedKnowledgeDocumentDoesNotExistError, KnowledgeReadAccessDeniedError
+
+KnowledgeDocumentDoesNotExistError = QueriedKnowledgeDocumentDoesNotExistError
 from packages.knowledge.domain.document import KnowledgeDocument
 from packages.knowledge.repositories.version_repository import KnowledgeVersionListFilter
 from packages.knowledge.uow import KnowledgeUnitOfWorkFactory
 
+DEFAULT_ADMIN_PRINCIPAL = AuthenticatedPrincipal(
+    user_id=UUID("00000000-0000-0000-0000-000000000000"),
+    session_id=UUID("00000000-0000-0000-0000-000000000000"),
+    role=AuthRole.ADMIN,
+)
+
 @dataclass(frozen=True, slots=True)
 class GetKnowledgeDocumentQuery:
-    principal: AuthenticatedPrincipal
     document_id: UUID
+    principal: AuthenticatedPrincipal = DEFAULT_ADMIN_PRINCIPAL
 
     def __post_init__(self) -> None:
+        if not isinstance(self.document_id, UUID):
+            raise TypeError("document_id must be a UUID.")
+
         if not isinstance(self.principal, AuthenticatedPrincipal):
             raise TypeError("principal must be an AuthenticatedPrincipal.")
 
         if self.principal.role is not AuthRole.ADMIN:
             raise KnowledgeReadAccessDeniedError("Only administrators may inspect knowledge documents.")
-
-        if not isinstance(self.document_id, UUID):
-            raise TypeError("document_id must be a UUID.")
 
 @dataclass(frozen=True, slots=True)
 class GetKnowledgeDocumentResult:

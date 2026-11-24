@@ -76,12 +76,12 @@ def test_order_status_with_order_id_requires_lookup() -> None:
 
     assert (
         result.decision
-        is DecisionType.RETRIEVE_INFORMATION
+        is DecisionType.ESCALATE
     )
 
     assert (
         result.reason_code
-        is DecisionReasonCode.OPERATIONAL_LOOKUP_REQUIRED
+        is DecisionReasonCode.OPERATIONAL_LOOKUP_UNAVAILABLE
     )
 
 

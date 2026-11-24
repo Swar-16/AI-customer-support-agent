@@ -1,4 +1,5 @@
 from __future__ import annotations
+from unittest.mock import Mock
 
 import pytest
 
@@ -17,8 +18,37 @@ from packages.application.knowledge.retrieval_context_factory import (
 from packages.application.knowledge.retrieval_context_service import (
     KnowledgeRetrievalContextService,
 )
+from packages.knowledge.embeddings.input.base import EmbeddingInputBuilder
+from packages.knowledge.embeddings.models import EmbeddingInputDescriptor, EmbeddingProviderDescriptor
+from packages.knowledge.embeddings.provider.base import EmbeddingProvider
 from packages.knowledge.retrieval.models import RetrievalFilters
 from packages.knowledge.retrieval.query.models import RetrievalQueryContext
+
+
+def make_components(**kwargs) -> KnowledgeApplicationComponents:
+    provider = Mock(spec=EmbeddingProvider)
+    provider.descriptor = EmbeddingProviderDescriptor(
+        provider="deterministic",
+        model="test-model",
+        revision=None,
+        dimensions=64,
+    )
+    input_builder = Mock(spec=EmbeddingInputBuilder)
+    input_builder.descriptor = EmbeddingInputDescriptor(
+        strategy_id="test-strategy",
+        version="1.0",
+        config_fingerprint="test-fp",
+    )
+
+    defaults = {
+        "uow_factory": Mock(),
+        "embedding_provider": provider,
+        "embedding_input_builder": input_builder,
+        "embedding_batch_size": 16,
+        "knowledge_upload_max_bytes": 1024 * 1024,
+    }
+    defaults.update(kwargs)
+    return create_knowledge_application_components(**defaults)
 
 
 def make_intent_result(
@@ -43,7 +73,7 @@ def make_intent_result(
 
 class TestKnowledgeApplicationFactory:
     def test_create_default_components(self) -> None:
-        components = create_knowledge_application_components()
+        components = make_components()
 
         assert isinstance(
             components,
@@ -58,8 +88,8 @@ class TestKnowledgeApplicationFactory:
     def test_default_components_are_independent_between_factory_calls(
         self,
     ) -> None:
-        first = create_knowledge_application_components()
-        second = create_knowledge_application_components()
+        first = make_components()
+        second = make_components()
 
         assert first is not second
         assert (
@@ -71,7 +101,7 @@ class TestKnowledgeApplicationFactory:
         ai_request_factory = AIKnowledgeRetrievalRequestFactory()
         retrieval_context_factory = KnowledgeRetrievalContextFactory()
 
-        components = create_knowledge_application_components(
+        components = make_components(
             ai_request_factory=ai_request_factory,
             retrieval_context_factory=retrieval_context_factory,
         )
@@ -86,7 +116,7 @@ class TestKnowledgeApplicationFactory:
     ) -> None:
         ai_request_factory = AIKnowledgeRetrievalRequestFactory()
 
-        components = create_knowledge_application_components(
+        components = make_components(
             ai_request_factory=ai_request_factory,
         )
 
@@ -100,7 +130,7 @@ class TestKnowledgeApplicationFactory:
     ) -> None:
         retrieval_context_factory = KnowledgeRetrievalContextFactory()
 
-        components = create_knowledge_application_components(
+        components = make_components(
             retrieval_context_factory=retrieval_context_factory,
         )
 
@@ -132,7 +162,7 @@ class TestKnowledgeApplicationFactoryValidation:
                 "AIKnowledgeRetrievalRequestFactory instance"
             ),
         ):
-            create_knowledge_application_components(
+            make_components(
                 ai_request_factory=invalid_ai_request_factory,  # type: ignore[arg-type]
             )
 
@@ -157,7 +187,7 @@ class TestKnowledgeApplicationFactoryValidation:
                 "KnowledgeRetrievalContextFactory instance"
             ),
         ):
-            create_knowledge_application_components(
+            make_components(
                 retrieval_context_factory=invalid_context_factory,  # type: ignore[arg-type]
             )
 
@@ -166,7 +196,7 @@ class TestKnowledgeApplicationFactoryFunctionalWiring:
     def test_composed_service_translates_ai_result_to_retrieval_context(
         self,
     ) -> None:
-        components = create_knowledge_application_components()
+        components = make_components()
 
         filters = RetrievalFilters(
             content_types=("policy", "faq"),
@@ -219,7 +249,7 @@ class TestKnowledgeApplicationFactoryFunctionalWiring:
     def test_composed_service_preserves_trusted_filter_boundary(
         self,
     ) -> None:
-        components = create_knowledge_application_components()
+        components = make_components()
 
         filters = RetrievalFilters(
             metadata={
@@ -253,7 +283,7 @@ class TestKnowledgeApplicationFactoryFunctionalWiring:
         }
 
     def test_composed_service_supports_empty_entities(self) -> None:
-        components = create_knowledge_application_components()
+        components = make_components()
 
         context = components.retrieval_context_service.create(
             customer_message="What payment methods do you accept?",
@@ -274,7 +304,7 @@ class TestKnowledgeApplicationFactoryFunctionalWiring:
         The composition root must not introduce a second routing policy.
         It only composes translation infrastructure.
         """
-        components = create_knowledge_application_components()
+        components = make_components()
 
         context = components.retrieval_context_service.create(
             customer_message="Something happened.",

@@ -290,7 +290,7 @@ def live_application(
 
     assert (
         services.base_llm_provider.provider_name
-        == "groq"
+        in ("groq", "gemini")
     )
 
     return services
@@ -510,8 +510,10 @@ def test_customer_message_uses_real_kb_jina_and_groq(
         ]
 
         # Both calls must genuinely have gone through Groq.
-        assert intent_call.provider == "groq"
-        assert generation_call.provider == "groq"
+        # assert intent_call.provider == "groq"
+        # assert generation_call.provider == "groq"
+        assert intent_call.provider == 'gemini'
+        assert generation_call.provider == 'gemini'
 
         assert intent_call.status == "success"
         assert generation_call.status == "success"

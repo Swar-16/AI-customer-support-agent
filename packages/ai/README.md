@@ -50,10 +50,10 @@ AI-customer-support-agent/
         ├── orchestration/
         ├── intent/
         ├── decision/
-        ├── retrieval/
         ├── generation/
-        ├── telemetry/
-        └── ...
+        ├── providers/
+        ├── conversation_title/
+        └── telemetry/
 ```
 
 The exact set of directories may evolve as the system grows, but the architectural principle remains the same:
@@ -179,27 +179,43 @@ orchestration/
 
 The intent subsystem determines **what the customer is trying to accomplish**.
 
-Conceptually:
+Conceptually, the architecture uses a multi-tier classification strategy:
 
 ```text
 Customer Message
       │
       ▼
-Deterministic Routing
+Tier 1: Deterministic Routing (Regex & rule patterns)
       │
       ├── matched ──────────────┐
       │                         │
       └── no match              │
              │                  │
              ▼                  │
-      Intent Classifier          │
+Tier 2: Fast Intent Classifier  │
+        (Jev / typesafe-sdk,   │
+         zero output tokens)    │
              │                  │
-             └──────────┬───────┘
-                        ▼
-                  Intent Result
+             ├── high conf ─────┤
+             │                  │
+             └── low/fallback   │
+                    │           │
+                    ▼           │
+Tier 3: LLM Intent Classifier   │
+        (Gemini / Groq with     │
+         structured schema)     │
+                    │           │
+                    └───────────┼───────────────┐
+                                                ▼
+                                          Intent Result
 ```
 
 The orchestration layer consumes the resulting intent rather than knowing how the classifier internally works.
+
+Key classification implementations:
+* **Deterministic Intent Router (`DeterministicIntentRouter`)**: Zero-latency, zero-cost matching for greetings, closures, out-of-scope banter, and explicit human handover requests.
+* **Jev System One Classifier (`JevIntentClassifier`)**: Fast, zero-output-token classification using the `typesafe-sdk`. When calibrated confidence falls below threshold (`< 0.70`) or if unconfigured/disabled, it seamlessly falls back to the LLM classifier.
+* **LLM Intent Classifier (`LLMIntentClassifier`)**: Robust reasoning over conversation history and customer utterances using Google Gemini or Groq with JSON schema validation.
 
 This keeps classification implementation independent from workflow composition.
 
@@ -624,11 +640,21 @@ Specific LLM SDK
 
 The same principle applies to:
 
-* embeddings;
+* embeddings (`packages/knowledge/embeddings/provider/`);
 * rerankers;
-* classifiers;
+* intent classifiers (`JevIntentClassifier`, `LLMIntentClassifier`);
 * retrieval providers;
-* generation providers.
+* generation providers (`GeminiProvider`, `GroqProvider`, `MockLLMProvider`).
+
+Supported LLM Providers in `packages/ai/providers/`:
+* **`GeminiProvider`**: Native integration with Google AI Studio via `httpx`, supporting models such as `gemini-3.5-flash-lite`. Cleans OpenAPI 3.0 response schemas for Gemini REST compatibility (including nullable union normalization), handles token usage accounting, and translates Gemini errors.
+* **`GroqProvider`**: Integration with Groq cloud using OpenAI-compatible schema formatting.
+* **`MockLLMProvider`**: In-memory deterministic provider for zero-cost unit and integration tests.
+
+Decorators and wrappers:
+* **`CapacityLimitedLLMProvider`**: Enforces process-local concurrency limits and minimum start interval pacing (e.g. 1.0s for free-tier rate limits).
+* **`ResilientLLMProvider`**: Provides exponential backoff, retry jitter, and transient failure recovery.
+* **`InstrumentedLLMProvider`**: Request-scoped recording of latency, token counts, model metadata, and call lifecycle.
 
 This makes providers replaceable without rewriting orchestration logic.
 

@@ -359,19 +359,52 @@ The active LLM provider is selected through:
 llm_provider
 ```
 
-The current default is:
+The supported values are:
 
 ```text
-groq
+gemini (Google AI Studio / Gemini API - recommended)
+groq (Groq Cloud)
+mock (In-memory testing)
+```
+
+The default is:
+
+```text
+gemini
 ```
 
 Provider-specific configuration is kept alongside the provider selection.
 
 ---
 
+# Google Gemini / LLM Settings
+
+When `llm_provider=gemini`, the Gemini configuration includes:
+
+```text
+gemini_api_key
+gemini_model
+gemini_timeout_seconds
+gemini_max_completion_tokens
+gemini_temperature
+```
+
+Current defaults include:
+
+```text
+model                 = gemini-3.5-flash-lite
+timeout               = 30.0 seconds
+max completion tokens = 1024
+temperature           = 0.0
+```
+
+Validation ensures `gemini_api_key` is non-empty, `gemini_model` is not blank, `gemini_timeout_seconds > 0`, `gemini_max_completion_tokens > 0`, and `0.0 <= gemini_temperature <= 2.0`.
+
+---
+
 # Groq / LLM Settings
 
-The current Groq configuration includes:
+When `llm_provider=groq`, the Groq configuration includes:
 
 ```text
 groq_api_key
@@ -390,13 +423,34 @@ max completion tokens = 1024
 temperature           = 0.0
 ```
 
-The API key is optional at the settings-schema level because provider availability can be handled by the consuming provider layer.
+---
+
+# Jev / TypeSafe Intent Classification Settings
+
+Intent classification can optionally leverage Jev (`typesafe-sdk`) for zero-output-token System One classification:
+
+```text
+use_jev_intent_classification
+typesafe_api_key
+typesafe_model
+typesafe_confidence_threshold
+```
+
+Current defaults include:
+
+```text
+use_jev_intent_classification = false (falls back directly to Gemini/LLM)
+typesafe_model                 = jev-latest
+typesafe_confidence_threshold  = 0.70
+```
+
+When `use_jev_intent_classification=true`, the pipeline uses Jev as the primary intent classifier and defers to Gemini/Groq whenever confidence is below `0.70` or an authentication/network error occurs.
 
 ---
 
 # Provider Capacity Protection
 
-The configuration also controls process-local provider capacity:
+The configuration also controls process-local provider capacity and pacing:
 
 ```text
 ai_provider_max_concurrency
@@ -408,9 +462,11 @@ Current defaults are:
 
 ```text
 maximum concurrency       = 2
-queue timeout             = 8 seconds
-minimum start interval   = 0.75 seconds
+queue timeout             = 30.0 seconds
+minimum start interval   = 1.0 seconds
 ```
+
+The minimum start interval (1.0s) helps pace requests against free-tier external provider rate limits while allowing up to 2 concurrent operations.
 
 These values allow the application to place explicit limits around outbound AI provider usage.
 
@@ -430,9 +486,9 @@ ai_provider_retry_jitter_ratio
 Current defaults are:
 
 ```text
-max retries       = 1
-base delay        = 0.75 seconds
-maximum delay     = 8 seconds
+max retries       = 3
+base delay        = 1.5 seconds
+maximum delay     = 10 seconds
 jitter ratio      = 0.20
 ```
 
@@ -978,11 +1034,20 @@ For example, AI provider construction can use:
 
 ```text
 llm_provider
+gemini_api_key
+gemini_model
+gemini_timeout_seconds
+gemini_max_completion_tokens
+gemini_temperature
 groq_api_key
 groq_model
 groq_timeout_seconds
 groq_max_completion_tokens
 groq_temperature
+use_jev_intent_classification
+typesafe_api_key
+typesafe_model
+typesafe_confidence_threshold
 ```
 
 while embedding/retrieval components can use:
@@ -1048,7 +1113,9 @@ The following types of values should be treated as secrets:
 ```text
 auth_jwt_secret
 database_password
+gemini_api_key
 groq_api_key
+typesafe_api_key
 jina_api_key
 ```
 

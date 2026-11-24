@@ -435,7 +435,7 @@ class AIState(BaseModel):
 
         return self.model_copy(update={"generated_response": normalized, "stage": PipelineStage.RESPONSE_GENERATED,})
     
-    def with_guardrails_completed(self, *, disposition: GuardrailDisposition, reason_code: str, policy_id: str | None = None) -> AIState:
+    def with_guardrails_completed(self, *, disposition: GuardrailDisposition = GuardrailDisposition.PASS, reason_code: str = "passed", policy_id: str | None = None) -> AIState:
         """
         Complete guardrail evaluation with a sanitized disposition.
 

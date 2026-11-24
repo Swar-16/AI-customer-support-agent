@@ -79,6 +79,7 @@ from packages.ai.intent.classifier import (
     InvalidIntentInputError,
     InvalidIntentResponseError,
 )
+from packages.ai.intent.deterministic_router import DeterministicIntentRouter
 from packages.ai.intent.schemas import IntentResult
 from packages.ai.intent.taxonomy import IntentType
 from packages.ai.orchestration.orchestrator import (
@@ -335,10 +336,18 @@ def observer() -> RecordingObserver:
 
 
 @pytest.fixture
+def deterministic_router() -> MagicMock:
+    router = MagicMock(spec=DeterministicIntentRouter)
+    router.route.return_value = None
+    return router
+
+
+@pytest.fixture
 def orchestrator(
     intent_classifier,
     decision_engine,
     observer,
+    deterministic_router,
 ) -> AIOrchestrator:
     """
     Legacy-compatible orchestrator without AnswerService.
@@ -349,6 +358,7 @@ def orchestrator(
     return AIOrchestrator(
         intent_classifier=intent_classifier,
         decision_engine=decision_engine,
+        deterministic_intent_router=deterministic_router,
         observer=observer,
     )
 
@@ -359,6 +369,7 @@ def grounded_orchestrator(
     decision_engine,
     answer_service,
     observer,
+    deterministic_router,
 ) -> AIOrchestrator:
     """
     Fully composed orchestration boundary for retrieval-path tests.
@@ -368,6 +379,7 @@ def grounded_orchestrator(
         intent_classifier=intent_classifier,
         decision_engine=decision_engine,
         answer_service=answer_service,
+        deterministic_intent_router=deterministic_router,
         observer=observer,
     )
 
@@ -923,8 +935,8 @@ class TestDecisionStage:
         assert state.intent_result is intent
         assert state.decision_result is decision
         error = extract_pipeline_error(state)
-        assert error.code == "DECISION_WORKFLOW_UNSUPPORTED"
-        assert error.metadata == {"decision": "answer"}
+        assert error.code == "DIRECT_RESPONSE_UNAVAILABLE"
+        assert error.metadata == {"exception_type": "DirectResponseResolutionError", "intent": "general_question", "decision": "answer"}
 
     def test_clarification_produces_allowlisted_customer_response(
         self,
@@ -947,7 +959,7 @@ class TestDecisionStage:
 
         assert state.stage is PipelineStage.GUARDRAILS_COMPLETED
         assert state.generated_response == (
-            "Could you provide the order ID so I can help with this request?"
+            "Please provide the order ID whose current status you want to check. Do not include passwords, one-time codes, or payment-card details."
         )
         answer_service.answer.assert_not_called()
 
@@ -973,7 +985,7 @@ class TestDecisionStage:
 
         assert state.stage is PipelineStage.GUARDRAILS_COMPLETED
         assert state.generated_response == (
-            "Could you provide a little more detail so I can help you correctly?"
+            "I need a little more information to help with this request. Please describe what happened, what outcome you expected, and any error or status message you saw. Do not share passwords, one-time codes, full payment-card numbers, or other credentials."
         )
         assert "internal_future_requirement" not in state.generated_response
 
@@ -1319,7 +1331,7 @@ class TestKnowledgeRetrieval:
         )
         assert (
             state.stage
-            is PipelineStage.RESPONSE_GENERATED
+            is PipelineStage.ESCALATED
         )
         assert state.errors == ()
 
@@ -1764,7 +1776,7 @@ class TestObserverLifecycle:
         error = extract_pipeline_error(state)
         observer.stage_failed.assert_called_once_with(
             state=state,
-            stage=PipelineStage.DECISION_MADE,
+            stage=PipelineStage.RESPONSE_GENERATED,
             error=error,
         )
 
@@ -1905,6 +1917,7 @@ class TestObserverLifecycle:
         self,
         intent_classifier,
         decision_engine,
+        deterministic_router,
     ):
         intent_classifier.classify.return_value = (
             make_intent()
@@ -1916,6 +1929,7 @@ class TestObserverLifecycle:
         orchestrator = AIOrchestrator(
             intent_classifier=intent_classifier,
             decision_engine=decision_engine,
+            deterministic_intent_router=deterministic_router,
         )
 
         state = orchestrator.process_message(
@@ -1924,7 +1938,7 @@ class TestObserverLifecycle:
         )
 
         error = extract_pipeline_error(state)
-        assert error.code == "DECISION_WORKFLOW_UNSUPPORTED"
+        assert error.code == "DIRECT_RESPONSE_UNAVAILABLE"
 
 
 # ===========================================================================

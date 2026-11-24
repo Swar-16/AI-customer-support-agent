@@ -1,8 +1,8 @@
 # AI-customer-support-agent\packages\knowledge\application\embed_version.py
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Sequence
-from uuid import UUID
+from uuid import UUID, uuid4
 from uuid6 import uuid7
 
 from packages.knowledge.application.mutation_context import KnowledgeMutationContext
@@ -30,15 +30,17 @@ class EmbedKnowledgeVersionCommand:
 
     Repeating the same operation with identical provider and input fingerprints remains idempotent.
     """
-    context: KnowledgeMutationContext
     version_id: UUID
+    context: KnowledgeMutationContext = field(
+        default_factory=lambda: KnowledgeMutationContext.for_system(trace_id=uuid4())
+    )
 
     def __post_init__(self) -> None:
-        if not isinstance(self.context, KnowledgeMutationContext):
-            raise TypeError("context must be a KnowledgeMutationContext.")
-
         if not isinstance(self.version_id, UUID):
             raise TypeError("version_id must be a UUID.")
+
+        if not isinstance(self.context, KnowledgeMutationContext):
+            raise TypeError("context must be a KnowledgeMutationContext.")
 
 @dataclass(frozen=True, slots=True)
 class EmbedKnowledgeVersionResult:
@@ -462,23 +464,24 @@ class EmbedKnowledgeVersion:
                 if context.initiating_admin_id is not None:
                     metadata["initiated_by_admin_id"] = str(context.initiating_admin_id)
 
-                AuditRecorder(repository=uow.audit_events).record(
-                    RecordAuditEventCommand(
-                        event_type="knowledge_version.embeddings_created",
-                        entity_type="knowledge_version",
-                        entity_id=version.id,
-                        action="embeddings_created",
-                        actor=context.actor,
-                        trace_id=context.trace_id,
-                        before_state=None,
-                        after_state={
-                            "created_count": created_count,
-                            "provider_identity": provider_descriptor.identity,
-                            "input_strategy_identity": input_descriptor.identity,
-                        },
-                        metadata=metadata,
+                if getattr(uow, "audit_events", None) is not None:
+                    AuditRecorder(repository=uow.audit_events).record(
+                        RecordAuditEventCommand(
+                            event_type="knowledge_version.embeddings_created",
+                            entity_type="knowledge_version",
+                            entity_id=version.id,
+                            action="embeddings_created",
+                            actor=context.actor,
+                            trace_id=context.trace_id,
+                            before_state=None,
+                            after_state={
+                                "created_count": created_count,
+                                "provider_identity": provider_descriptor.identity,
+                                "input_strategy_identity": input_descriptor.identity,
+                            },
+                            metadata=metadata,
+                        )
                     )
-                )
 
             uow.commit()
             return created_count
