@@ -115,6 +115,10 @@ def query_dashboard_traces(
         str | None,
         Query(alias="status", pattern="^(success|error|running)$", description="Filter by derived trace status."),
     ] = None,
+    has_ai_runs: Annotated[
+        bool | None,
+        Query(description="Filter to traces that include AI conversation runs."),
+    ] = None,
     limit: Annotated[
         int,
         Query(ge=1, le=500),
@@ -133,6 +137,7 @@ def query_dashboard_traces(
             conversation_id=conversation_id,
             ai_run_id=ai_run_id,
             status=trace_status,
+            has_ai_runs=has_ai_runs,
         )
     )
 

@@ -301,9 +301,34 @@
 }
 
 .oversight-detail__summary dd {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
   margin: 0;
   font-size: 0.76rem;
   font-weight: 750;
+}
+
+.oversight-conversation-card__id {
+  display: inline-flex;
+  align-items: center;
+}
+
+.oversight-message__ai-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.oversight-message__trace-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: rgb(194 24 120 / 30%);
+  text-underline-offset: 2px;
+}
+
+.oversight-message__trace-link:hover {
+  color: var(--operations-magenta);
 }
 
 .oversight-history {

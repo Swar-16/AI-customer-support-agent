@@ -20,6 +20,30 @@
   gap: 0.8rem;
 }
 
+.trace-explorer__heading-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.trace-card__id {
+  display: inline-flex;
+  align-items: center;
+}
+
+.trace-drawer__header h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.trace-drawer__summary dd {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
 .trace-explorer__heading h2,
 .trace-drawer__header h2 {
   margin: 0.25rem 0;
@@ -377,7 +401,17 @@
 }
 
 .trace-related-list a,
-.trace-related-list span {
+.trace-related-list span:not(.trace-related-item) {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--operations-magenta-dark);
+  font-size: 0.7rem;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.trace-related-item {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
@@ -389,6 +423,21 @@
   background: #fff0f8;
   border: 1px solid #efcce0;
   border-radius: 0.6rem;
+}
+
+.trace-related-item a {
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: rgb(194 24 120 / 30%);
+  text-underline-offset: 2px;
+  background: transparent;
+  border: none;
+}
+
+.trace-related-item a:hover {
+  text-decoration-color: currentColor;
 }
 
 .trace-component-grid {

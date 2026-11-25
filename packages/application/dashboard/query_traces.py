@@ -26,6 +26,7 @@ class QueryDashboardTracesCommand:
     conversation_id: uuid.UUID | None = None
     ai_run_id: uuid.UUID | None = None
     status: str | None = None
+    has_ai_runs: bool | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.time_range, DashboardTimeRange):
@@ -33,6 +34,9 @@ class QueryDashboardTracesCommand:
 
         if not isinstance(self.pagination, DashboardPagination):
             raise TypeError("pagination must be a DashboardPagination")
+
+        if self.has_ai_runs is not None and not isinstance(self.has_ai_runs, bool):
+            raise TypeError("has_ai_runs must be a bool or None")
 
         for field_name, value in (("trace_id", self.trace_id), ("conversation_id", self.conversation_id), ("ai_run_id", self.ai_run_id),):
             if value is not None and not isinstance(value, uuid.UUID):
@@ -110,6 +114,7 @@ class QueryDashboardTraces:
                 conversation_id=command.conversation_id,
                 ai_run_id=command.ai_run_id,
                 status=command.status,
+                has_ai_runs=command.has_ai_runs,
                 limit=command.pagination.limit,
                 offset=command.pagination.offset,
             )

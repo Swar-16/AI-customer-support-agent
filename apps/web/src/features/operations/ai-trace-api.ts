@@ -22,6 +22,7 @@ export interface TraceFilters {
   readonly conversationId: string | null;
   readonly aiRunId: string | null;
   readonly status: TraceStatus | null;
+  readonly hasAiRuns?: boolean | null;
   readonly limit: number;
   readonly offset: number;
 }
@@ -38,6 +39,7 @@ const traceFiltersSchema = z
     conversationId: z.uuid().nullable(),
     aiRunId: z.uuid().nullable(),
     status: traceStatusSchema.nullable(),
+    hasAiRuns: z.boolean().nullable().optional(),
     limit: z.number().int().min(1).max(500),
     offset: z.number().int().nonnegative(),
   })
@@ -94,6 +96,10 @@ export function createAITraceApi(request: Transport) {
 
       if (parsed.data.status !== null) {
         query.set('status', parsed.data.status);
+      }
+
+      if (parsed.data.hasAiRuns !== undefined && parsed.data.hasAiRuns !== null) {
+        query.set('has_ai_runs', String(parsed.data.hasAiRuns));
       }
 
       return request({
