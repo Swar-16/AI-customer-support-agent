@@ -129,7 +129,7 @@ describe('CustomerEscalationPanel', () => {
     try {
       await screen.findByText('In review');
 
-      fireEvent.click(screen.getByRole('button', { name: 'Refresh support status' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
 
       expect(await screen.findByText('Last known escalation')).toBeInTheDocument();
 
@@ -159,7 +159,7 @@ describe('CustomerEscalationPanel', () => {
     try {
       await screen.findByText('In review');
 
-      fireEvent.click(screen.getByRole('button', { name: 'Refresh support status' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
 
       await waitFor(() => {
         expect(screen.queryByText('In review')).not.toBeInTheDocument();
@@ -177,7 +177,7 @@ describe('CustomerEscalationPanel', () => {
 
     try {
       expect(test.fetchImpl).not.toHaveBeenCalled();
-      expect(screen.getByRole('button', { name: 'Refresh support status' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Refresh status' })).toBeDisabled();
     } finally {
       dispose();
     }

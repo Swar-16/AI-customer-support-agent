@@ -1386,6 +1386,59 @@
   line-height: 1.6;
 }
 
+.operations-customer-message {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 1.1rem;
+}
+
+.operations-customer-message > span:first-child {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--operations-ink);
+}
+
+.operations-customer-message textarea {
+  width: 100%;
+  min-height: 6.5rem;
+  padding: 0.75rem 0.85rem;
+  resize: vertical;
+  color: var(--operations-ink);
+  font: inherit;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  background: white;
+  border: 1px solid #d8c9d2;
+  border-radius: 0.75rem;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.operations-customer-message textarea:focus {
+  border-color: var(--operations-magenta);
+  box-shadow: 0 0 0 3px rgb(194 24 120 / 12%);
+}
+
+.operations-customer-message textarea::placeholder {
+  color: #9e8e97;
+}
+
+.operations-customer-message small {
+  color: var(--operations-muted);
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.operations-customer-message__count {
+  align-self: flex-end;
+  color: var(--operations-muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  margin-top: -0.2rem;
+}
+
 .operations-confirmation-card__actions {
   display: flex;
   justify-content: flex-end;

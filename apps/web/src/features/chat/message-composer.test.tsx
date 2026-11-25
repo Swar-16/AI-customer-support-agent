@@ -87,7 +87,7 @@ describe('MessageComposer', () => {
     });
   });
 
-  it('requires explicit review after an uncertain result and never resends it', async () => {
+  it('handles an uncertain result politely and keeps the composer usable', async () => {
     const onSend = vi.fn().mockResolvedValue({
       ok: false,
       error: SafeApiError.fromLocal('timeout'),
@@ -99,26 +99,13 @@ describe('MessageComposer', () => {
     enterMessage();
     submitForm();
 
-    expect(await screen.findByText(/The outcome could not be confirmed/)).toBeInTheDocument();
+    expect(await screen.findByText(/Delivery could not be confirmed/)).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(screen.getByRole('checkbox')).toBeEnabled();
+      expect(screen.getByRole('textbox')).toHaveValue('Where is my order?');
+      expect(screen.getByRole('textbox')).toBeEnabled();
     });
 
-    expect(screen.getByRole('textbox')).toHaveValue('Where is my order?');
-    expect(screen.getByRole('textbox')).toBeDisabled();
-
-    const newMessage = screen.getByRole('button', {
-      name: 'Discard draft and write a new message',
-    });
-
-    expect(newMessage).toBeDisabled();
-
-    fireEvent.click(screen.getByRole('checkbox'));
-    fireEvent.click(newMessage);
-
-    expect(screen.getByRole('textbox')).toHaveValue('');
-    expect(screen.getByRole('textbox')).toBeEnabled();
     expect(onSend).toHaveBeenCalledTimes(1);
   });
 
@@ -132,13 +119,12 @@ describe('MessageComposer', () => {
 
     expect(
       await screen.findByText(
-        /Your message was received, but the latest history could not be loaded/,
+        /Your message was saved, but the latest response could not be loaded/,
       ),
     ).toBeInTheDocument();
 
     expect(screen.getByRole('textbox')).toHaveValue('');
-    expect(screen.getByRole('textbox')).toBeDisabled();
-    expect(screen.getByRole('checkbox')).toBeDisabled();
+    expect(screen.getByRole('textbox')).toBeEnabled();
     expect(onSend).toHaveBeenCalledTimes(1);
   });
 
@@ -165,7 +151,9 @@ describe('MessageComposer', () => {
     enterMessage();
     submitForm();
 
-    expect(await screen.findByText(/The outcome could not be confirmed/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/could not confirm whether that message was delivered/),
+    ).toBeInTheDocument();
 
     expect(screen.queryByText(/Internal provider credentials/)).not.toBeInTheDocument();
   });

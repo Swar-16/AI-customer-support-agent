@@ -148,6 +148,7 @@ describe('ticket actions', () => {
     expect(JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body))).toEqual({
       expected_row_version: 1,
       assigned_agent_id: auth.session.user.id,
+      unassign: false,
     });
 
     expect(await screen.findByText('The ticket is now assigned to you.')).toBeInTheDocument();
@@ -208,6 +209,7 @@ describe('ticket actions', () => {
       expected_row_version: 1,
       target_status: 'resolved',
       resolution_summary: 'Duplicate payment was reversed.',
+      unassign: false,
     });
   });
 
@@ -247,6 +249,7 @@ describe('ticket actions', () => {
       expected_row_version: 1,
       priority: 'urgent',
       category: 'refund',
+      unassign: false,
     });
   });
 

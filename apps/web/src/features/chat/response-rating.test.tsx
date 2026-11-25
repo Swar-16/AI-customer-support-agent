@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { components } from '../../shared/api/generated/schema';
 import { createTransport } from '../../shared/api/transport';
 import { TransportContext } from '../../shared/api/transport-context';
 import { responseFeedbackTargetKey } from './response-feedback-target';
@@ -61,6 +62,23 @@ function receipt(created = true) {
   );
 }
 
+function messageFixture(
+  overrides: Partial<components['schemas']['ConversationMessageResponse']> = {},
+): components['schemas']['ConversationMessageResponse'] {
+  return {
+    message_id: responseMessageId,
+    conversation_id: conversationId,
+    role: 'assistant',
+    content: 'Hello, how can I help?',
+    feedback_eligible: true,
+    ai_run_id: aiRunId,
+    created_at: '2026-09-15T10:00:00Z',
+    feedback: null,
+    sequence_number: 2,
+    ...overrides,
+  };
+}
+
 function setup(withTarget = true) {
   const client = new QueryClient({
     defaultOptions: {
@@ -89,11 +107,17 @@ function setup(withTarget = true) {
     fetchImpl,
   });
 
+  const message = withTarget ? messageFixture() : undefined;
+
   function mount() {
     return render(
       <QueryClientProvider client={client}>
         <TransportContext.Provider value={transport}>
-          <ResponseRating conversationId={conversationId} responseMessageId={responseMessageId} />
+          <ResponseRating
+            conversationId={conversationId}
+            responseMessageId={responseMessageId}
+            message={message}
+          />
         </TransportContext.Provider>
       </QueryClientProvider>,
     );

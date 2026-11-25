@@ -90,7 +90,9 @@ export function CloseConversation({
                 type="button"
                 className="chat-action chat-action--solid"
                 disabled={busy || disabled}
-                onClick={openConfirmation}
+                onClick={() => {
+                  void onClose();
+                }}
               >
                 Confirm close again
               </button>

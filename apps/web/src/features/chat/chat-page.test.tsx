@@ -25,11 +25,14 @@ const { session } = vi.hoisted(() => ({
   },
 }));
 
+const sessionController = {
+  getSnapshot: () => session,
+  subscribe: () => () => undefined,
+};
+
 vi.mock('../../shared/auth/session-context', () => ({
   useSession: () => session,
-  useSessionController: () => ({
-    getSnapshot: () => session,
-  }),
+  useSessionController: () => sessionController,
 }));
 
 const ID = 'd44e99cb-8e10-4af8-9bb7-c4d293042943';
@@ -158,11 +161,33 @@ describe('Chat screen', () => {
   it('creates once and opens the returned conversation', async () => {
     const { fetchImpl, mount } = setup();
 
+    let created = false;
+
     fetchImpl.mockImplementation(async (input, init) => {
       const url = new URL(String(input));
 
-      if (init?.method === 'POST') {
-        return Response.json(conversation(), { status: 201 });
+      if (url.pathname === '/v1/conversations/start' && init?.method === 'POST') {
+        created = true;
+        return Response.json(
+          {
+            conversation_id: ID,
+            customer_message_id: '11111111-1111-4111-8111-111111111111',
+            assistant_message_id: '22222222-2222-4222-8222-222222222222',
+            ai_run_id: '33333333-3333-4333-8333-333333333333',
+            trace_id: '44444444-4444-4444-8444-444444444444',
+            start_request_id: '55555555-5555-4555-8555-555555555555',
+            pipeline_stage: 'guardrails_completed',
+            succeeded: true,
+            idempotency_status: 'completed',
+            created: true,
+            replayed: false,
+            response: 'How can I help?',
+            escalation_id: null,
+            failure_code: null,
+            failure_retryable: null,
+          },
+          { status: 201 },
+        );
       }
       if (url.pathname.endsWith('/messages')) {
         return Response.json(page([], 50));
@@ -171,7 +196,7 @@ describe('Chat screen', () => {
         return Response.json(conversation());
       }
 
-      return Response.json(page([], 25));
+      return Response.json(page(created ? [conversation()] : [], 25));
     });
 
     const cleanup = mount();
@@ -179,7 +204,10 @@ describe('Chat screen', () => {
 
     const button = screen.getByRole('button', { name: 'New conversation' });
     fireEvent.click(button);
-    fireEvent.click(button);
+
+    const textarea = screen.getByPlaceholderText('How can we help?');
+    fireEvent.change(textarea, { target: { value: 'Where is my order?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send first message' }));
 
     expect(await screen.findByRole('heading', { name: 'Order question' })).toBeInTheDocument();
 
@@ -203,8 +231,9 @@ describe('Chat screen', () => {
   it('blocks repeated creation after an uncertain response', async () => {
     const { fetchImpl, mount } = setup();
 
-    fetchImpl.mockImplementation(async (_input, init) => {
-      if (init?.method === 'POST') {
+    fetchImpl.mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/v1/conversations/start' && init?.method === 'POST') {
         throw new Error('Test network failure');
       }
 
@@ -216,10 +245,14 @@ describe('Chat screen', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'New conversation' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Creation could not be confirmed.');
+    const textarea = screen.getByPlaceholderText('How can we help?');
+    fireEvent.change(textarea, { target: { value: 'Where is my order?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send first message' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/service could not be reached/i);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'New conversation' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Send first message' })).toBeDisabled();
     });
 
     expect(fetchImpl.mock.calls.filter((call) => call[1]?.method === 'POST')).toHaveLength(1);
@@ -375,15 +408,17 @@ describe('Chat screen', () => {
 
       fireEvent.submit(screen.getByRole('form', { name: 'Send a message' }));
 
-      expect(await screen.findByText(/The outcome could not be confirmed/)).toBeInTheDocument();
+      expect(await screen.findByText(/Delivery could not be confirmed/)).toBeInTheDocument();
 
       expect(
-        await screen.findByText('Where is my order?', {
-          selector: '.chat-history__content',
-        }),
-      ).toBeInTheDocument();
+        (
+          await screen.findAllByText('Where is my order?', {
+            selector: '.chat-history__content',
+          })
+        ).length,
+      ).toBeGreaterThan(0);
 
-      expect(screen.getByRole('textbox', { name: 'Your message' })).toBeDisabled();
+      expect(screen.getByRole('textbox', { name: 'Your message' })).toBeEnabled();
 
       expect(fetchImpl.mock.calls.filter((call) => call[1]?.method === 'POST')).toHaveLength(1);
     } finally {
@@ -597,9 +632,10 @@ describe('Chat screen', () => {
       expect(await screen.findByText('Message 1')).toBeInTheDocument();
       expect(screen.queryByText('Message 101')).not.toBeInTheDocument();
 
-      expect(screen.queryByRole('button', { name: 'Earlier messages' })).not.toBeInTheDocument();
-
-      expect(screen.getByRole('button', { name: 'Later messages' })).toBeEnabled();
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: 'Earlier messages' })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Later messages' })).toBeEnabled();
+      });
     } finally {
       cleanup();
     }

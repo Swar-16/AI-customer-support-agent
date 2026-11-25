@@ -288,11 +288,12 @@ describe('conversation draft', () => {
     renderDraft(fetchImpl);
     submitMessage();
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Your conversation and message were saved',
-    );
+    expect(
+      await screen.findByRole('status', { name: 'Support assistant response' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/couldn’t prepare a reliable answer/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open saved conversation' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue conversation' }));
 
     expect(await screen.findByRole('heading', { name: 'Saved conversation' })).toBeInTheDocument();
 

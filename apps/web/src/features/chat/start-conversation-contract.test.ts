@@ -112,12 +112,13 @@ describe('start conversation response boundary', () => {
     });
   });
 
-  it('accepts an escalation without inventing an assistant response', () => {
+  it('accepts an escalation with a committed assistant notice', () => {
+    const notice = 'Your request has been escalated to a support agent.';
     const result = decodeStartConversation(
       answer({
         pipeline_stage: 'escalated',
-        assistant_message_id: null,
-        response: null,
+        assistant_message_id: ASSISTANT_MESSAGE_ID,
+        response: notice,
         escalation_id: ESCALATION_ID,
       }),
       context(201),
@@ -126,7 +127,7 @@ describe('start conversation response boundary', () => {
     expect(result).toMatchObject({
       kind: 'terminal',
       outcome: 'escalated',
-      data: { response: null, escalation_id: ESCALATION_ID },
+      data: { response: notice, escalation_id: ESCALATION_ID },
     });
   });
 
