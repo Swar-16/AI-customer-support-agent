@@ -101,6 +101,52 @@ class DeterministicIntentRouter:
         flags=re.IGNORECASE | re.VERBOSE,
     )
 
+    _ACKNOWLEDGMENT_ONLY: Final[re.Pattern[str]] = re.compile(
+        r"""
+        ^\s*
+        (?:
+            ok
+            | okay
+            | k
+            | alright
+            | all\s+right
+            | got\s+it
+            | understood
+            | cool
+            | sure
+            | noted
+            | perfect
+            | sounds\s+good
+        )
+        \s*[!.?]*\s*$
+        """,
+        flags=re.IGNORECASE | re.VERBOSE,
+    )
+
+    _TEST_OR_PING_ONLY: Final[re.Pattern[str]] = re.compile(
+        r"""
+        ^\s*
+        (?:
+            test
+            | testing
+            | test\s*123
+            | hello\s*\?+
+            | are\s+you\s+there\??
+            | is\s+anyone\s+there\??
+            | ping
+        )
+        \s*[!.?]*\s*$
+        """,
+        flags=re.IGNORECASE | re.VERBOSE,
+    )
+
+    _REPEATED_CHAR_SPAM: Final[re.Pattern[str]] = re.compile(r"(.)\1{4,}")
+    _CONSONANT_CLUSTER: Final[re.Pattern[str]] = re.compile(
+        r"[bcdfghjklmnpqrstvwxz]{6,}",
+        flags=re.IGNORECASE,
+    )
+    _ABNORMALLY_LONG_WORD: Final[re.Pattern[str]] = re.compile(r"\b[a-zA-Z]{35,}\b")
+
     _CAPABILITIES_ONLY: Final[tuple[re.Pattern[str], ...]] = (
         re.compile(
             r"^\s*what\s+(?:can|could)\s+you\s+"
@@ -162,10 +208,7 @@ class DeterministicIntentRouter:
         if not normalized:
             return None
 
-        # Long messages are more likely to contain substantive or mixed intent.
-        if len(normalized) > self._MAX_ROUTABLE_CHARACTERS:
-            return None
-
+        # 1. High-confidence explicit conversational or human requests
         if self._matches_any(normalized, self._EXPLICIT_HUMAN_REQUEST):
             return DeterministicIntentRoute(
                 route_kind="explicit_human_request",
@@ -179,6 +222,18 @@ class DeterministicIntentRouter:
             return DeterministicIntentRoute(
                 route_kind="greeting",
                 intent_result=self._intent_result(reason_summary="The message is a standalone greeting."),
+            )
+
+        if self._ACKNOWLEDGMENT_ONLY.fullmatch(normalized):
+            return DeterministicIntentRoute(
+                route_kind="acknowledgment",
+                intent_result=self._intent_result(reason_summary="The message is a standalone acknowledgment."),
+            )
+
+        if self._TEST_OR_PING_ONLY.fullmatch(normalized):
+            return DeterministicIntentRoute(
+                route_kind="test_or_ping",
+                intent_result=self._intent_result(reason_summary="The customer is testing or checking assistant availability."),
             )
 
         if self._THANKS_ONLY.fullmatch(normalized):
@@ -199,19 +254,85 @@ class DeterministicIntentRouter:
                 intent_result=self._intent_result(reason_summary="The customer is asking which support topics the assistant can help with."),
             )
 
+        # 2. Check for unintelligible spam, keysmashing, or pure symbol noise
+        # to avoid burning expensive LLM classification tokens on obvious non-questions.
+        if self._is_unintelligible(normalized):
+            return DeterministicIntentRoute(
+                route_kind="unintelligible",
+                intent_result=self._intent_result(
+                    intent=IntentType.UNKNOWN,
+                    needs_clarification=True,
+                    reason_summary="The message contains unintelligible gibberish, keyboard smashing, or unparseable character sequences.",
+                ),
+            )
+
+        # Long messages are more likely to contain substantive or mixed intent.
+        if len(normalized) > self._MAX_ROUTABLE_CHARACTERS:
+            return None
+
         return None
+
+    @classmethod
+    def _is_unintelligible(cls, text: str) -> bool:
+        """
+        Identify obvious gibberish, keyboard smashing, character spam,
+        and symbol-only noise that cannot express a legitimate customer support issue.
+        """
+        alphanumeric = [c for c in text if c.isalnum()]
+
+        # 1. No alphanumeric characters (e.g., "???", "...", "!!!", "$$#@")
+        if not alphanumeric:
+            return True
+
+        # 2. Single alphanumeric character that is not a recognized word like 'a' or 'i'
+        if len(alphanumeric) == 1 and text.strip().lower() not in {"a", "i"}:
+            return True
+
+        # 3. Excessive repeated characters (5+ same character in a row, e.g. "aaaaa", "?????")
+        if cls._REPEATED_CHAR_SPAM.search(text) is not None:
+            return True
+
+        # 4. Words with severe unpronounceable consonant clusters (>= 6 consonants in a row)
+        if cls._CONSONANT_CLUSTER.search(text) is not None:
+            return True
+
+        # 5. Words with 35+ continuous alphabetical characters
+        if cls._ABNORMALLY_LONG_WORD.search(text) is not None:
+            return True
+
+        # 6. Overall vowel deficiency in multicharacter text (keyboard mash detection)
+        # e.g., "ahcdsvbnm, kczlyvjb efmkcs;..."
+        letters = [c for c in text.lower() if "a" <= c <= "z"]
+        if len(letters) >= 15:
+            vowels = [c for c in letters if c in "aeiouy"]
+            if len(vowels) / len(letters) < 0.15:
+                return True
+
+        # 7. Words of length >= 6 with zero vowels (including 'y' as vowel)
+        words = re.findall(r"\b[a-zA-Z]+\b", text)
+        for word in words:
+            if len(word) >= 6 and not any(c in "aeiouyAEIOUY" for c in word):
+                return True
+
+        return False
 
     @staticmethod
     def _matches_any(value: str, patterns: tuple[re.Pattern[str], ...]) -> bool:
         return any(pattern.search(value) is not None for pattern in patterns)
 
     @staticmethod
-    def _intent_result(*, reason_summary: str, escalation_signals: tuple[EscalationSignal, ...] = ()) -> IntentResult:
+    def _intent_result(
+        *,
+        reason_summary: str,
+        intent: IntentType = IntentType.CONVERSATIONAL,
+        needs_clarification: bool = False,
+        escalation_signals: tuple[EscalationSignal, ...] = (),
+    ) -> IntentResult:
         return IntentResult(
-            intent=IntentType.CONVERSATIONAL,
+            intent=intent,
             confidence=1.0,
             entities=IntentEntities(),
-            needs_clarification=False,
+            needs_clarification=needs_clarification,
             escalation_signals=escalation_signals,
             reason_summary=reason_summary,
         )

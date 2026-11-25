@@ -1940,6 +1940,27 @@ class TestObserverLifecycle:
         error = extract_pipeline_error(state)
         assert error.code == "DIRECT_RESPONSE_UNAVAILABLE"
 
+    def test_routes_gibberish_without_classifier(
+        self,
+        intent_classifier,
+    ):
+        from packages.ai.decision.engine import DecisionEngine
+        orchestrator = AIOrchestrator(
+            intent_classifier=intent_classifier,
+            decision_engine=DecisionEngine(),
+            deterministic_intent_router=DeterministicIntentRouter(),
+        )
+
+        state = orchestrator.process_message(
+            **make_ids(),
+            customer_message="ahcdsvbnm, kczlyvjb efmkcs;dkalihcuvjhrbkjilchudgkwhbevnfcmsdkkjibd nwcm",
+        )
+
+        assert state.stage != PipelineStage.FAILED
+        assert state.errors == ()
+        assert "determine what support you need" in (state.generated_response or "")
+        intent_classifier.classify.assert_not_called()
+
 
 # ===========================================================================
 # Ordering

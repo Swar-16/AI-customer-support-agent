@@ -89,6 +89,87 @@ def test_defers_substantive_or_ambiguous_messages(
     assert router.route(customer_message=message) is None
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "ahcdsvbnm, kczlyvjb efmkcs;dkalihcuvjhrbkjilchudgkwhbevnfcmsdkkjibd nwcm",
+        "???",
+        "...",
+        "!?!?",
+        "$$$###",
+        "aaaaaaa",
+        "zzzzzzz",
+        "?????",
+        "q",
+        "x",
+        "1",
+        "bcdfghjklmnpqrstvwxz",
+    ],
+)
+def test_routes_unintelligible_and_gibberish_messages(
+    router: DeterministicIntentRouter,
+    message: str,
+) -> None:
+    route = router.route(customer_message=message)
+
+    assert route is not None
+    assert route.route_kind == "unintelligible"
+    assert route.intent_result.intent is IntentType.UNKNOWN
+    assert route.intent_result.confidence == 1.0
+    assert route.intent_result.needs_clarification is True
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "ok",
+        "okay",
+        "k",
+        "alright",
+        "got it",
+        "understood",
+        "cool",
+        "sure",
+        "noted",
+        "sounds good",
+    ],
+)
+def test_routes_acknowledgments(
+    router: DeterministicIntentRouter,
+    message: str,
+) -> None:
+    route = router.route(customer_message=message)
+
+    assert route is not None
+    assert route.route_kind == "acknowledgment"
+    assert route.intent_result.intent is IntentType.CONVERSATIONAL
+    assert route.intent_result.confidence == 1.0
+    assert route.intent_result.needs_clarification is False
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "test",
+        "testing",
+        "test 123",
+        "are you there?",
+        "is anyone there?",
+        "ping",
+    ],
+)
+def test_routes_test_and_ping_messages(
+    router: DeterministicIntentRouter,
+    message: str,
+) -> None:
+    route = router.route(customer_message=message)
+
+    assert route is not None
+    assert route.route_kind == "test_or_ping"
+    assert route.intent_result.intent is IntentType.CONVERSATIONAL
+    assert route.intent_result.confidence == 1.0
+
+
 def test_blank_message_is_not_routed(
     router: DeterministicIntentRouter,
 ) -> None:
