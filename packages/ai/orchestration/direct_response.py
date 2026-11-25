@@ -110,6 +110,7 @@ _THANKS_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
     re.compile(r"\bthank\s+you\b"),
     re.compile(r"\bmuch\s+appreciated\b"),
     re.compile(r"\bi\s+appreciate\s+(?:it|that|your\s+help)\b"),
+    re.compile(r"\b(?:ok|okay|k|alright|all\s+right|got\s+it|understood|cool|sure|noted|perfect|sounds\s+good)\b"),
 )
 
 _GOODBYE_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
