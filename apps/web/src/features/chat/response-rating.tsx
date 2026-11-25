@@ -16,7 +16,7 @@ import './response-rating.css';
 interface ResponseRatingProps {
   readonly conversationId: string;
   readonly responseMessageId: string;
-  readonly message?: components['schemas']['ConversationMessageResponse'];
+  readonly message?: components['schemas']['ConversationMessageResponse'] | undefined;
 }
 
 interface RatingTarget {
@@ -67,18 +67,21 @@ export function ResponseRating({
   if (
     message.role !== 'assistant' ||
     message.conversation_id !== conversationId ||
-    message.message_id !== responseMessageId ||
-    message.feedback_eligible !== true
+    message.message_id !== responseMessageId
   ) {
     return null;
   }
 
   /*
    * Existing customer-safe feedback returned by conversation history remains
-   * visible without making another feedback request.
+   * visible even if new feedback is ineligible.
    */
   if (message.feedback != null) {
     return <SavedResponseRating rating={message.feedback.rating} />;
+  }
+
+  if (message.feedback_eligible !== true) {
+    return null;
   }
 
   /*

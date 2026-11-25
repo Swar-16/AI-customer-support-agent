@@ -16,6 +16,7 @@ function escalation(overrides: Partial<CustomerEscalation> = {}): CustomerEscala
     created_at: '2026-09-15T10:00:00Z',
     updated_at: '2026-09-15T10:00:00Z',
     resolved_at: null,
+    linked_ticket: null,
     ...overrides,
   };
 }

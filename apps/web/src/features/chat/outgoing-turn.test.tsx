@@ -25,7 +25,7 @@ describe('outgoing turn', () => {
     const view = render(<OutgoingTurn message={message} />);
     view.rerender(<OutgoingTurn message={{ ...message, phase: 'uncertain' }} />);
     expect(screen.getByText(message.content)).toBeInTheDocument();
-    expect(screen.getByText(/Delivery unconfirmed/)).toBeInTheDocument();
+    expect(screen.getByText('Checking delivery status…')).toBeInTheDocument();
     expect(screen.queryByText('Working on your response…')).not.toBeInTheDocument();
   });
 

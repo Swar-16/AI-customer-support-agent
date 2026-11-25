@@ -23,6 +23,7 @@ export const aiTraceKeys = {
         conversationId: filters.conversationId,
         aiRunId: filters.aiRunId,
         status: filters.status,
+        hasAiRuns: filters.hasAiRuns,
         limit: filters.limit,
         offset: filters.offset,
       },

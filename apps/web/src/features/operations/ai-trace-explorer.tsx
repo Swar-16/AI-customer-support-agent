@@ -28,10 +28,25 @@ import {
   type TraceTimelineEvent,
 } from './ai-trace-contract';
 import { useAITraceDetail, useAITraceList } from './ai-trace-queries';
+import { DashboardJellySwitch } from './dashboard-jelly-switch';
+import { InlineCopyButton } from './inline-copy-button';
 
 import './ai-trace-explorer.css';
 
 const TRACE_PAGE_LIMIT = 25;
+
+const scopeOptions = [
+  {
+    value: 'conversations' as const,
+    label: 'Conversations',
+  },
+  {
+    value: 'all' as const,
+    label: 'All API requests',
+  },
+] as const;
+
+type TraceScope = (typeof scopeOptions)[number]['value'];
 
 const statusLabels: Record<TraceStatus, string> = {
   success: 'Success',
@@ -120,7 +135,10 @@ function TraceCard({
           {statusLabels[trace.status]}
         </span>
 
-        <span title={trace.trace_id}>{shortIdentifier(trace.trace_id)}</span>
+        <span className="trace-card__id" title={trace.trace_id}>
+          <span>{shortIdentifier(trace.trace_id)}</span>
+          <InlineCopyButton value={trace.trace_id} label="Copy trace ID" />
+        </span>
       </span>
 
       <strong>
@@ -215,7 +233,12 @@ function TraceDetailDrawer({
         <div>
           <p className="operations-kicker">Distributed trace</p>
 
-          <h2>{trace.data ? shortIdentifier(trace.data.trace_id) : 'Trace detail'}</h2>
+          <h2>
+            <span>{trace.data ? shortIdentifier(trace.data.trace_id) : 'Trace detail'}</span>
+            {trace.data ? (
+              <InlineCopyButton value={trace.data.trace_id} label="Copy trace ID" />
+            ) : null}
+          </h2>
         </div>
 
         <div className="trace-drawer__header-actions">
@@ -310,7 +333,10 @@ function TraceDetailContent({ trace }: { readonly trace: TraceDetail }) {
 
           <div>
             <dt>Trace ID</dt>
-            <dd title={trace.trace_id}>{shortIdentifier(trace.trace_id)}</dd>
+            <dd title={trace.trace_id}>
+              <span>{shortIdentifier(trace.trace_id)}</span>
+              <InlineCopyButton value={trace.trace_id} label="Copy trace ID" />
+            </dd>
           </div>
         </dl>
       </section>
@@ -323,12 +349,12 @@ function TraceDetailContent({ trace }: { readonly trace: TraceDetail }) {
             <strong>Conversations</strong>
 
             {trace.conversation_ids.map((conversationId) => (
-              <Link
-                key={conversationId}
-                to={`/operations/conversations?conversation=${conversationId}`}
-              >
-                {shortIdentifier(conversationId)}
-              </Link>
+              <span key={conversationId} className="trace-related-item">
+                <Link to={`/operations/conversations?conversation=${conversationId}`}>
+                  {shortIdentifier(conversationId)}
+                </Link>
+                <InlineCopyButton value={conversationId} label="Copy conversation ID" />
+              </span>
             ))}
           </div>
         ) : null}
@@ -338,9 +364,10 @@ function TraceDetailContent({ trace }: { readonly trace: TraceDetail }) {
             <strong>AI runs</strong>
 
             {trace.ai_run_ids.map((aiRunId) => (
-              <span key={aiRunId} title={aiRunId}>
+              <span key={aiRunId} className="trace-related-item" title={aiRunId}>
                 <Sparkles size={14} aria-hidden="true" />
-                {shortIdentifier(aiRunId)}
+                <span>{shortIdentifier(aiRunId)}</span>
+                <InlineCopyButton value={aiRunId} label="Copy AI run ID" />
               </span>
             ))}
           </div>
@@ -416,15 +443,33 @@ export function AITraceExplorer({ window }: { readonly window: AIAnalyticsWindow
 
   const invalidSelectedTrace = requestedTraceId !== null && !parsedSelectedTrace.success;
 
+  const requestedConversationId =
+    searchParams.get('conversation') ??
+    searchParams.get('conversationId') ??
+    searchParams.get('conversation_id');
+
+  const initialConversation =
+    requestedConversationId && validOptionalUuid(requestedConversationId)
+      ? requestedConversationId.trim().toLowerCase()
+      : null;
+
+  const requestedAiRunId = searchParams.get('aiRunId') ?? searchParams.get('ai_run_id');
+
+  const initialAiRunId =
+    requestedAiRunId && validOptionalUuid(requestedAiRunId)
+      ? requestedAiRunId.trim().toLowerCase()
+      : null;
+
+  const [scope, setScope] = useState<TraceScope>('conversations');
   const [traceInput, setTraceInput] = useState('');
-  const [conversationInput, setConversationInput] = useState('');
-  const [aiRunInput, setAiRunInput] = useState('');
+  const [conversationInput, setConversationInput] = useState(initialConversation ?? '');
+  const [aiRunInput, setAiRunInput] = useState(initialAiRunId ?? '');
   const [statusInput, setStatusInput] = useState<TraceStatus | null>(null);
 
   const [appliedFilters, setAppliedFilters] = useState<AppliedTraceFilters>({
     traceId: null,
-    conversationId: null,
-    aiRunId: null,
+    conversationId: initialConversation,
+    aiRunId: initialAiRunId,
     status: null,
   });
 
@@ -466,10 +511,11 @@ export function AITraceExplorer({ window }: { readonly window: AIAnalyticsWindow
       conversationId: appliedFilters.conversationId,
       aiRunId: appliedFilters.aiRunId,
       status: appliedFilters.status,
+      hasAiRuns: scope === 'conversations' ? true : null,
       limit: TRACE_PAGE_LIMIT,
       offset,
     }),
-    [appliedFilters, offset, window],
+    [appliedFilters, offset, scope, window],
   );
 
   const traces = useAITraceList(filters);
@@ -524,22 +570,36 @@ export function AITraceExplorer({ window }: { readonly window: AIAnalyticsWindow
           <p>Search distributed traces by trace, conversation, AI run, or derived status.</p>
         </div>
 
-        <button
-          type="button"
-          className="operations-icon-button trace-refresh"
-          aria-label="Refresh traces"
-          title="Refresh traces"
-          disabled={traces.isFetching}
-          onClick={() => {
-            void traces.refetch();
-          }}
-        >
-          <RefreshCw
-            size={19}
-            aria-hidden="true"
-            className={traces.isFetching ? 'is-spinning' : undefined}
+        <div className="trace-explorer__heading-controls">
+          <DashboardJellySwitch
+            label="Trace scope"
+            value={scope}
+            tone="accent"
+            options={scopeOptions}
+            onChange={(nextScope) => {
+              setScope(nextScope);
+              setOffset(0);
+              setTraceInUrl(null);
+            }}
           />
-        </button>
+
+          <button
+            type="button"
+            className="operations-icon-button trace-refresh"
+            aria-label="Refresh traces"
+            title="Refresh traces"
+            disabled={traces.isFetching}
+            onClick={() => {
+              void traces.refetch();
+            }}
+          >
+            <RefreshCw
+              size={19}
+              aria-hidden="true"
+              className={traces.isFetching ? 'is-spinning' : undefined}
+            />
+          </button>
+        </div>
       </div>
 
       <form className="trace-filter-form" onSubmit={applyFilters}>

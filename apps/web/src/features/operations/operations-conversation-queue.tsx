@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import {
+  Activity,
   ArrowLeft,
   ArrowRight,
   Bot,
@@ -17,6 +18,7 @@ import {
 } from 'lucide-react';
 
 import { SafeApiError } from '../../shared/api/safe-error';
+import { InlineCopyButton } from './inline-copy-button';
 import type { OperationsConversationFilters } from './operations-conversation-api';
 import {
   operationsConversationChannelSchema,
@@ -99,7 +101,8 @@ function ConversationCard({
 
       <span className="oversight-conversation-card__customer">
         <UserRound size={14} aria-hidden="true" />
-        Customer {shortIdentifier(conversation.customer_id)}
+        <span>Customer {shortIdentifier(conversation.customer_id)}</span>
+        <InlineCopyButton value={conversation.customer_id} label="Copy customer ID" />
       </span>
 
       <span className="oversight-conversation-card__footer">
@@ -108,8 +111,9 @@ function ConversationCard({
           Updated {formatTimestamp(conversation.updated_at)}
         </span>
 
-        <span title={conversation.conversation_id}>
-          {shortIdentifier(conversation.conversation_id)}
+        <span title={conversation.conversation_id} className="oversight-conversation-card__id">
+          <span>{shortIdentifier(conversation.conversation_id)}</span>
+          <InlineCopyButton value={conversation.conversation_id} label="Copy conversation ID" />
         </span>
       </span>
     </button>
@@ -148,9 +152,16 @@ function ConversationMessage({ message }: { readonly message: OperationsConversa
         <span>Message #{message.sequence_number}</span>
 
         {message.ai_run_id ? (
-          <span title={message.ai_run_id}>
+          <span title={message.ai_run_id} className="oversight-message__ai-run">
             <Sparkles size={13} aria-hidden="true" />
-            AI run {shortIdentifier(message.ai_run_id)}
+            <Link
+              to={`/operations/ai-activity?aiRunId=${message.ai_run_id}`}
+              className="oversight-message__trace-link"
+              title="Inspect AI run trace"
+            >
+              AI run {shortIdentifier(message.ai_run_id)}
+            </Link>
+            <InlineCopyButton value={message.ai_run_id} label="Copy AI run ID" />
           </span>
         ) : null}
       </footer>
@@ -213,6 +224,17 @@ function ConversationDetail({
         </div>
 
         <div className="oversight-detail__header-actions">
+          {conversation.data ? (
+            <Link
+              to={`/operations/ai-activity?conversation=${conversation.data.conversation_id}`}
+              className="operations-icon-button oversight-detail__icon-button"
+              aria-label="View AI traces for this conversation"
+              title="View AI traces"
+            >
+              <Activity size={18} aria-hidden="true" />
+            </Link>
+          ) : null}
+
           <button
             type="button"
             className="operations-icon-button oversight-detail__icon-button"
@@ -283,14 +305,16 @@ function ConversationDetail({
             <div>
               <dt>Customer</dt>
               <dd title={conversation.data.customer_id}>
-                {shortIdentifier(conversation.data.customer_id)}
+                <span>{shortIdentifier(conversation.data.customer_id)}</span>
+                <InlineCopyButton value={conversation.data.customer_id} label="Copy customer ID" />
               </dd>
             </div>
 
             <div>
               <dt>Conversation</dt>
               <dd title={conversation.data.conversation_id}>
-                {shortIdentifier(conversation.data.conversation_id)}
+                <span>{shortIdentifier(conversation.data.conversation_id)}</span>
+                <InlineCopyButton value={conversation.data.conversation_id} label="Copy conversation ID" />
               </dd>
             </div>
 

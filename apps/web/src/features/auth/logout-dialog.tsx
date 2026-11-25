@@ -129,6 +129,7 @@ export function LogoutDialogProvider({ children }: { readonly children: ReactNod
           <dialog
             ref={dialogRef}
             className="logout-dialog"
+            data-state={state}
             aria-labelledby="logout-dialog-title"
             aria-describedby="logout-dialog-description"
             aria-modal="true"

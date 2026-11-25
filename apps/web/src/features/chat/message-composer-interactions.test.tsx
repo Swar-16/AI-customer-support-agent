@@ -57,7 +57,7 @@ describe('composer interactions', () => {
       expect(input).toHaveValue('');
     });
 
-    expect(screen.getByText('Updating your conversation…')).toBeInTheDocument();
+    expect(screen.getByText('Preparing the latest response…')).toBeInTheDocument();
 
     fireEvent.submit(screen.getByRole('form', { name: 'Send a message' }));
     expect(onSend).toHaveBeenCalledTimes(1);
@@ -96,10 +96,10 @@ describe('composer interactions', () => {
 
     await waitFor(() => {
       expect(input).toHaveValue('Where is my order?');
-      expect(input).toBeDisabled();
+      expect(input).toBeEnabled();
     });
 
-    expect(await screen.findByText(/The outcome could not be confirmed/)).toBeInTheDocument();
+    expect(await screen.findByText(/Delivery could not be confirmed/)).toBeInTheDocument();
     expect(onSend).toHaveBeenCalledTimes(1);
   });
 

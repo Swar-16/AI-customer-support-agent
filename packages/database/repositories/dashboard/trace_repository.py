@@ -41,7 +41,7 @@ class DashboardTraceRepository:
         self._session = session
 
     def query_traces(self, *, started_at: datetime, ended_at: datetime, trace_id: uuid.UUID | None = None, conversation_id: uuid.UUID | None = None,
-                     ai_run_id: uuid.UUID | None = None, status: str | None = None, limit: int = 100, offset: int = 0
+                     ai_run_id: uuid.UUID | None = None, status: str | None = None, has_ai_runs: bool | None = None, limit: int = 100, offset: int = 0
     ) -> tuple[tuple[TraceSummaryRecord, ...], int]:
         self._validate_time_range(started_at=started_at, ended_at=ended_at)
         self._validate_pagination(limit=limit, offset=offset)
@@ -54,6 +54,11 @@ class DashboardTraceRepository:
         statement = select(trace_source)
         if trace_id is not None:
             statement = statement.where(trace_source.c.trace_id == trace_id)
+
+        if has_ai_runs is True:
+            statement = statement.where(trace_source.c.ai_run_count > 0)
+        elif has_ai_runs is False:
+            statement = statement.where(trace_source.c.ai_run_count == 0)
 
         if conversation_id is not None or ai_run_id is not None:
             eligible_traces = select(AIRunModel.trace_id)

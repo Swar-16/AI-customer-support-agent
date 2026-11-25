@@ -182,6 +182,7 @@ describe('Ticket API', () => {
     expect(JSON.parse(String(request?.body))).toEqual({
       expected_row_version: 1,
       assigned_agent_id: AGENT_ID,
+      unassign: false,
     });
   });
 
@@ -220,6 +221,7 @@ describe('Ticket API', () => {
       expected_row_version: 1,
       target_status: 'resolved',
       resolution_summary: 'Duplicate payment was reversed.',
+      unassign: false,
     });
   });
 

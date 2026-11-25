@@ -1,6 +1,7 @@
 // apps/web/src/features/operations/escalation-queue.test.tsx
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createTransport } from '../../shared/api/transport';
@@ -99,7 +100,9 @@ function setup(fetchImplementation: typeof fetch) {
   const view = render(
     <QueryClientProvider client={queryClient}>
       <TransportContext.Provider value={transport}>
-        <EscalationQueue />
+        <MemoryRouter>
+          <EscalationQueue />
+        </MemoryRouter>
       </TransportContext.Provider>
     </QueryClientProvider>,
   );
