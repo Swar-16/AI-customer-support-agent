@@ -750,24 +750,10 @@ class AIOrchestrator:
                 return self._escalate_from_knowledge_gap(generated_state)
 
             if grounding_status is GroundingStatus.NOT_REQUIRED:
-                return self._fail(
-                    state=generated_state,
-                    stage=PipelineStage.RESPONSE_GENERATED,
-                    code="GROUNDING_STATUS_INVALID",
-                    message="A knowledge-retrieval workflow returned an incompatible grounding status.",
-                    retryable=False,
-                    metadata={"grounding_status": grounding_status.value,},
-                )
+                return self._evaluate_guardrails(generated_state)
 
             if grounding_status is not GroundingStatus.GROUNDED:
-                return self._fail(
-                    state=generated_state,
-                    stage=PipelineStage.RESPONSE_GENERATED,
-                    code="GROUNDING_STATUS_UNSUPPORTED",
-                    message="The generation workflow returned an unsupported grounding status.",
-                    retryable=False,
-                    metadata={"grounding_status": str(grounding_status),},
-                )
+                return self._escalate_from_knowledge_gap(generated_state)
 
             return self._evaluate_guardrails(generated_state)
 

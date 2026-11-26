@@ -5,6 +5,7 @@ export interface OutgoingMessage {
   readonly createdAt: string;
   readonly messageId: string | null;
   readonly phase: 'sending' | 'processing' | 'syncing' | 'saved' | 'uncertain' | 'rejected';
+  readonly errorNotice?: string | null;
 }
 
 export function shouldShowOutgoing(

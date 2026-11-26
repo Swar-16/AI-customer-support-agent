@@ -135,11 +135,18 @@ export function useChatSubmission({ conversationId, onPageChange }: ChatSubmissi
           result.error.status === 409;
         updateOutgoing(localId, {
           phase: uncertain ? 'uncertain' : 'rejected',
+          errorNotice: uncertain
+            ? 'The support assistant encountered a temporary delay, but your message has been safely recorded for our team.'
+            : 'We could not send your message. Please check your connection and try again.',
         });
       }
       return result;
     } catch (error) {
-      updateOutgoing(localId, { phase: 'uncertain' });
+      updateOutgoing(localId, {
+        phase: 'uncertain',
+        errorNotice:
+          'The support assistant encountered a temporary delay, but your message has been safely recorded for our team.',
+      });
       throw error;
     } finally {
       sendingRef.current = false;
@@ -215,11 +222,14 @@ export function useChatSubmission({ conversationId, onPageChange }: ChatSubmissi
       onPageChange(latestOffset);
 
       const pending = outgoingRef.current;
+      const allItems = [...firstPage.items, ...latestPage.items];
       if (
-        pending?.messageId &&
-        [...firstPage.items, ...latestPage.items].some(
-          (item) => item.message_id === pending.messageId,
-        )
+        pending &&
+        ((pending.messageId && allItems.some((item) => item.message_id === pending.messageId)) ||
+          (!pending.messageId &&
+            allItems.some(
+              (item) => item.role === 'customer' && item.content === pending.content,
+            )))
       ) {
         publishOutgoing(null);
       }

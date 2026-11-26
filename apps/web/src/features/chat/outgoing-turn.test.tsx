@@ -29,6 +29,32 @@ describe('outgoing turn', () => {
     expect(screen.queryByText('Working on your response…')).not.toBeInTheDocument();
   });
 
+  it('renders a reassuring notice when delivery is uncertain or rejected', () => {
+    const view = render(
+      <OutgoingTurn
+        message={{
+          ...message,
+          phase: 'uncertain',
+          errorNotice: 'Temporary delay, your message has been recorded.',
+        }}
+      />,
+    );
+    expect(
+      screen.getByText('Temporary delay, your message has been recorded.'),
+    ).toBeInTheDocument();
+
+    view.rerender(
+      <OutgoingTurn
+        message={{
+          ...message,
+          phase: 'rejected',
+          errorNotice: 'Could not deliver message.',
+        }}
+      />,
+    );
+    expect(screen.getByText('Could not deliver message.')).toBeInTheDocument();
+  });
+
   it('deduplicates only against the acknowledged message ID', () => {
     const saved = { ...message, messageId: 'server-message-1' };
     expect(shouldShowOutgoing(saved, [{ message_id: 'server-message-1' }])).toBe(false);

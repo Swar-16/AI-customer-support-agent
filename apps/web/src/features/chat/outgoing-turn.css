@@ -53,6 +53,30 @@
   border-style: dashed;
 }
 
+.outgoing-turn__notice {
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: 88%;
+  padding: 10px 16px;
+  border-radius: 14px;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  align-self: flex-end;
+}
+.outgoing-turn__notice p {
+  margin: 0;
+}
+.outgoing-turn__notice--uncertain {
+  background: #fff8f0;
+  border: 1px solid #f6d8b8;
+  color: #8c531b;
+}
+.outgoing-turn__notice--rejected {
+  background: #fdf2f2;
+  border: 1px solid #f8c8c8;
+  color: #992323;
+}
+
 .agent-working {
   display: flex;
   align-items: center;
