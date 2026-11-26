@@ -593,3 +593,26 @@ class TestPromptDeterminism:
         )
 
         assert prompt.version == "grounded_generation_v3_compact"
+
+    @pytest.mark.parametrize(
+        "category_snippet",
+        [
+            "Conflicting quantities",
+            "Contradictory intent",
+            "Conflicting product identity",
+            "Impossible delivery status",
+            "Conflicting or invalid dates",
+            "Impossible quantities",
+            "Conflicting preferences",
+            "Contradictory reasons",
+            "Impossible refund amount",
+            "Self-correcting statements",
+            "Negation confusion",
+            "Circular requests",
+        ],
+    )
+    def test_prompt_includes_paradox_and_contradiction_handling_guidance(
+        self,
+        category_snippet: str,
+    ) -> None:
+        assert category_snippet in SYSTEM_PROMPT
