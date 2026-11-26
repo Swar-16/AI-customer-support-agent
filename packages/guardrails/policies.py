@@ -102,7 +102,7 @@ class PromptManipulationPolicy(GuardrailPolicy):
         r"\b(?:what|which)\b"
         r".{0,40}"
         r"\b(?:system\s+prompt|developer\s+message|"
-        r"hidden\s+instructions?|internal\s+instructions?)\b",
+        r"hidden\s+instructions?|internal\s+instructions?|secret\s+prompt)\b",
         re.IGNORECASE | re.DOTALL,
     )
     _ROLE_INJECTION_PATTERN = re.compile(
@@ -130,12 +130,26 @@ class PromptManipulationPolicy(GuardrailPolicy):
         r"\b(?:system|developer|trusted)\b",
         re.IGNORECASE | re.DOTALL,
     )
+    _ROLEPLAY_JAILBREAK_PATTERN = re.compile(
+        r"\b(?:let's\s+roleplay|roleplay|pretend\s+you\s+are|act\s+as\s+if\s+you|unrestricted\s+(?:mode|bot|ai)|dan\s+mode|jailbreak)\b",
+        re.IGNORECASE,
+    )
+    _ROLE_IMPERSONATION_PATTERN = re.compile(
+        r"\b(?:i\s+am|i'm)\s+(?:the\s+)?(?:admin|administrator|developer|manager|owner|supervisor|authorized\s+agent)\b",
+        re.IGNORECASE,
+    )
+    _BASE64_ENCODED_INSTRUCTION_PATTERN = re.compile(
+        r"(?:(?:[A-Za-z0-9+/]{4}){10,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?)",
+    )
     _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         ("instruction_override", _OVERRIDE_INSTRUCTION_PATTERN,),
         ("prompt_extraction", _EXTRACT_PROMPT_PATTERN,),
         ("hidden_instruction_question", _QUESTION_ABOUT_HIDDEN_INSTRUCTIONS_PATTERN,),
         ("role_injection", _ROLE_INJECTION_PATTERN,),
         ("trust_reassignment", _TRUST_REASSIGNMENT_PATTERN,),
+        ("roleplay_jailbreak", _ROLEPLAY_JAILBREAK_PATTERN,),
+        ("role_impersonation", _ROLE_IMPERSONATION_PATTERN,),
+        ("encoded_instruction", _BASE64_ENCODED_INSTRUCTION_PATTERN,),
     )
 
     def evaluate(self, context: GuardrailContext) -> GuardrailResult | None:

@@ -58,6 +58,22 @@ export function OutgoingTurn({
           </p>
         </article>
       )}
+      {message.phase === 'uncertain' && (
+        <div className="outgoing-turn__notice outgoing-turn__notice--uncertain" role="status">
+          <p>
+            {message.errorNotice ??
+              'Our support assistant is experiencing a temporary delay, but your message has been recorded. Our team will review it shortly.'}
+          </p>
+        </div>
+      )}
+      {message.phase === 'rejected' && (
+        <div className="outgoing-turn__notice outgoing-turn__notice--rejected" role="alert">
+          <p>
+            {message.errorNotice ??
+              'We were unable to deliver your message. Please check your connection and try again.'}
+          </p>
+        </div>
+      )}
       {working && <AgentWorking />}
       {message.phase === 'syncing' && <AgentWorking label="Loading the latest messages…" />}
     </div>

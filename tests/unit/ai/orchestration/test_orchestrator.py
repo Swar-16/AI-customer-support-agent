@@ -1335,6 +1335,40 @@ class TestKnowledgeRetrieval:
         )
         assert state.errors == ()
 
+    def test_not_required_grounding_status_proceeds_to_guardrails_without_failing(
+        self,
+        guarded_orchestrator,
+        intent_classifier,
+        decision_engine,
+        answer_service,
+    ):
+        clarification_answer = (
+            "Could you please clarify when the delivery took place or is scheduled?"
+        )
+        generation = GroundedGenerationResult(
+            answer=clarification_answer,
+            grounding_status=GroundingStatus.NOT_REQUIRED,
+            citations=(),
+        )
+
+        intent_classifier.classify.return_value = make_intent(
+            intent=IntentType.SHIPPING_ISSUE,
+        )
+        decision_engine.decide.return_value = make_knowledge_retrieval_decision()
+        answer_service.answer.return_value = AnswerServiceResult(
+            evidence=(),
+            generation=generation,
+        )
+
+        state = guarded_orchestrator.process_message(
+            **make_ids(),
+            customer_message="The delivery was done on day after tomorrow!!",
+        )
+
+        assert state.stage is PipelineStage.GUARDRAILS_COMPLETED
+        assert state.generated_response == clarification_answer
+        assert state.errors == ()
+
 
 # ===========================================================================
 # Missing AnswerService

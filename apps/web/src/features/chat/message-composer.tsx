@@ -262,8 +262,8 @@ export function MessageComposer({
       setNotice({
         kind: 'alert',
         text: refreshed
-          ? 'Delivery could not be confirmed. The latest conversation history has been refreshed; please check it before resending.'
-          : 'Delivery could not be confirmed. Refresh the conversation history before resending.',
+          ? 'Delivery could not be confirmed immediately due to a temporary service delay. The latest conversation history has been refreshed; please check it before resending.'
+          : 'Delivery could not be confirmed right now. Refresh the conversation history before resending.',
         allowRefresh: true,
       });
 
